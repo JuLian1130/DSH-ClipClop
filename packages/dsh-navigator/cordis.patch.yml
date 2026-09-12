@@ -1,0 +1,8 @@
+# dsh-navigator 的最小示例配置。请将本行合并到实际 profile patch 中。
+id: dsh-navigator
+config:
+  triggerEverySteps: 50
+  mode: wait
+  reviewTimeoutMs: 120000
+  maxOutputTokens: 4096
+  failurePolicy: continue
