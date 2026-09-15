@@ -1,6 +1,6 @@
 # dsh-navigator 设计讨论
 
-状态：需求已收敛；仓库内已有骨架（配置类型、包元数据），运行时尚未实现。G1、G2 已在 DSH `0.1.6-alpha.1` 上实测通过，详见「验证状态」。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
+状态：需求已收敛；仓库内已有骨架（配置类型、包元数据），运行时尚未实现。G1、G2、G5 已实测通过，仅 G3 待验证，详见「验证状态」。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
 
 本文件引用的 DSH 扩展点均按 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实。
 
@@ -112,13 +112,13 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 | --- | --- | --- |
 | G1 | `cancel({ kind: 'hook', reason })` 的取消原因确实进入 `turn/end`；停止发生在模型请求之前；在 `agent/pre-step` 监听器里直接追加 `user/message` 可行 | `turn/end` 的 reason 实测为 `{"kind":"aborted","reason":{"kind":"hook","reason":"navigator stop"}}`；适配器请求数为 0；notice 在 seq 3、`turn/end` 在 seq 4；notice 出现在 `deriveMessages()` 里 |
 | G2 | 辅助请求的字段原样透传 | `reasoningEffort`、`temperature: 0`、`maxTokens` 均到达适配器；`system` 与 `tools` 都未设置 |
+| G5 | 前缀缓存确实可复用：主会话请求带 `tools`、复核请求不带，两者共用同一段消息前缀时，复核请求仍能读到主请求建立的缓存 | 在 DeepSeek 兼容的第三方网关上用同一段前缀做对照：带 `tools` 的首次请求 `cached_tokens=0`；随后**不带 `tools`** 的复核形态请求 `cached_tokens=640`；重复带 `tools` 的请求 `cached_tokens=2816`；重复复核形态 `cached_tokens=1408`。说明 `tools` 字段不影响消息前缀的缓存复用 |
 
 ### 仍未验证
 
 | # | 待验证 | 验证方法 | 失败退路 |
 | --- | --- | --- | --- |
 | G3 | Desktop 本地联调路径（bundle 必须解析到 profile 内，且安装时不发 prepare） | 在 Desktop 上链接预构建产物实测一次 | 联调范围收窄到 CLI / Web / SDK |
-| G5 | 前缀缓存是否真的命中：主会话请求带 `tools`、复核请求不带，前缀可能在 messages 之前就分叉 | 需要**真实 provider**：同一会话先发主请求再发复核请求，断言复核请求的 `usage.cacheReadTokens > 0`（`packages/llm/llm/src/types.ts:162-176`） | 缓存不再是选型依据，重新评估「保留主会话消息原样」与「把主会话 system prompt 降级为证据文本」两种形态 |
 
 ## 技术路线
 
