@@ -1,8 +1,11 @@
-# dsh-navigator 的最小示例配置。请将本行合并到实际 profile patch 中。
-id: dsh-navigator
-config:
-  triggerEverySteps: 50
-  mode: wait
-  reviewTimeoutMs: 120000
-  maxOutputTokens: 4096
-  failurePolicy: continue
+# dsh-navigator 的 profile bundle patch 示例。顶层是数组，每个元素是一个 patch 条目；
+# 新增插件用 insert 行并显式给出 id 与 name。请将本文件内容合并到你的 profile patch 中。
+- insert:
+    - id: dsh-navigator
+      name: '@dsh-clipclop/dsh-navigator'
+      config:
+        triggerEverySteps: 50
+        mode: wait
+        reviewTimeoutMs: 120000
+        maxOutputTokens: 4096
+        failurePolicy: continue

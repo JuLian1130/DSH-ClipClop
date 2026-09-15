@@ -11,6 +11,16 @@
       "default": "./lib/index.js"
     }
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.d.ts"
+  ],
   "dependencies": {
     "@deepseek-ai/schemastery": "workspace:^"
   },
