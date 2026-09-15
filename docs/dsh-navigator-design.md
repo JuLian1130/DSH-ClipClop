@@ -1,6 +1,6 @@
 # dsh-navigator 设计讨论
 
-状态：需求已收敛；仓库内已有骨架（配置类型、包元数据），运行时尚未实现。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
+状态：需求已收敛；仓库内已有骨架（配置类型、包元数据），运行时尚未实现。G1、G2 已在 DSH `0.1.6-alpha.1` 上实测通过，详见「验证状态」。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
 
 本文件引用的 DSH 扩展点均按 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实。
 
@@ -80,6 +80,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - 等待模式在触发点的 `agent/pre-step` 里把建议追加进返回的 `decision.messages`。
 - 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递，不会自动丢弃——这正是上面那条过期标注存在的原因。
 - **停止**分两步：先用 `session.append('user/message', notice, { surfaceOp: 'append' })` 追加一条面向用户的说明，再调 `agent.cancel({ kind: 'hook', reason })`。注意 `surfaceOp` 是字符串 `'append'`，写成 `{ op: 'append' }` 会在 append 时直接抛错（`packages/core/session/src/surface.ts:269-305`）。
+- **应用任何结论前，先检查本步被 claim 的消息。** 探针实测：在 `agent/pre-step` 阶段停止（`cancel` 和 `reject` 都一样），本步被 claim 的消息**不会**写入会话历史——claim 已经把消息取走，而 step 从未打开。如果用户消息正好落在这一批里，它会被静默丢弃。因此只要 claimed 批次里存在真实用户消息（`source.kind === 'user'`），本次复核即视为失效：不注入、不停止，让该步正常继续。这同时是需求 7 与需求 14 的落地。
 - 因此**不需要客户端插件**：`aborted` 在客户端本来就没有专属渲染节点，而追加的 notice 消息会以可回放的折叠行呈现（`packages/client/ui-chat/src/client/conversation-nodes/message.ts:47-64`、`packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx:31-71`）。代价是说明文本进入主模型上下文，需求 15 已按此调整。
 - ACP 侧不做任何修改：DSH 的 `turnEndToStopReason` 会把非客户端取消压平成 `end_turn`（`packages/acp/acp/src/codec.ts:14-33`），与首版「ACP 只返回普通结束状态」的边界一致。
 
@@ -101,16 +102,23 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 第一版只承诺「本地 profile 内 `node_modules` 链接 + 预构建产物」：Desktop 的插件安装 UI 只接受 npm registry 包且以 `--ignore-scripts` 安装（`apps/desktop/src/project-manager.ts:131-148,391`），不发 prepare，因此必须提供构建产物；registry 发布留到契约稳定之后。
 
-## 待确认的验证门
+## 验证状态
 
-每条都写明了验证方法与失败时的退路。
+一次性探针在 DSH `0.1.6-alpha.1` 上实测通过的项目，以及仍未验证的项目。
+
+### 已实测通过
+
+| # | 结论 | 实测证据 |
+| --- | --- | --- |
+| G1 | `cancel({ kind: 'hook', reason })` 的取消原因确实进入 `turn/end`；停止发生在模型请求之前；在 `agent/pre-step` 监听器里直接追加 `user/message` 可行 | `turn/end` 的 reason 实测为 `{"kind":"aborted","reason":{"kind":"hook","reason":"navigator stop"}}`；适配器请求数为 0；notice 在 seq 3、`turn/end` 在 seq 4；notice 出现在 `deriveMessages()` 里 |
+| G2 | 辅助请求的字段原样透传 | `reasoningEffort`、`temperature: 0`、`maxTokens` 均到达适配器；`system` 与 `tools` 都未设置 |
+
+### 仍未验证
 
 | # | 待验证 | 验证方法 | 失败退路 |
 | --- | --- | --- | --- |
-| G1 | `cancel({ kind: 'hook' })` 在 DSH 内**零生产者**，没有端到端先例 | Agent loop testkit 驱动真实循环，断言 `turn/end` 携带 `{ kind: 'aborted', reason: { kind: 'hook', reason } }` | 原因只保留在追加的 notice 消息与诊断记录里；停止行为与需求 19 不受影响 |
-| G2 | 辅助请求转发 `reasoningEffort` 在仓库内无先例 | mock LLM 断言辅助请求实际携带 provider / model / reasoningEffort / maxTokens 与 `temperature: 0` | 退回只继承 provider + model |
-| G3 | Desktop 本地联调路径未实测（bundle 必须解析到 profile 内，且不发 prepare） | 在 Desktop 上链接预构建产物实测一次 | 联调范围收窄到 CLI / Web / SDK |
-| G5 | 前缀缓存是否真的命中未经验证：主会话请求带 `tools`、复核请求不带，前缀可能在 messages 之前就分叉 | 同一会话先发主请求再发复核请求，断言复核请求的 `usage.cacheReadTokens > 0`（`packages/llm/llm/src/types.ts:162-176`） | 缓存不再是选型依据，重新评估「保留主会话消息原样」与「把主会话 system prompt 降级为证据文本」两种形态 |
+| G3 | Desktop 本地联调路径（bundle 必须解析到 profile 内，且安装时不发 prepare） | 在 Desktop 上链接预构建产物实测一次 | 联调范围收窄到 CLI / Web / SDK |
+| G5 | 前缀缓存是否真的命中：主会话请求带 `tools`、复核请求不带，前缀可能在 messages 之前就分叉 | 需要**真实 provider**：同一会话先发主请求再发复核请求，断言复核请求的 `usage.cacheReadTokens > 0`（`packages/llm/llm/src/types.ts:162-176`） | 缓存不再是选型依据，重新评估「保留主会话消息原样」与「把主会话 system prompt 降级为证据文本」两种形态 |
 
 ## 技术路线
 
@@ -134,6 +142,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - 验证插件重载或销毁会取消在途复核并释放等待中的主会话。
 - 验证注入的建议消息带可读 `summary` 且写明触发步骤；跨越自主执行区间投递时带过期标注。
 - 验证停止时追加的 notice 消息先于 `turn/end` 落盘，且不经修改即可重建。
+- 验证「本步 claimed 批次里有真实用户消息时不应用结论」：构造用户消息与 `stop` 结论同时到达的场景，断言用户消息进入会话历史、主会话没有被停止。
 - 持久化记录：关闭并重新打开会话后，复核记录仍可读，且不会进入主模型历史。
 - 使用 SDK 集成测试验证多轮交互与结构化事件；使用 Web 和 Desktop 集成测试验证追加的 notice 消息对用户可见且随 replay 重现。
 - ACP 测试只验证普通结束状态，不要求首版协议携带详细 stop 原因。
