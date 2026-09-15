@@ -4,6 +4,8 @@
 
 本文件引用的 DSH 扩展点均按 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实。
 
+本文件是需求与机制的唯一事实来源：取舍理由、调用哪个钩子、消息字段形状、源码依据与实测证据都在这里。实施规格（`.scratch/dsh-navigator/spec.md`）只写操作性定义、可观察的验收标准和交付约束，不复制本文件的机制描述。判断一句话该放哪边：**删掉它之后，有没有验收标准变得无法判断**——会，属于规格；不会，属于本文件。
+
 ## 范围与约束
 
 - 只开发插件，不修改 deepseek-harness 源码。需要 DSH 不具备的扩展点时，在插件启动阶段直接报错，不静默降级。
@@ -36,6 +38,12 @@
 19. 等待模式 `stop` 的原因必须对用户可见，而不是只留在诊断记录里。
 
 ## 已决定的设计选择
+
+### 观察范围
+
+只观察用户发起的顶层会话——会话头部没有 `parentSession` 的会话（`packages/core/session/src/types.ts:106`）。子 agent 的子会话不触发复核，也不参与计数。
+
+理由有两条：DSH 里子会话是常态，每个都按同一个间隔触发会让调用量与副作用放大一个量级；更要紧的是语义不通——子 agent 的初始提示是用 `source: { kind: 'user' }` 投递的（`packages/subagent/subagent-in-process-driver/src/index.ts:181`），按判别式会被当成用户介入，重置计数、开启新的自主执行区间，而子会话里几乎不会有真正的用户消息。首版不覆盖子会话；要覆盖得单独评估成本与语义。
 
 ### 计数口径
 
@@ -84,7 +92,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 ### 注入与停止机制
 
-- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。
+- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。**过期的判据**：插件为每个主会话维护一个执行区间编号，每收到一条真实用户消息加一；建议与说明携带产生时的编号，送达时编号不同即视为过期。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），只是正文换成停止原因。
 - 等待模式在触发点的 `agent/pre-step` 里把建议追加进返回的 `decision.messages`。
 - 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递。**任务正常结束时因此不会丢**，跨执行区间送达时靠过期标注说明。但 `cancel` 默认清空待处理队列（`packages/core/agent-loop/src/agent.ts:149-155`），而取消的调用方（用户按停止、API 层、进程退出）不由插件控制，所以**任务被取消时这条建议随之丢失**——这是需求 14 明确接受的例外；要兑现「取消也不丢」就得插件自己持久化待投递的建议并在下次唤醒时重投，代价不划算。
 - **停止**分两步：先用 `session.append('user/message', notice, { surfaceOp: 'append' })` 追加一条面向用户的说明，再调 `agent.cancel({ kind: 'hook', reason })`。注意 `surfaceOp` 是字符串 `'append'`，写成 `{ op: 'append' }` 会在 append 时直接抛错（`packages/core/session/src/surface.ts:269-305`）。

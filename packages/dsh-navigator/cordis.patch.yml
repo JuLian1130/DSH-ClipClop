@@ -9,3 +9,5 @@
         reviewTimeoutMs: 120000
         maxOutputTokens: 4096
         failurePolicy: continue
+        # 留空表示使用插件内置的复核提示词
+        prompt: ''
