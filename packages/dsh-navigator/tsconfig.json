@@ -4,6 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    "allowImportingTsExtensions": true,
     "declaration": true,
     "emitDeclarationOnly": true,
     "outDir": "lib/types",
