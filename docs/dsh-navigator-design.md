@@ -6,9 +6,11 @@
 
 ## 范围与约束
 
-- 只开发插件，不修改 deepseek-harness 源码。需要 DSH 不具备的扩展点时，在插件启动阶段直接报错，不静默降级。注意 Cordis 的 `inject` 语义是「依赖就绪前不激活插件」（`vendor/cordis/src/registry.ts:29-30`），依赖缺失只是永不激活、并不报错，所以能力检查必须在 `apply` 里显式做。
+- 只开发插件，不修改 deepseek-harness 源码。需要 DSH 不具备的扩展点时，在插件启动阶段直接报错，不静默降级。
+  - **服务依赖全部交给原生 `inject`。** Cordis 在依赖就绪前不会激活插件，所以服务缺失时 `apply` 根本不会执行（`vendor/cordis/src/fiber.ts:611-623` 的 `_refresh()` 在任一注入服务缺失时把该插件置为 INACTIVE），「在 `apply` 里检查服务是否存在」是死代码。缺服务时的表现是「插件不激活」，由 DSH 启动审计报告（`packages/boot/app-boot/src/index.ts:752,808,816`：非必需条目打印 `warning: N entries did not activate` 并附诊断，必需条目直接启动失败）。这不是静默降级——插件根本不会运行，只是报告者从插件换成了框架。
+  - **`apply` 里只检查 `inject` 表达不了的部分**：我们要调用的 API 形状（`ctx.llm.stream`、`ctx.sessions.get` 是否为函数），以及第一次拿到主会话时的会话级方法（`deriveMessages`、`requestHeader`）。不检查 `agent/pre-step` 事件是否存在——DSH 没有这种查询接口。对 agent loop 行为的依赖改为锁定版本：本版插件针对 `0.1.6-alpha.1`，版本不符时的表现是复核不触发，这是已知限制。
 - DSH-ClipClop 是插件集合。第一个插件名为 dsh-navigator，目录 `packages/dsh-navigator/`，包名 `@dsh-clipclop/dsh-navigator`。
-- 复核不创建运行时 Agent、不创建子 Session、不执行工具、不修改主会话历史。独立上下文的判断者不在当前范围内。
+- 复核请求本身不创建运行时 Agent、不创建子 Session、不执行工具、也不改写主会话历史；结论按「各结论的上下文策略」以 plugin notice 消息追加到主会话，这是复核唯一的写入路径。独立上下文的判断者不在当前范围内。
 - 实现技术栈：strict TypeScript、ESM、原生 Cordis 插件、pnpm workspace、Vitest，通过 DSH profile 加载。Desktop、Web 和 SDK 共用同一套 Agent 层逻辑；headless one-shot CLI 只做插件加载与配置检查，不作为多轮验收入口。
 
 ## 已确认需求
@@ -26,7 +28,7 @@
 11. `continue` 默认不进入主模型上下文；等待模式在触发位置继续，不追加复核对话。
 12. 等待模式下 `stop` 使主会话停止，并给出用户可见的原因后等待用户决定。并行模式下 `stop` 作为建议注入，明确写出该建议依据截至第几步的上下文，由主会话自行决定是否停止。
 13. `adjust` 用于建议缩小范围、改变方案或考虑回滚；复核不能执行回滚。
-14. 并行复核遇到真实用户消息、任务结束或任务取消时，在途请求被取消。已经完成但尚未投递的建议不丢弃，改为带过期标注投递。并行结论不设置最大滞后步数。
+14. 并行复核遇到真实用户消息、任务结束或任务取消时，在途请求被取消。已经完成但尚未投递的建议：任务正常结束时保留，跨执行区间送达时带过期标注；任务被取消时随待处理队列一并清空而丢失。并行结论不设置最大滞后步数。
 15. 诊断记录（证据、用量、配置快照）保留用于回放，不进入主模型上下文。面向用户的停止说明与复核建议以 plugin notice 消息进入主会话，因此对模型可见。复核不显示为子 Session。
 16. 复核失败、超时或输出无法解析时，默认记录失败并允许主会话继续；失败策略和超时可配置，默认超时 120 秒且不重试，评估输出上限 4096 token。
 17. 复核输出必须是结构化数据，包含 `verdict`、`reason` 和 `recommendation`；用户可编辑提示词不能改变该输出要求。
@@ -45,11 +47,13 @@
 
 触发点始终是「上次触发点 + `triggerEverySteps`」，被跳过的触发点不重置节奏，也不顺延。慢复核因此不会无限推迟后续复核。
 
-触发基线必须能自举，否则插件重载或会话恢复之后无法保证节奏一致：插件加载时取该会话最后一条复核记录里的触发步骤作为基线；没有记录时用 `floor(已完成步数 / triggerEverySteps) * triggerEverySteps`。真实用户消息会开启新的自主执行区间，此时把下一次触发点重置为「这条用户消息所在步骤 + `triggerEverySteps`」——例如第 50 步触发过、第 70 步用户发了消息，下一次是第 120 步。
+触发基线必须能自举，否则插件重载或会话恢复之后无法保证节奏一致。基线按**主会话惰性初始化**：插件第一次观察到某个主会话时，取该会话最后一条复核记录里的触发步骤作为基线；没有记录时用 `floor(已完成步数 / triggerEverySteps) * triggerEverySteps`。不能在插件加载时计算——插件是全局加载一次的，主会话通常在它之后才出现。真实用户消息会开启新的自主执行区间，此时把下一次触发点重置为「这条用户消息所在步骤 + `triggerEverySteps`」——例如第 50 步触发过、第 70 步用户发了消息，下一次是第 120 步。
 
 ### 真实用户消息的判别
 
-判别式固定为 `role === 'user' && source.kind === 'user'`（`packages/llm/llm/src/message.ts:98-128`）。插件注入的建议是 `source.kind === 'plugin'`，工具结果是 `source.kind === 'tool'`，因此复核自己注入的建议不会重置计数。
+判别式固定为 `role === 'user' && source.kind === 'user'`（`packages/llm/llm/src/message.ts:98-128`）。插件注入的建议是 `source.kind === 'plugin'`，工具结果是 `source.kind === 'tool'`，因此复核自己注入的建议不会重置计数。判别式只认这一个来源，**不枚举其它 kind**——`MessageSourceMap` 是可合并扩展的，DSH 自己就有十来个 kind（webhook、agent-team、agent-instructions、session-reference、skill、tool-skill、session-controller、subagent 等各自扩过），遇到不认识的 kind 一律按「不是真实用户消息」处理。
+
+真实用户消息有两条到达路径，由 `packages/api/session-controller/src/commands.ts:360-361` 按 `request.mode` 分流：`followup` 进入「下一轮」（`packages/core/agent-loop/src/agent.ts:137-139`），`steer` 进入「下一步」（`agent.ts:141-143`）。两条路径由同一个事件覆盖——`agent/inbox/inserted`（`packages/core/agent/src/runtime-types.ts:288`，由 inbox 的 splice 发出），所以监听它一处即可，不需要分别处理。注意我们自己的 `inject` 也会触发它，因此必须按 `source.kind === 'user'` 过滤。
 
 ### 辅助请求的消息构成
 
@@ -82,10 +86,10 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 - **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。
 - 等待模式在触发点的 `agent/pre-step` 里把建议追加进返回的 `decision.messages`。
-- 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递。取消或释放会清空待处理队列，这类建议随之丢失——这正是上面那条过期标注存在的原因。
+- 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递。**任务正常结束时因此不会丢**，跨执行区间送达时靠过期标注说明。但 `cancel` 默认清空待处理队列（`packages/core/agent-loop/src/agent.ts:149-155`），而取消的调用方（用户按停止、API 层、进程退出）不由插件控制，所以**任务被取消时这条建议随之丢失**——这是需求 14 明确接受的例外；要兑现「取消也不丢」就得插件自己持久化待投递的建议并在下次唤醒时重投，代价不划算。
 - **停止**分两步：先用 `session.append('user/message', notice, { surfaceOp: 'append' })` 追加一条面向用户的说明，再调 `agent.cancel({ kind: 'hook', reason })`。注意 `surfaceOp` 是字符串 `'append'`，写成 `{ op: 'append' }` 会在 append 时直接抛错（`packages/core/session/src/surface.ts:269-305`）。
 - **应用任何结论前，先检查本步被 claim 的消息。** 探针实测：在 `agent/pre-step` 阶段停止（`cancel` 和 `reject` 都一样），本步被 claim 的消息**不会**写入会话历史——claim 已经把消息取走，而 step 从未打开。如果用户消息正好落在这一批里，它会被静默丢弃。因此只要 claimed 批次里存在真实用户消息（`source.kind === 'user'`），本次复核即视为失效：不注入、不停止，让该步正常继续。这同时是需求 7 与需求 14 的落地。
-- **等待复核期间到达的真实用户消息走的是另一条路径，必须单独处理。** 用户消息经 `followup` 进入「下一轮」而不是本步被 claim 的那一批（`packages/core/agent-loop/src/agent.ts:141-143`），所以上面那条检查看不到它；而 `cancel` 默认清空整个待处理队列（`agent.ts:149-155`），一旦在此时停止，用户刚发的话就没了。因此等待期间要监听进入队列的消息，出现真实用户消息就中止复核、不作任何干预。
+- **等待复核期间到达的真实用户消息走的是另一条路径，必须单独处理。** 用户消息经 `followup` 进入「下一轮」（`packages/core/agent-loop/src/agent.ts:137-139`）或经 `steer` 进入「下一步」（`agent.ts:141-143`），两条路径都不在本步被 claim 的那一批里，所以上面那条检查看不到它们；而 `cancel` 默认清空整个待处理队列（`agent.ts:149-155`），一旦在此时停止，用户刚发的话就没了。因此等待期间要监听 `agent/inbox/inserted`（两条路径都覆盖），出现 `source.kind === 'user'` 的消息就中止复核、不作任何干预。
 - 因此**不需要客户端插件**：`aborted` 在客户端本来就没有专属渲染节点，而追加的 notice 消息会以可回放的折叠行呈现（`packages/client/ui-chat/src/client/conversation-nodes/message.ts:47-64`、`packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx:31-71`）。代价是说明文本进入主模型上下文，需求 15 已按此调整。
 - ACP 侧不做任何修改：DSH 的 `turnEndToStopReason` 会把非客户端取消压平成 `end_turn`（`packages/acp/acp/src/codec.ts:14-33`）；而且 ACP 只转发助手消息与工具调用/结果，不转发 `user/message`（`packages/acp/acp/src/updates.ts`），所以那条追加的说明对 ACP 客户端不可见。这与首版「ACP 只返回普通结束状态、不要求显示详细原因」的边界一致。
 
@@ -95,7 +99,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 ### 复核记录的存放位置
 
-复核生命周期记录**不使用 Session 事件**，写入插件自有的 storage 域。声明形状：`ctx.storageDomain.open({ name: 'clipclop_review', version: 1, layout: 'per-record', tables: { … } })`，表按会话 id 键控；`per-record` 在 JSON 后端下是一条记录一个文档，记录的值需要 schema 校验（该能力用 zod）。取舍与证据见 [ADR 0002](adr/0002-review-records-outside-session-log.md)。
+复核生命周期记录**不使用 Session 事件**，写入插件自有的 storage 域。声明形状：`ctx.storageDomain.open({ name: 'clipclop_review', version: 1, layout: 'per-record', invalidRecords: 'backup-and-skip', tables: { … } })`，表按会话 id 键控；`per-record` 在 JSON 后端下是一条记录一个文档，记录的值需要 schema 校验（该能力用 zod）。取 `backup-and-skip` 而不是默认的「整个域打开失败」，是因为记录是诊断数据，一条坏记录不该让插件加载不了（该选项见 `packages/storage/storage-domain/src/spec.ts:67,129-132`）。取舍与证据见 [ADR 0002](adr/0002-review-records-outside-session-log.md)。
 
 记录内容为：触发步骤、被引用消息的 seq 列表、配置快照、结论、用量、耗时、状态。不复制消息正文（按 seq 可重建）；发给复核的快照不截断。
 
@@ -131,7 +135,8 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 使用 `agent/pre-step`（`packages/core/agent/src/runtime-types.ts:320`）在下一次模型请求被接受前执行等待模式复核。该 hook 会被 `await`，返回 `{ kind: 'enter', messages }` 可追加 user 消息，返回 `{ kind: 'reject' }` 可拒绝该步。
 
-- 上下文快照：`session.deriveMessages()`（`packages/core/session/src/index.ts:841`），system prompt 为 surface 节点 0。
+- 上下文快照：`session.deriveMessages()`（`packages/core/session/src/index.ts:841`），system prompt 为 surface 节点 0。注意 snapshot 在会话的第一步触发时尚无 system 消息（system 是在 `step/start` 与路由解析之后才提交的，见 `docs/architecture.md` 的 agent loop 一节）；默认 50 步间隔下不会碰到，只有把间隔配成 1 才会。
+- 消息序号：`Message` 本身不带序号。序号来自 `session.surface.nodes`（`packages/core/session/src/surface.ts:624`），配合 `eventAt(seq)` 与 `deriveEventMessage(event)`（`surface.ts:612-621`，可以为 `null`）成对取出并跳过 `null` 节点。**不能**把 `deriveMessages()` 的下标与 `surface.nodes` 直接对齐——两者长度不保证一致。
 - 辅助请求：`ctx.llm.stream(GenerateOptions)` + `BlockAssembler`；路由取自 `session.requestHeader()?.config`；超时用 `deadline(signal, ms, code)`（`packages/util/timeout/src/index.ts:91-113`）。
 - 建议投递：等待模式走 pre-step 决策；并行模式走 `agent.inject()`。
 - 停止与说明：`session.append('user/message', notice, { surfaceOp: 'append' })` + `agent.cancel({ kind: 'hook', reason })`。
@@ -150,6 +155,10 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - 验证注入的建议消息带可读 `summary` 且写明触发步骤；跨越自主执行区间投递时带过期标注。
 - 验证停止时追加的 notice 消息先于 `turn/end` 落盘，且不经修改即可重建。
 - 验证「本步 claimed 批次里有真实用户消息时不应用结论」：构造用户消息与 `stop` 结论同时到达的场景，断言用户消息进入会话历史、主会话没有被停止。
+- 验证等待期间到达的真实用户消息：`followup` 与 `steer` 两条路径各构造一次，断言两种情况下复核都作废、用户消息都还在队列里没被清掉。
+- 验证并行建议的两种去向：任务正常结束时建议保留、跨执行区间送达时带过期标注；任务被取消时建议随队列消失（这是接受的例外，测试要把它钉住，避免以后被误当成 bug）。
+- 验证辅助请求的消息构成：等于触发点的快照原顺序加末尾一条 user 消息，没有截断，且没有设置 `system`、没有传 `tools`。
+- 验证每次复核记录里的配置快照等于触发那一刻的配置：中途改配置后，已发生的复核记录不变。
 - 持久化记录：关闭并重新打开会话后，复核记录仍可读，且不会进入主模型历史。
 - 使用 SDK 集成测试验证多轮交互与结构化事件；使用 Web 和 Desktop 集成测试验证追加的 notice 消息对用户可见且随 replay 重现。
 - ACP 测试只验证普通结束状态，不要求首版协议携带详细 stop 原因。
