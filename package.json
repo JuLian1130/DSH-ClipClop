@@ -4,6 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "scripts": {
-    "typecheck": "tsc -b packages/dsh-navigator/tsconfig.json --pretty false"
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck"
   }
 }

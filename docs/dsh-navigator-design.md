@@ -6,7 +6,7 @@
 
 ## 范围与约束
 
-- 只开发插件，不修改 deepseek-harness 源码。需要 DSH 不具备的扩展点时，在插件启动阶段直接报错，不静默降级。
+- 只开发插件，不修改 deepseek-harness 源码。需要 DSH 不具备的扩展点时，在插件启动阶段直接报错，不静默降级。注意 Cordis 的 `inject` 语义是「依赖就绪前不激活插件」（`vendor/cordis/src/registry.ts:29-30`），依赖缺失只是永不激活、并不报错，所以能力检查必须在 `apply` 里显式做。
 - DSH-ClipClop 是插件集合。第一个插件名为 dsh-navigator，目录 `packages/dsh-navigator/`，包名 `@dsh-clipclop/dsh-navigator`。
 - 复核不创建运行时 Agent、不创建子 Session、不执行工具、不修改主会话历史。独立上下文的判断者不在当前范围内。
 - 实现技术栈：strict TypeScript、ESM、原生 Cordis 插件、pnpm workspace、Vitest，通过 DSH profile 加载。Desktop、Web 和 SDK 共用同一套 Agent 层逻辑；headless one-shot CLI 只做插件加载与配置检查，不作为多轮验收入口。
@@ -37,13 +37,15 @@
 
 ### 计数口径
 
-计数只在主会话**成功完成一次模型请求并把结果写入会话历史**后 +1。失败与被中止的请求、以及所有 navigator 辅助请求都不计数。
+计数只在主会话**成功提交一次 `assistant/message`**（不带 `interrupted`）后 +1。失败与被中止的请求、以及所有 navigator 辅助请求都不计数。
 
-步骤与计数都不需要插件自建存储：`step/start` 事件本身持久（`packages/core/session/src/types.ts:287`），并有宿主投影 `turnBoundary`（`packages/core/agent-loop/src/index.ts:44-89`）可用于读取，压缩不截断日志、恢复时按日志重折叠。
+可观察的判别信号是必要的：`step/start` 与 `step/end` 对失败和中止的步骤同样会写（`packages/core/agent-loop/src/agent.ts:303,313`），不能用来计数；宿主投影 `turnBoundary`（`packages/core/agent-loop/src/index.ts:44-89`）只含 `openTurnStartSeq` / `lastStepStartSeq` / `lastStepBoundary` / `lastTurn`，**不含步数**，同样不能用来计数。计数从会话日志的事件推导，压缩不截断日志、恢复时按日志重折叠。
 
 ### 触发节奏
 
 触发点始终是「上次触发点 + `triggerEverySteps`」，被跳过的触发点不重置节奏，也不顺延。慢复核因此不会无限推迟后续复核。
+
+触发基线必须能自举，否则插件重载或会话恢复之后无法保证节奏一致：插件加载时取该会话最后一条复核记录里的触发步骤作为基线；没有记录时用 `floor(已完成步数 / triggerEverySteps) * triggerEverySteps`。真实用户消息会开启新的自主执行区间，此时把下一次触发点重置为「这条用户消息所在步骤 + `triggerEverySteps`」——例如第 50 步触发过、第 70 步用户发了消息，下一次是第 120 步。
 
 ### 真实用户消息的判别
 
@@ -53,13 +55,15 @@
 
 - 消息序列 = `session.deriveMessages()` **原样**（`packages/core/session/src/index.ts:841`）**加末尾一条 user 消息**；**不设 `system` 字段**、**不传 `tools`**。主会话的消息一个字节都不改，整段对话因此成为真前缀（缓存问题见 G5）。
 - 末尾那条 user 消息 = **可替换的复核提示词在前、固定的复核角色与输出契约在后**。插件内置默认提示词，YAML 配置 `prompt` 即替换前半段；后半段固定，用户改不掉。
-- 选这个形态而不是「自带 system 指令 + 把历史压平成 JSON」的理由：它是 DSH `compaction-basic` 在生产里使用的形态（`packages/compaction/compaction-basic/src/summarizer.ts:144-150`，其注释明写用 user 指令交付是为复用 KV prefix cache），保真度最高（tool call/result 配对不被压平），也不需要搬运主会话的 system prompt。
+- 选这个形态而不是「自带 system 指令 + 把历史压平成 JSON」的理由：它是 DSH `compaction-basic` 在生产里使用的形态（注释在 `packages/compaction/compaction-basic/src/summarizer.ts:24-29`，明写「把对话自己的 system prompt、tools 与消息前缀留在前面，使辅助调用成为上次请求的真前缀，从而复用 KV 缓存」；构造在 `:144-150`），保真度最高（tool call/result 配对不被压平），也不需要搬运主会话的 system prompt。
 - 已知风险：复核会先读到主会话自己的 system 指令，可能误以为自己是主 agent 而继续任务。缓解是末尾固定指令显式声明复核者角色 + 严格结构化校验——最坏情况是一次复核失败（按需求 16 主会话继续），不会损坏会话。
 - 不传 `tools` 是刻意的：需求 2 要求复核不执行工具。compaction 传 `header.tools` 的做法不能照抄。
 
 ### 结构化输出的强制方式
 
 DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packages/llm/llm/src/types.ts:453-493`）。因此「不能删除结构化字段」由末尾固定指令 + 校验失败即复核失败保证，不由模型保证。
+
+输出契约固定在末尾指令里：只输出一个 JSON 对象，含 `verdict`（取 `continue` / `adjust` / `stop`）、`reason`、`recommendation`，后两者为非空字符串。不是 JSON、缺字段、枚举非法，任一项都按复核失败处理。
 
 ### 各结论的上下文策略（第一版固定，不提供配置项）
 
@@ -76,23 +80,26 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 ### 注入与停止机制
 
-- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息文本固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。
+- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。
 - 等待模式在触发点的 `agent/pre-step` 里把建议追加进返回的 `decision.messages`。
-- 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递，不会自动丢弃——这正是上面那条过期标注存在的原因。
+- 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递。取消或释放会清空待处理队列，这类建议随之丢失——这正是上面那条过期标注存在的原因。
 - **停止**分两步：先用 `session.append('user/message', notice, { surfaceOp: 'append' })` 追加一条面向用户的说明，再调 `agent.cancel({ kind: 'hook', reason })`。注意 `surfaceOp` 是字符串 `'append'`，写成 `{ op: 'append' }` 会在 append 时直接抛错（`packages/core/session/src/surface.ts:269-305`）。
 - **应用任何结论前，先检查本步被 claim 的消息。** 探针实测：在 `agent/pre-step` 阶段停止（`cancel` 和 `reject` 都一样），本步被 claim 的消息**不会**写入会话历史——claim 已经把消息取走，而 step 从未打开。如果用户消息正好落在这一批里，它会被静默丢弃。因此只要 claimed 批次里存在真实用户消息（`source.kind === 'user'`），本次复核即视为失效：不注入、不停止，让该步正常继续。这同时是需求 7 与需求 14 的落地。
+- **等待复核期间到达的真实用户消息走的是另一条路径，必须单独处理。** 用户消息经 `followup` 进入「下一轮」而不是本步被 claim 的那一批（`packages/core/agent-loop/src/agent.ts:141-143`），所以上面那条检查看不到它；而 `cancel` 默认清空整个待处理队列（`agent.ts:149-155`），一旦在此时停止，用户刚发的话就没了。因此等待期间要监听进入队列的消息，出现真实用户消息就中止复核、不作任何干预。
 - 因此**不需要客户端插件**：`aborted` 在客户端本来就没有专属渲染节点，而追加的 notice 消息会以可回放的折叠行呈现（`packages/client/ui-chat/src/client/conversation-nodes/message.ts:47-64`、`packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx:31-71`）。代价是说明文本进入主模型上下文，需求 15 已按此调整。
-- ACP 侧不做任何修改：DSH 的 `turnEndToStopReason` 会把非客户端取消压平成 `end_turn`（`packages/acp/acp/src/codec.ts:14-33`），与首版「ACP 只返回普通结束状态」的边界一致。
+- ACP 侧不做任何修改：DSH 的 `turnEndToStopReason` 会把非客户端取消压平成 `end_turn`（`packages/acp/acp/src/codec.ts:14-33`）；而且 ACP 只转发助手消息与工具调用/结果，不转发 `user/message`（`packages/acp/acp/src/updates.ts`），所以那条追加的说明对 ACP 客户端不可见。这与首版「ACP 只返回普通结束状态、不要求显示详细原因」的边界一致。
 
 ### 模型配置继承粒度
 
-继承 `provider` + `model` + `reasoningEffort`，`maxTokens` 用 `maxOutputTokens` 覆盖，`temperature` 固定为 0。理由：复核是判断题，推理强度直接影响判断质量；但复核不需要创作随机性，固定 0 才可复现。注意仓库内没有任何辅助调用转发过 `reasoningEffort`，这是一条新行为，见 G2。
+继承 `provider` + `model` + `reasoningEffort`，`maxTokens` 用 `maxOutputTokens` 覆盖，`temperature` 固定为 0。理由：复核是判断题，推理强度直接影响判断质量；但复核不需要创作随机性，固定 0 减少随机性、便于复现（不保证逐字一致）。注意仓库内没有任何辅助调用转发过 `reasoningEffort`，这是一条新行为，见 G2。
 
 ### 复核记录的存放位置
 
-复核生命周期记录**不使用 Session 事件**，写入插件自有的 storage 域（`ctx.storageDomain.open()`，域名单 `clipclop_review`、`layout: 'per-record'`、按 `SessionId` 键控）。取舍与证据见 [ADR 0002](adr/0002-review-records-outside-session-log.md)。
+复核生命周期记录**不使用 Session 事件**，写入插件自有的 storage 域。声明形状：`ctx.storageDomain.open({ name: 'clipclop_review', version: 1, layout: 'per-record', tables: { … } })`，表按会话 id 键控；`per-record` 在 JSON 后端下是一条记录一个文档，记录的值需要 schema 校验（该能力用 zod）。取舍与证据见 [ADR 0002](adr/0002-review-records-outside-session-log.md)。
 
 记录内容为：触发步骤、被引用消息的 seq 列表、配置快照、结论、用量、耗时、状态。不复制消息正文（按 seq 可重建）；发给复核的快照不截断。
+
+「回放」的含义是按记录的触发步骤与消息序号回到会话日志重建当时上下文；记录本身不进会话日志、也不参与会话检索。首版不做记录清理，代价是记录随会话长期累积，需要时手工删除。
 
 ### 省略辅助请求的 purpose
 
