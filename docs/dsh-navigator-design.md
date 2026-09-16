@@ -1,6 +1,6 @@
 # dsh-navigator 设计讨论
 
-状态：需求已收敛；仓库内已有骨架（配置类型、包元数据、构建配置），但还没有插件运行时。G1、G2、G5 已实测通过，仅 G3 待验证，详见「验证状态」。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
+状态：需求已收敛；仓库内已有骨架（配置类型、包元数据、构建配置），但还没有插件运行时。G1、G2、G5、G6、G7 已实测通过，仅 G3 待验证，详见「验证状态」。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
 
 本文件引用的 DSH 扩展点均按 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实。
 
@@ -17,7 +17,7 @@
 
 ### 观察范围
 
-只观察用户发起的顶层会话——会话头部没有 `parentSession` 的会话（`packages/core/session/src/types.ts:106`）。子 agent 的子会话不触发复核，也不参与计数。
+只观察用户发起的顶层会话——判别式是会话头部的 `origin !== 'subagent'`。**不能**用「没有 `parentSession`」判别：`parentSession` 是 fork 血缘，用户自己 fork 出来的会话照样带它而不带 `origin`（`packages/api/session-controller/src/commands.ts:258-272` 只写 `parentSession` 与 `isSeeded`；核心 `Sessions.fork` 同样只写这两个，`packages/core/session/src/index.ts:1244-1249`），只有子 agent 子会话才写 `origin: 'subagent'` 与 `delegationDepth`（`packages/subagent/subagent/src/child-agent.ts:149-155`；字段语义见 `packages/core/session/src/types.ts:105-122`：`parentSession` 是 lineage，`origin` 才是子会话分类）。按旧判别式，用户 fork 出来的会话会被当成子会话，不触发复核也不计数——G6 实测：fork 出来的会话头是 `parentSession=<源会话>`、`origin=undefined`。子 agent 的子会话不触发复核，也不参与计数。
 
 理由有两条：DSH 里子会话是常态，每个都按同一个间隔触发会让调用量与副作用放大一个量级；更要紧的是语义不通——子 agent 的初始提示是用 `source: { kind: 'user' }` 投递的（`packages/subagent/subagent-in-process-driver/src/index.ts:181`），按判别式会被当成用户介入，重置计数、开启新的自主执行区间，而子会话里几乎不会有真正的用户消息。首版不覆盖子会话；要覆盖得单独评估成本与语义。
 
@@ -25,7 +25,7 @@
 
 计数只在主会话**成功提交一次 `assistant/message`**（不带 `interrupted`）后 +1。失败与被中止的请求、以及所有 navigator 辅助请求都不计数。
 
-可观察的判别信号是必要的：`step/start` 与 `step/end` 对失败和中止的步骤同样会写（`packages/core/agent-loop/src/agent.ts:303,313`），不能用来计数；宿主投影 `turnBoundary`（`packages/core/agent-loop/src/index.ts:44-89`）只含 `openTurnStartSeq` / `lastStepStartSeq` / `lastStepBoundary` / `lastTurn`，**不含步数**，同样不能用来计数。计数从会话日志的事件推导，压缩不截断日志、恢复时按日志重折叠。
+可观察的判别信号是必要的：`step/start` 与 `step/end` 对失败和中止的步骤同样会写（`packages/core/agent-loop/src/agent.ts:303,313`），不能用来计数；宿主投影 `turnBoundary`（`packages/core/agent-loop/src/index.ts:44-89`）只含 `openTurnStartSeq` / `lastStepStartSeq` / `lastStepBoundary` / `lastTurn`，**不含步数**，同样不能用来计数。计数由插件自己注册的一个 **session projection** 折叠（`ctx.sessionProjections.register`），**不读历史日志**：三个同步历史读取器已被 DSH 禁止新调用，而现成投影都不等于上面的口径（`turnBoundary` 不含步数；`sessionStats.steps` 数的是 `step/end`，其文件头注释明说数 `assistant/message` 会多算 max-tokens 的空消息、少算被取消的步）。投影在恢复时由框架重折叠，正是那份 Agent Note 指定的替代路径；需要把 `@deepseek-ai/dsh-session-projection` 列进依赖。G7 实测：投影在事件全部写完之后才注册，仍折出整段历史并给出正确口径。
 
 ### 触发节奏
 
@@ -83,7 +83,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 ### 注入与停止机制
 
-- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「它来自上一段执行、可能已不适用」，由模型和用户自行判断。**过期的判据**（只对并行建议）：插件为每个主会话维护一个执行区间编号，每收到一条真实用户消息加一；建议携带产生时的编号，送达时编号不同即视为过期。等待模式的说明没有这个窗口——等待期间出现真实用户消息时本次复核直接作废，说明不会迟到。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），正文写明触发步骤与停止原因。
+- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤，且写在正文开头——摘要就是正文的截断（`boundContextSummary()` 作用于正文），折叠行里才看得到触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「它来自上一段执行、可能已不适用」，由模型和用户自行判断。**过期的判据**（只对并行建议）：插件为每个主会话维护一个执行区间编号，每收到一条真实用户消息加一；建议携带产生时的编号，送达时编号不同即视为过期。等待模式的说明没有这个窗口——等待期间出现真实用户消息时本次复核直接作废，说明不会迟到。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），正文写明触发步骤与停止原因。
 - 等待模式在触发点的 `agent/pre-step` 里把建议追加进返回的 `decision.messages`。
 - 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递。**任务正常结束时因此不会丢**，跨执行区间送达时靠过期标注说明。但 `cancel` 默认清空待处理队列（`packages/core/agent-loop/src/agent.ts:149-155`），而取消的调用方（用户按停止、API 层、进程退出）不由插件控制，所以**任务被取消时这条建议随之丢失**——这是规格里明确接受的例外；要兑现「取消也不丢」就得插件自己持久化待投递的建议并在下次唤醒时重投，代价不划算。
 - **停止**分两步：先用 `session.append('user/message', notice, { surfaceOp: 'append' })` 追加一条面向用户的说明，再调 `agent.cancel({ kind: 'hook', reason })`。注意 `surfaceOp` 是字符串 `'append'`，写成 `{ op: 'append' }` 会在 append 时直接抛错（`packages/core/session/src/surface.ts:269-305`）。
@@ -102,7 +102,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 记录内容为：触发步骤、快照里每条消息的 id 列表、配置快照、结论、用量、耗时、状态。不复制消息正文（按 id 从当前投影取回）；发给复核的快照不截断。
 
-「回放」的含义是按记录的触发步骤与消息 id 在会话当前的模型可见消息里定位、重建当时上下文的一部分（被压缩替换掉的消息取不回）；记录本身不进会话日志、也不参与会话检索。首版不做记录清理，代价是记录随会话长期累积，需要时手工删除。
+「回放」的含义是按记录的触发步骤与消息 id 在会话当前的模型可见消息里定位：只保证命中的 id 与顺序，不比内容（存在保留 id、只改写内容的投影），被压缩替换掉的消息取不回；记录本身不进会话日志、也不参与会话检索。首版不做记录清理，代价是记录随会话长期累积，需要时手工删除。
 
 ### 省略辅助请求的 purpose
 
@@ -123,6 +123,8 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 | G1 | `cancel({ kind: 'hook', reason })` 的取消原因确实进入 `turn/end`；停止发生在模型请求之前；在 `agent/pre-step` 监听器里直接追加 `user/message` 可行 | `turn/end` 的 reason 实测为 `{"kind":"aborted","reason":{"kind":"hook","reason":"navigator stop"}}`；适配器请求数为 0；notice 在 seq 3、`turn/end` 在 seq 4；notice 出现在 `deriveMessages()` 里 |
 | G2 | 辅助请求的字段原样透传 | `reasoningEffort`、`temperature: 0`、`maxTokens` 均到达适配器；`system` 与 `tools` 都未设置 |
 | G5 | 前缀缓存确实可复用：主会话请求带 `tools`、复核请求不带，两者共用同一段消息前缀时，复核请求仍能读到主请求建立的缓存 | 在 DeepSeek 兼容的第三方网关上用同一段前缀做对照：带 `tools` 的首次请求 `cached_tokens=0`；随后**不带 `tools`** 的复核形态请求 `cached_tokens=640`；重复带 `tools` 的请求 `cached_tokens=2816`；重复复核形态 `cached_tokens=1408`。说明 `tools` 字段不影响消息前缀的缓存复用 |
+| G6 | 「顶层会话」的判别式必须是 `origin !== 'subagent'`，不能用「没有 `parentSession`」 | 探针造一个会话（写一次完整 turn）再 `Sessions.fork`：fork 出来的头部为 `parentSession=<源会话 id>`、`origin=undefined`、`delegationDepth=undefined`、`isSeeded=true`；两个判别式分别给出 false 与 true。子会话侧（`origin: 'subagent'` ＋ `delegationDepth`）为源码核对，未跑探针 |
+| G7 | 步数可由插件自注册的 session projection 折叠得到，不需要读历史日志 | 探针在事件**全部写完之后**才注册投影：`checkpoint()` 给出 `seq: 10`、`counted: 1`，与口径一致——它看到 `assistant/message` 2 条（其中 1 条带 `interrupted`）、`assistant/attempt` 1 条，只有不带 `interrupted` 的那条被计数。恢复时的重折叠走框架的 restore/checkpoint 路径（源码），未跑持久化探针 |
 
 ### 仍未验证
 
@@ -135,7 +137,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 使用 `agent/pre-step`（`packages/core/agent/src/runtime-types.ts:320`）在下一次模型请求被接受前执行等待模式复核。该 hook 会被 `await`，返回 `{ kind: 'enter', messages }` 可追加 user 消息，返回 `{ kind: 'reject' }` 可拒绝该步。
 
 - 上下文快照：`session.deriveMessages()`（`packages/core/session/src/index.ts:841`），system prompt 为 surface 节点 0。system 消息在该步的 `step/start` 与路由解析之后、模型请求之前提交（`agent.ts:371-373`），而最早一次复核发生在第 `triggerEverySteps + 1` 步的 pre-step，那时它已经存在——不存在「快照里没有 system 消息」的触发点。
-- 记录的标识用消息 id，**不用事件序号**：`Message` 自带稳定 `id`（`packages/llm/llm/src/message.ts:133`），而快照就是 `deriveMessages()` 的返回值，所以取 id 不需要任何额外读取。反过来，要把快照的消息与 `session.surface.nodes`（`packages/core/session/src/surface.ts:624`）的事件序号对齐，就得按序号把事件取出来（`eventAt`），而该方法已标 `@deprecated`「new calls are prohibited」（`packages/core/session/src/index.ts:632`；Agent Note `2026-09-09-deprecate-synchronous-session-event-reads.md` 禁止新代码调用三个同步历史读取器，例外只覆盖 DSH 自己的测试文件，替代方向是投影状态 + 异步分页）。代价：压缩会用替换型消息改写投影，旧 id 因此定位不到——回放按「定位得到的逐条一致、定位不到的按缺失报告」验收。
+- 记录的标识用消息 id，**不用事件序号**：`Message` 自带稳定 `id`（`packages/llm/llm/src/message.ts:133`），而快照就是 `deriveMessages()` 的返回值，所以取 id 不需要任何额外读取。反过来，要把快照的消息与 `session.surface.nodes`（`packages/core/session/src/surface.ts:624`）的事件序号对齐，就得按序号把事件取出来（`eventAt`），而该方法已标 `@deprecated`「new calls are prohibited」（`packages/core/session/src/index.ts:632`；Agent Note `2026-09-09-deprecate-synchronous-session-event-reads.md` 禁止新代码调用三个同步历史读取器，例外只覆盖 DSH 自己的测试文件，替代方向是投影状态 + 异步分页）。代价有两层：压缩会用替换型消息改写投影，旧 id 因此定位不到；而保留 id、只改写内容的投影（如 `image/offload`，其 `project()` 返回同一个 `id`、只换掉 blocks）会让「定位得到」不等于「内容相同」。所以回放验收只看命中的 id 与顺序，定位不到的 id 单独输出成第二个列表。
 - 辅助请求：`ctx.llm.stream(GenerateOptions)` + `BlockAssembler`；路由取自 `session.requestHeader()?.config`；超时用 `deadline(signal, ms, code)`（`packages/util/timeout/src/index.ts:91-113`）。
 - 建议投递：等待模式走 pre-step 决策；并行模式走 `agent.inject()`。
 - 停止与说明：`session.append('user/message', notice, { surfaceOp: 'append' })` + `agent.cancel({ kind: 'hook', reason })`。
