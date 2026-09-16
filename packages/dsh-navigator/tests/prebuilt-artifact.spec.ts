@@ -18,7 +18,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { auditStartupEntries, mountRootInclude } from '@deepseek-ai/dsh-app-boot'
-import { ACTIVE, PENDING, disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
+import { ACTIVE, PENDING } from './support/fiber-state.ts'
+import { disposeTrackedContexts, trackContext } from './support/mounted-contexts.ts'
+import type { apply as applyStubServices } from './support/stub-services.mjs'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 /** 服务桩走**绝对路径**条目：它不是包，只有本仓那一份，两套夹具共用 `tests/support/stub-services.mjs`。 */
@@ -29,14 +31,14 @@ const builtEntry = join(packageDir, 'lib/index.js')
 /** 审计的诊断前缀；warning 走注入的收集器，不去 stderr 上捞。 */
 const BIN_NAME = 'dsh-navigator-profile-fixture'
 
-/**
- * 一条 loader 条目里夹具关心的形状。`config` 按桩的唯一一项配置写窄——夹具只给桩传配置，写窄才能
- * 让 tsc 守住这处握手（loader 自己的 `EntryOptions.config` 是 any）。
- */
+/** 桩声明的条目配置形状；从桩的 `apply` 签名取，两处不再各写一份。 */
+type StubConfig = NonNullable<Parameters<typeof applyStubServices>[1]>
+
+/** 一条 loader 条目里夹具关心的形状。`config` 取桩声明的形状，夹具侧写错键时编译期就报错。 */
 interface ProfileEntry {
   id: string
   name: string
-  config?: { omit?: readonly string[] }
+  config?: StubConfig
 }
 
 /** 被测插件条目：`id` 是 `EntryOptions.id`，`name` 是随包发布的包名。 */
@@ -192,10 +194,10 @@ describe('真实 Loader 组合从安装副本装载', () => {
   })
 
   it('对照条目 import 失败，证明裸名解析基点落在临时 profile', async () => {
-    // 只断到对照条目的模块说明符：同组合减去它就能激活（见上一条用例），所以抛错本身即 import 失败；
-    // 不绑 app-boot/loader 的包装文案。
+    // 断的是**原因**（Node 自己的找不到包），不是 app-boot/loader 的包装文案：同组合减去该条目就能
+    // 激活（见上一条用例），所以这里必须是一次 import 失败，而不是任何带该包名的报错。
     await expect(mountComposition('control.yml', [fullStubs, controlEntry, navigatorEntry]))
-      .rejects.toThrow('@deepseek-ai/dsh-agent-loop')
+      .rejects.toThrow("Cannot find package '@deepseek-ai/dsh-agent-loop'")
   })
 
   it('只缺 sessionProjections 时启动不失败，审计以 warning 报出本条目停在 PENDING', async () => {

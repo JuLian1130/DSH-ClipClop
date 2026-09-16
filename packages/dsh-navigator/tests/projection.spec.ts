@@ -7,7 +7,7 @@ import {
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection, type NavigatorStepsState } from '../src/projection.ts'
 import { ScriptedAdapter, navigatorMessage, userMessage, type ScriptedResponse } from './support/scripted-adapter.ts'
-import { disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
+import { disposeTrackedContexts, trackContext } from './support/mounted-contexts.ts'
 
 /** 每个用例一个独立 context：投影注册是全局的，串用会让计数互相干扰。 */
 afterEach(disposeTrackedContexts)

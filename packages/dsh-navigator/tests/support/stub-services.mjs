@@ -32,7 +32,6 @@ export function createStubServices(omit = []) {
   return { services, registered }
 }
 
-/** Cordis 插件名。 */
 export const name = 'navigator-stub-services'
 
 /**

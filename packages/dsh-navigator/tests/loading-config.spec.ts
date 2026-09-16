@@ -4,7 +4,8 @@ import { Context, ValidationError } from '@deepseek-ai/cordis'
 import { parse } from 'yaml'
 import * as navigator from '../src/index.ts'
 import type { Config as NavigatorConfig, NavigatorMode } from '../src/index.ts'
-import { ACTIVE, FAILED, PENDING, disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
+import { ACTIVE, FAILED, PENDING } from './support/fiber-state.ts'
+import { disposeTrackedContexts, trackContext } from './support/mounted-contexts.ts'
 import { createStubServices } from './support/stub-services.mjs'
 
 /**
