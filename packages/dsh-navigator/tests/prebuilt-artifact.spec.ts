@@ -188,8 +188,9 @@ describe('真实 Loader 组合从安装副本装载', () => {
 
     expect(loaderEntry(ctx, 'dsh-navigator').fiber?.state).toBe(ACTIVE)
     // 桩记录的是 `register` 的 key；这里取到的是桩对象而不是真注册表，按桩的形状读它的记录。
+    // 按集合相等断言，与 02 的同观测断言（loading-config.spec.ts）同款：多出别的注册即接线不对。
     const projections = ctx.get('sessionProjections') as unknown as { registered: string[] }
-    expect(projections.registered).toContain('navigatorSteps')
+    expect(projections.registered).toEqual(['navigatorSteps'])
     expect(warnings).toEqual([])
   })
 
