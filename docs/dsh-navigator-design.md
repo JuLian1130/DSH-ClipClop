@@ -29,7 +29,7 @@
 
 ### 触发节奏
 
-运行期间触发点始终是「上次触发点 + `triggerEverySteps`」，到点时若已有复核在跑就跳过：不重置节奏、不顺延、也不补打。慢复核因此不会无限推迟后续复核。
+在同一个自主执行区间内，触发点始终是「上次触发点 + `triggerEverySteps`」，到点时若已有复核在跑就跳过：不重置节奏、不顺延、也不补打。慢复核因此不会无限推迟后续复核。
 
 **重新观察一个会话时（插件刚加载、或会话被重新打开）不能沿用内存里的「上次触发点」**，必须重新推导——否则真实用户消息带来的重置会在重载后丢失。这是一个真实缺口：第 50 步触发过、第 70 步用户发了消息（下一次应为 120），第 80 步插件重载时若只按「最后一条复核记录」取基线，会得到 50，下一次变成 100，重置被丢掉。
 
@@ -44,7 +44,7 @@
 
 第三个候选是为了「不立刻补打」：重载时当前步数可能正好落在间隔的整数倍上，只用前两项会算出一个已经过去的触发点。代价是重载会把节奏重新锚定到当前间隔的整数倍，可能比原节奏晚一次——比丢掉重置或立刻补打都小。
 
-不能在插件加载时就算：插件是全局加载一次的，主会话通常在它之后才出现，所以每次重新观察一个会话时算一次。真实用户消息开启新的自主执行区间，运行期间把下一次触发点重置为「这条消息记入会话日志时的已完成步数 + `triggerEverySteps`」——例如第 50 步触发过、第 70 步用户发了消息，下一次是第 120 步。**不要取插件注意到消息那一刻的计数**：`agent/inbox/inserted` 在 splice 时就发出（`packages/core/agent-loop/src/inbox.ts:238-243`），而这条消息作为 `user/message` 由某一步打开时的提交写出（`packages/core/agent-loop/src/agent.ts:376`），中间可能夹着一次步骤完成（本步的 `assistant/message` 要到 `:476` 才提交）——按 splice 时刻计数会比落盘时少一步，于是重载后从日志重新推导会算出不同的触发点。另有一层：本步的 pre-step 若返回 `reject`，`agent.ts:291-293` 直接返回，提交循环永不执行，这条消息**根本不会落盘**，splice 时刻记下的锚点在日志里就没有对应物。监听该事件的目的只是及时判定「等待期间的复核要作废」，与锚点取值是两件事。
+不能在插件加载时就算：插件是全局加载一次的，主会话通常在它之后才出现，所以每次重新观察一个会话时算一次。真实用户消息开启新的自主执行区间，运行期间把下一次触发点重置为「这条消息记入会话日志时的已完成步数 + `triggerEverySteps`」——例如第 50 步触发过、第 70 步用户发了消息，下一次是第 120 步。**不要取插件注意到消息那一刻的计数**：`agent/inbox/inserted` 在 splice 时就发出（`packages/core/agent-loop/src/inbox.ts:238-243`），而这条消息作为 `user/message` 由某一步打开时的提交写出（`packages/core/agent-loop/src/agent.ts:376`），中间可能夹着一次步骤完成（本步的 `assistant/message` 要到 `:476` 才提交）——按 splice 时刻计数会比落盘时少至少一步（`steer` 差一步；`followup` 进下一轮，其间可完成多步），于是重载后从日志重新推导会算出不同的触发点。另有一层：本步的 pre-step 若返回 `reject`，`agent.ts:291-293` 直接返回，提交循环永不执行，这条消息**根本不会落盘**，splice 时刻记下的锚点在日志里就没有对应物。监听该事件的目的只是及时判定「等待期间的复核要作废」，与锚点取值是两件事。
 
 ### 真实用户消息的判别
 
@@ -83,11 +83,11 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 ### 注入与停止机制
 
-- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。**过期的判据**：插件为每个主会话维护一个执行区间编号，每收到一条真实用户消息加一；建议与说明携带产生时的编号，送达时编号不同即视为过期。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），正文写明触发步骤与停止原因。
+- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「它来自上一段执行、可能已不适用」，由模型和用户自行判断。**过期的判据**（只对并行建议）：插件为每个主会话维护一个执行区间编号，每收到一条真实用户消息加一；建议携带产生时的编号，送达时编号不同即视为过期。等待模式的说明没有这个窗口——等待期间出现真实用户消息时本次复核直接作废，说明不会迟到。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），正文写明触发步骤与停止原因。
 - 等待模式在触发点的 `agent/pre-step` 里把建议追加进返回的 `decision.messages`。
 - 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递。**任务正常结束时因此不会丢**，跨执行区间送达时靠过期标注说明。但 `cancel` 默认清空待处理队列（`packages/core/agent-loop/src/agent.ts:149-155`），而取消的调用方（用户按停止、API 层、进程退出）不由插件控制，所以**任务被取消时这条建议随之丢失**——这是规格里明确接受的例外；要兑现「取消也不丢」就得插件自己持久化待投递的建议并在下次唤醒时重投，代价不划算。
 - **停止**分两步：先用 `session.append('user/message', notice, { surfaceOp: 'append' })` 追加一条面向用户的说明，再调 `agent.cancel({ kind: 'hook', reason })`。注意 `surfaceOp` 是字符串 `'append'`，写成 `{ op: 'append' }` 会在 append 时直接抛错（`packages/core/session/src/surface.ts:269-305`）。
-- **应用任何结论前，先检查本步被 claim 的消息。** 探针实测：在 `agent/pre-step` 阶段停止（`cancel` 和 `reject` 都一样），本步被 claim 的消息**不会**写入会话历史——claim 已经把消息取走，而 step 从未打开。如果用户消息正好落在这一批里，它会被静默丢弃。因此只要 claimed 批次里存在真实用户消息（`source.kind === 'user'`），本次复核即视为失效：不注入、不停止，让该步正常继续。这同时落实了规格里「等待复核期间的真实用户消息让复核作废」与「任务取消时取消在途复核」两条。
+- **应用任何结论前，先检查本步被 claim 的消息。** 探针实测：在 `agent/pre-step` 阶段停止（`cancel` 和 `reject` 都一样），本步被 claim 的消息**不会**写入会话历史——claim 已经把消息取走，而 step 从未打开。如果用户消息正好落在这一批里，它会被静默丢弃。因此只要 claimed 批次里存在真实用户消息（`source.kind === 'user'`），本次复核即视为失效：不注入、不停止，让该步正常继续。这落实了规格里「等待复核期间的真实用户消息让复核作废」这条。**任务取消走的是另一条路径**：取消会先清空整个待处理队列再 abort（`agent.ts:149-155`），不产生新的 claim，所以这条检查看不到它——插件必须从 pre-step payload 的 `signal` 察觉（`agent.ts:244` 取 `phase.abort.signal`，`:251` 传进 payload），据此写一条状态为「取消」的记录。
 - **等待复核期间到达的真实用户消息走的是另一条路径，必须单独处理。** 用户消息经 `followup` 进入「下一轮」（`packages/core/agent-loop/src/agent.ts:137-139`）或经 `steer` 进入「下一步」（`agent.ts:141-143`），两条路径都不在本步被 claim 的那一批里，所以上面那条检查看不到它们；而 `cancel` 默认清空整个待处理队列（`agent.ts:149-155`），一旦在此时停止，用户刚发的话就没了。因此等待期间要监听 `agent/inbox/inserted`（两条路径都覆盖），出现 `source.kind === 'user'` 的消息就中止复核、不作任何干预。
 - 因此**不需要客户端插件**：`aborted` 在客户端本来就没有专属渲染节点，而追加的 notice 消息会以可回放的折叠行呈现（`packages/client/ui-chat/src/client/conversation-nodes/message.ts:47-64`、`packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx:31-71`）。代价是说明文本进入主模型上下文，规格里记录与上下文的边界已按此调整。
 - ACP 侧不做任何修改：DSH 的 `turnEndToStopReason` 会把非客户端取消压平成 `end_turn`（`packages/acp/acp/src/codec.ts:14-33`）；而且 ACP 只转发助手消息与工具调用/结果，不转发 `user/message`（`packages/acp/acp/src/updates.ts`），所以那条追加的说明对 ACP 客户端不可见。这与首版「ACP 只返回普通结束状态、不要求显示详细原因」的边界一致。
@@ -134,7 +134,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 使用 `agent/pre-step`（`packages/core/agent/src/runtime-types.ts:320`）在下一次模型请求被接受前执行等待模式复核。该 hook 会被 `await`，返回 `{ kind: 'enter', messages }` 可追加 user 消息，返回 `{ kind: 'reject' }` 可拒绝该步。
 
-- 上下文快照：`session.deriveMessages()`（`packages/core/session/src/index.ts:841`），system prompt 为 surface 节点 0。注意 snapshot 在会话的第一步触发时尚无 system 消息（system 是在 `step/start` 与路由解析之后才提交的，见 `docs/architecture.md` 的 agent loop 一节）；默认 50 步间隔下不会碰到，只有把间隔配成 1 才会。
+- 上下文快照：`session.deriveMessages()`（`packages/core/session/src/index.ts:841`），system prompt 为 surface 节点 0。system 消息在该步的 `step/start` 与路由解析之后、模型请求之前提交（`agent.ts:371-373`），而最早一次复核发生在第 `triggerEverySteps + 1` 步的 pre-step，那时它已经存在——不存在「快照里没有 system 消息」的触发点。
 - 消息序号：`Message` 本身不带序号。序号来自 `session.surface.nodes`（`packages/core/session/src/surface.ts:624`），配合 `eventAt(seq)` 与 `deriveEventMessage(event)`（`surface.ts:612-621`，可以为 `null`）成对取出并跳过 `null` 节点。**不能**把 `deriveMessages()` 的下标与 `surface.nodes` 直接对齐——两者长度不保证一致。
 - 辅助请求：`ctx.llm.stream(GenerateOptions)` + `BlockAssembler`；路由取自 `session.requestHeader()?.config`；超时用 `deadline(signal, ms, code)`（`packages/util/timeout/src/index.ts:91-113`）。
 - 建议投递：等待模式走 pre-step 决策；并行模式走 `agent.inject()`。
