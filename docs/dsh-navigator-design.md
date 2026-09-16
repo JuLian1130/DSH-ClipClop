@@ -37,14 +37,14 @@
 
 ```
 下一次触发点 = max(最后一条复核记录里的触发步骤,
-                   最后一条真实用户消息所在的步数,
+                   最后一条真实用户消息被观察到时的步数,
                    floor(当前步数 / triggerEverySteps) × triggerEverySteps)
              + triggerEverySteps
 ```
 
 第三个候选是为了「不立刻补打」：重载时当前步数可能正好落在间隔的整数倍上，只用前两项会算出一个已经过去的触发点。代价是重载会把节奏重新锚定到当前间隔的整数倍，可能比原节奏晚一次——比丢掉重置或立刻补打都小。
 
-不能在插件加载时就算：插件是全局加载一次的，主会话通常在它之后才出现，所以每次重新观察一个会话时算一次。真实用户消息开启新的自主执行区间，运行期间把下一次触发点重置为「处理这条消息时的步数 + `triggerEverySteps`」——例如第 50 步触发过、第 70 步用户发了消息，下一次是第 120 步。
+不能在插件加载时就算：插件是全局加载一次的，主会话通常在它之后才出现，所以每次重新观察一个会话时算一次。真实用户消息开启新的自主执行区间，运行期间把下一次触发点重置为「观察到这条消息时的已完成步数 + `triggerEverySteps`」——例如第 50 步触发过、第 70 步用户发了消息，下一次是第 120 步。观察点是 `agent/inbox/inserted`，它在 splice 时发出，早于这条消息被取走，所以这里**不取**「消息写进会话日志时的步数」——两个时点之间可能夹着一次步骤完成，取错会差一步。
 
 ### 真实用户消息的判别
 
@@ -54,7 +54,7 @@
 
 ### 辅助请求的消息构成
 
-- 消息序列 = `session.deriveMessages()` **原样**（`packages/core/session/src/index.ts:841`）**加末尾一条 user 消息**；**不设 `system` 字段**、**不传 `tools`**。主会话的消息一个字节都不改，整段对话因此成为真前缀（缓存问题见 G5）。
+- 消息序列 = `session.deriveMessages()` **原样**（`packages/core/session/src/index.ts:841`）**加末尾一条 user 消息**；**不设 `system` 字段**、**不传 `tools`**。主会话的消息一个字节都不改，整段对话因此成为真前缀（缓存问题见 G5）。快照在触发点冻结：并行模式若推迟到发送请求时才取，会看到触发点之后的新步骤。
 - 末尾那条 user 消息 = **可替换的复核提示词在前、固定的复核角色与输出契约在后**。插件内置默认提示词，YAML 配置 `prompt` 即替换前半段；后半段固定，用户改不掉。
 - 选这个形态而不是「自带 system 指令 + 把历史压平成 JSON」的理由：它是 DSH `compaction-basic` 在生产里使用的形态（注释在 `packages/compaction/compaction-basic/src/summarizer.ts:24-29`，明写「把对话自己的 system prompt、tools 与消息前缀留在前面，使辅助调用成为上次请求的真前缀，从而复用 KV 缓存」；构造在 `:144-150`），保真度最高（tool call/result 配对不被压平），也不需要搬运主会话的 system prompt。
 - 已知风险：复核会先读到主会话自己的 system 指令，可能误以为自己是主 agent 而继续任务。缓解是末尾固定指令显式声明复核者角色 + 严格结构化校验——最坏情况是一次复核失败（按规格的失败表，默认让主会话继续），不会损坏会话。
@@ -83,7 +83,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 ### 注入与停止机制
 
-- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。**过期的判据**：插件为每个主会话维护一个执行区间编号，每收到一条真实用户消息加一；建议与说明携带产生时的编号，送达时编号不同即视为过期。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），只是正文换成停止原因。
+- **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「该建议依据第 N 步、产生于上一段自主执行区间，可能已不适用」，由模型和用户自行判断。**过期的判据**：插件为每个主会话维护一个执行区间编号，每收到一条真实用户消息加一；建议与说明携带产生时的编号，送达时编号不同即视为过期。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），正文写明触发步骤与停止原因。
 - 等待模式在触发点的 `agent/pre-step` 里把建议追加进返回的 `decision.messages`。
 - 并行模式用 `agent.inject(msg)` 排入下一次 pre-step，不唤醒主会话、不打断当前步骤。排入的消息留在 durable inbox：主会话仍在运行时在最近的 step 边界被 claim，已经 idle 时保留到下一次 followup/steer 唤醒才投递。**任务正常结束时因此不会丢**，跨执行区间送达时靠过期标注说明。但 `cancel` 默认清空待处理队列（`packages/core/agent-loop/src/agent.ts:149-155`），而取消的调用方（用户按停止、API 层、进程退出）不由插件控制，所以**任务被取消时这条建议随之丢失**——这是规格里明确接受的例外；要兑现「取消也不丢」就得插件自己持久化待投递的建议并在下次唤醒时重投，代价不划算。
 - **停止**分两步：先用 `session.append('user/message', notice, { surfaceOp: 'append' })` 追加一条面向用户的说明，再调 `agent.cancel({ kind: 'hook', reason })`。注意 `surfaceOp` 是字符串 `'append'`，写成 `{ op: 'append' }` 会在 append 时直接抛错（`packages/core/session/src/surface.ts:269-305`）。
