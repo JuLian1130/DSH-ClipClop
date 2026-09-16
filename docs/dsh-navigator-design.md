@@ -112,9 +112,24 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 第一版只承诺「本地 profile 内 `node_modules` 链接 + 预构建产物」：Desktop 的插件安装 UI 只接受 npm registry 包且以 `--ignore-scripts` 安装（`apps/desktop/src/project-manager.ts:387-391` 的 `pnpm add <spec> --ignore-scripts`），不发 prepare，因此必须提供构建产物；registry 发布留到契约稳定之后。
 
+### 预构建产物的装载与启动审计
+
+产物验收（02b）不经过真实 bin，也不用 DSH 仓内那套 profile 夹具——它是仓内测试夹具、不随包发布。夹具用发布态 `@deepseek-ai/dsh-app-boot` 的公开符号在本仓库自行装树，再调它的审计。以下各条按发布态 `0.1.6-alpha.1` 的**源码核对**得出，探针实测与源码依据的分界见「验证状态」。
+
+- **装载入口**：`mountRootInclude(ctx, absoluteConfigPath, patches?, bareModuleBaseUrl?)` 挂根 include 并注册 `cordis:include`/`cordis:group` 内建；`boot` 是同一条路径的封装（`ctx.plugin(Loader)` → `mountRootInclude` → 等 Loader 结算 → `auditStartupEntries`），并额外把 `ctx.baseUrl` 设为配置目录。`boot` 固定用默认 `warn`（写 stderr）、注入不了收集器，所以夹具自己调 `mountRootInclude`，再调 `auditStartupEntries(ctx, binName, warn?)`。
+- **审计策略**：`auditStartupEntries` 只把**非必需条目**的失败交给 `warn`，必需条目与 bootstrap include 的失败直接抛；`warn` 在 `throw` **之前**调用。必需 id 是一小组固定值（`requiredStartupEntryIds`：`agent-loop`、`webserver`、`modules`、`connection`、`headless-runner`、`acp`、`sdk-jsonrpc-server`），本插件不在其中；停在 PENDING 的条目按 `pending (waiting for service(s): …)` 报出，单复数由缺失项个数决定。`inactiveEntries`、`activationDiagnostic` 是内部函数，不依赖。
+- **`loadProfile` 一族不装树**：`loadProfile`、`loadProfileDirectory`、`PluginPackages`、`healProfilesModuleFallback` 虽公开导出，但不挂载、不返回 ctx，拿不到条目与 `fiber.state`。
+- **裸包名的解析基点**：条目模块的 import 有两层。根 include 是 `Include extends EntryTree` 的实例；传了 `bareModuleBaseUrl` 时 `mountRootInclude` 把 `cordis:include` 内建换成裸名走 `internal.import(name, bareModuleBaseUrl, {})` 的子类，没传就退回 `EntryTree.import`——后者用 `ctx.baseUrl`（`mountRootInclude` 不设它），或直接 `import(name)`（以 loader 包自身的位置为基点）。嵌套 `cordis:group` 复用同一棵树，不改变基点。
+- **`internal` 的来源**：`Loader.internal` 由 `cordis-plugin-loader` 用 `createRequire(import.meta.url)` 从**它自己的位置**解析 `node-addon-require-builtin` 得到，而后者是该 loader 的**可选 peer**（`auto-install-peers` 不装可选 peer）；`@deepseek-ai/dsh-app-boot` 的 `dependencies` 只是把它带进 store，能否解析到取决于 pnpm 的 `hoistPattern`。
+- **从工作副本装载会假绿**：`internal` 缺失时基点参数被忽略，裸名退回 `import(name)`，而 pnpm 把 workspace 包提升进 `.pnpm/node_modules`（`@dsh-clipclop/dsh-navigator` → `packages/dsh-navigator`），于是加载工作副本同样进入 ACTIVE。所以「装载的是安装副本」必须由构造与断言共同保证：先断 `ctx.loader.internal !== undefined`，再用一条裸名只存在于本仓 store、临时 profile 里没有的对照条目正面证明基点——对照条目若能 import 成功，就说明基点落到了本仓 store。
+- **不用真实 bin**：`@deepseek-ai/dsh` 的 `dsh` 入口与 `@deepseek-ai/dsh-loader-smoke` 的 `runLoaderSmoke` 只能给出「审计输出里没有该条目」这类否定式判据——漏挂、包名写错、被静默忽略时同样为真，证明不了条目真的激活。
+- **接线怎么观察**：`SessionProjectionRegistry` 的公开读法只有 `stateOf(session, key)`、`snapshot(session, keys?)`、`cachedSnapshot(session, …)`、`checkpoint(session)` 等，全都要真实 `Session`；注册表字段是 private，没有「列出已注册单元」的读法。产物验收没有 Session（到 03 才有），所以「真的完成接线」用桩 `sessionProjections` 记录 `register` 的 `key` 来观察——注册成功即 `apply` 跑到了最后一步。（这是对规格「只验证外部行为、不断言函数调用次数」的有意例外：`register` 是插件对宿主服务的对外契约，不是内部计数器。）
+- **服务缺失的正向观测为什么必须用最小 composition**：本插件的三个注入服务同时是必需条目 `agent-loop` 的注入集（`packages/bundle/base/cordis.patch.yml` 声明 `id: agent-loop`，`packages/core/agent-loop/src/index.ts` 的 `inject` 含 `llm`、`sessions`、`sessionProjections`）。在含它的组合里抽掉任一注入服务，`agent-loop` 会先停 PENDING 并被归入必需条目：审计先把可选条目（含本插件）warning 出去，随后直接抛错——「启动不失败」变红，那条 warning 也落在一次注定失败的审计里，不能当正向读数。
+- **Cordis 的同一性**：夹具的桩与本仓库的 `@deepseek-ai/cordis` 同源；从临时 profile 按包名装载时两侧必须解析到同一份 cordis，否则桩 `provide` 的服务对插件不可见。本包产物的运行时 import 只有 `zod` 与 `schemastery`（cordis 与各服务包都是 type-only），所以这条是环境前提，不是判据。
+
 ## 验证状态
 
-一次性探针在 DSH `0.1.6-alpha.1` 上实测通过的项目，以及仍未验证的项目。
+一次性探针在 DSH `0.1.6-alpha.1` 上实测通过的项目、仍未验证的项目，以及只有源码核对的项目。
 
 ### 已实测通过
 
@@ -137,6 +152,12 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 | # | 待验证 | 验证方法 | 失败退路 |
 | --- | --- | --- | --- |
 | G3 | Desktop 本地联调路径（bundle 必须解析到 profile 内，且安装时不发 prepare） | 在 Desktop 上链接预构建产物实测一次 | 联调范围收窄到 CLI / Web / SDK |
+
+### 仅源码核对（无探针）
+
+- 「预构建产物的装载与启动审计」一节各条：装载入口与审计策略、`loadProfile` 一族不装树、裸名基点与 `internal` 的来源、从工作副本装载会假绿、真实 bin 的判据缺陷。依据是发布态 `0.1.6-alpha.1` 的源码与产物，没有探针。
+- G6 的子会话侧、G7 的恢复重折叠（同上表备注）。
+- 用到这些结论的验收（02b）把「拿不到 `Loader.internal`」和「基点落到了本仓 store」变成夹具的硬失败前置，不把源码结论当运行时保证。
 
 ## 技术路线
 
