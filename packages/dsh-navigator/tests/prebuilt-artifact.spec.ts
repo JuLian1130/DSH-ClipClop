@@ -1,10 +1,9 @@
 /**
  * 预构建产物与真实 profile 装载（票据 02b）。
  *
- * 夹具分两段：① 按 Desktop 同款安装期口径造出**安装副本**——`pnpm pack` 出 tarball，再按
- * `--ignore-scripts` 装进临时 profile；② 用发布态 `@deepseek-ai/dsh-app-boot` 的公开装载设施在仓内挂
- * 一个真实 Loader 组合，从安装副本按包名装载。判据见票据，机制与取舍见设计文档
- * `预构建产物的装载与启动审计`。
+ * 夹具按安装期口径装配**安装副本**：`pnpm pack` 出 tarball → `--ignore-scripts` 装进临时 profile；
+ * 再用发布态 `@deepseek-ai/dsh-app-boot` 从副本按包名挂一个真实 Loader 组合。判据见票据，机制与取舍
+ * 见设计文档 `预构建产物的装载与启动审计`。
  *
  * `lib/` 由门禁的构建步（`tsc -p tsconfig.json`）产出并命中 `.gitignore`：夹具**不自己构建**，缺
  * `lib/index.js` 时硬失败，避免在干净检出上验到过期或缺失的产物。
@@ -30,11 +29,14 @@ const builtEntry = join(packageDir, 'lib/index.js')
 /** 审计的诊断前缀；warning 走注入的收集器，不去 stderr 上捞。 */
 const BIN_NAME = 'dsh-navigator-profile-fixture'
 
-/** 一条 loader 条目里夹具关心的形状：模块说明符与传给插件的配置。 */
+/**
+ * 一条 loader 条目里夹具关心的形状。`config` 按桩的唯一一项配置写窄——夹具只给桩传配置，写窄才能
+ * 让 tsc 守住这处握手（loader 自己的 `EntryOptions.config` 是 any）。
+ */
 interface ProfileEntry {
   id: string
   name: string
-  config?: Record<string, unknown>
+  config?: { services?: string[] }
 }
 
 /** 被测插件条目：`id` 是 `EntryOptions.id`，`name` 是随包发布的包名。 */
@@ -48,8 +50,9 @@ const minimalStubs: ProfileEntry = {
   config: { services: ['llm', 'sessions'] },
 }
 /**
- * 对照条目：它的裸名只存在于本仓 store，临时 profile 里没有——本包把它当 devDependency 而不是
- * peer，profile 不会装它。它 import 失败会让根 include 整组回滚，所以**不进正反两份 composition**。
+ * 对照条目：裸名只存在于本仓 store（本包的 devDependency，不在 peer 清单，临时 profile 不会装它），
+ * 基点错到本仓 store 时它会 import 成功。它只进下面那条对照用例，**不进正反两份 composition**
+ * ——原因见票据第 2 条。
  */
 const controlEntry: ProfileEntry = { id: 'control', name: '@deepseek-ai/dsh-agent-loop' }
 
@@ -127,8 +130,8 @@ beforeAll(() => {
  *
  * 每个用例一份独立配置：composition 不同，夹具配置就不同。
  *
- * 基点前置①：`internal` 缺失时基点参数会被忽略、裸名回落到以 loader 包自身位置为基点，于是加载本仓
- * 工作副本也会 ACTIVE（假绿；机制见设计文档 `预构建产物的装载与启动审计`），所以挂载前硬断它可用。
+ * 基点前置①：挂载前硬断 `ctx.loader.internal` 可用——拿不到时基点参数被忽略、裸名落到本仓 store，
+ * 从工作副本装载同样 ACTIVE（假绿；机制见设计文档 `预构建产物的装载与启动审计`）。
  * @param configName - 临时 profile 下的配置文件名。
  * @param insert - 本组合的条目表，顺序即 activation 顺序。
  * @returns 根 context 与本次审计收集到的 warning。
@@ -186,8 +189,10 @@ describe('真实 Loader 组合从安装副本装载', () => {
   })
 
   it('对照条目 import 失败，证明裸名解析基点落在临时 profile', async () => {
+    // 只断到对照条目的模块说明符：同组合减去它就能激活（见上一条用例），所以抛错本身即 import 失败；
+    // 不绑 app-boot/loader 的包装文案。
     await expect(mountComposition('control.yml', [fullStubs, controlEntry, navigatorEntry]))
-      .rejects.toThrow('failed to import loader entry control (@deepseek-ai/dsh-agent-loop)')
+      .rejects.toThrow('@deepseek-ai/dsh-agent-loop')
   })
 
   it('只缺 sessionProjections 时启动不失败，审计以 warning 报出本条目停在 PENDING', async () => {
