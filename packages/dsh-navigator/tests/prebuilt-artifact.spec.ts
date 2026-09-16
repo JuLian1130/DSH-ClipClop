@@ -21,8 +21,8 @@ import { auditStartupEntries, mountRootInclude } from '@deepseek-ai/dsh-app-boot
 import { ACTIVE, PENDING, disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
-/** 服务桩走**绝对路径**条目：它不属于任何包，只有本仓那一份。 */
-const stubModulePath = fileURLToPath(new URL('./support/profile-stub-services.mjs', import.meta.url))
+/** 服务桩走**绝对路径**条目：它不是包，只有本仓那一份，两套夹具共用 `tests/support/stub-services.mjs`。 */
+const stubModulePath = fileURLToPath(new URL('./support/stub-services.mjs', import.meta.url))
 /** 产物验收与装载断言的前置：构建在门禁里，不在夹具里。 */
 const builtEntry = join(packageDir, 'lib/index.js')
 
@@ -36,18 +36,21 @@ const BIN_NAME = 'dsh-navigator-profile-fixture'
 interface ProfileEntry {
   id: string
   name: string
-  config?: { services?: string[] }
+  config?: { omit?: readonly string[] }
 }
 
 /** 被测插件条目：`id` 是 `EntryOptions.id`，`name` 是随包发布的包名。 */
 const navigatorEntry: ProfileEntry = { id: 'dsh-navigator', name: '@dsh-clipclop/dsh-navigator' }
-/** 服务齐备的桩：三个注入服务都给。 */
+/** 服务齐备的桩：不带配置，桩给全。 */
 const fullStubs: ProfileEntry = { id: 'stubs', name: stubModulePath }
-/** 最小 composition 的桩：只给 `llm` 与 `sessions`，特意缺 `sessionProjections`。 */
+/**
+ * 最小 composition 的桩：除 `sessionProjections` 外全给。按**排除**写而不是列举要给的——04 给 `inject`
+ * 追加服务后这里不必回来补名单，「只缺一个服务」的隔离意图照样成立。
+ */
 const minimalStubs: ProfileEntry = {
   id: 'stubs',
   name: stubModulePath,
-  config: { services: ['llm', 'sessions'] },
+  config: { omit: ['sessionProjections'] },
 }
 /**
  * 对照条目：裸名只存在于本仓 store（本包的 devDependency，不在 peer 清单，临时 profile 不会装它），

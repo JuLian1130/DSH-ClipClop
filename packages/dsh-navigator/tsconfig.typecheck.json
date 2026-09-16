@@ -3,7 +3,9 @@
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    // 两套夹具共用的桩是 .mjs（要能被 Node 内部 ESM loader 直接 import），TS 侧也要 import 它。
+    "allowJs": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]
 }

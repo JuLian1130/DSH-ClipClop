@@ -5,6 +5,7 @@ import { parse } from 'yaml'
 import * as navigator from '../src/index.ts'
 import type { Config as NavigatorConfig, NavigatorMode } from '../src/index.ts'
 import { ACTIVE, FAILED, PENDING, disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
+import { createStubServices } from './support/stub-services.mjs'
 
 /**
  * 装载与配置契约（票据 02）。
@@ -16,25 +17,6 @@ import { ACTIVE, FAILED, PENDING, disposeTrackedContexts, trackContext } from '.
 
 /** 每个用例一个独立 context；桩是全局的，串用会互相干扰。 */
 afterEach(disposeTrackedContexts)
-
-/**
- * 三个注入服务的桩。`sessionProjections.register` 按真实签名返回释放回调，并记下注册单元的 key。
- * @returns 服务值（用例可覆写或删除其中一项）与投影注册记录。
- */
-function stubServices(): { readonly services: Record<string, unknown>, readonly registered: string[] } {
-  const registered: string[] = []
-  const services: Record<string, unknown> = {
-    llm: { stream: () => {} },
-    sessions: { get: () => {} },
-    sessionProjections: {
-      register: (definition: { key: string }) => {
-        registered.push(definition.key)
-        return () => {}
-      },
-    },
-  }
-  return { services, registered }
-}
 
 /**
  * 由独立插件 fiber 挂桩，再返回可供装载被测插件的根 context。
@@ -84,7 +66,7 @@ describe('插件入口与配置契约', () => {
   })
 
   it('triggerEverySteps 非法时在加载阶段报错，不静默回落到默认值', async () => {
-    const { services } = stubServices()
+    const { services } = createStubServices()
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, { triggerEverySteps: 0 })
     expect(error).toBeInstanceOf(ValidationError)
@@ -94,7 +76,7 @@ describe('插件入口与配置契约', () => {
   })
 
   it('mode 取枚举外的值时在加载阶段报错，不静默回落到默认值', async () => {
-    const { services } = stubServices()
+    const { services } = createStubServices()
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, { mode: 'nope' as NavigatorMode })
     expect(error).toBeInstanceOf(ValidationError)
@@ -104,7 +86,7 @@ describe('插件入口与配置契约', () => {
   })
 
   it('装载后解析出的配置等于六个默认值', async () => {
-    const { services } = stubServices()
+    const { services } = createStubServices()
     const ctx = await mountStubs(services)
     const { fiber } = await load(ctx, {})
     expect(fiber.config).toEqual({
@@ -120,7 +102,7 @@ describe('插件入口与配置契约', () => {
 
 describe('激活门禁', () => {
   it('llm.stream 缺失时激活阶段报错，错误点名 llm.stream', async () => {
-    const { services } = stubServices()
+    const { services } = createStubServices()
     services['llm'] = {}
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, {})
@@ -131,7 +113,7 @@ describe('激活门禁', () => {
   })
 
   it('sessions.get 缺失时激活阶段报错，错误点名 sessions.get', async () => {
-    const { services } = stubServices()
+    const { services } = createStubServices()
     services['sessions'] = {}
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, {})
@@ -142,7 +124,7 @@ describe('激活门禁', () => {
   })
 
   it('llm.stream 存在但不是函数时报错，错误点名 llm.stream', async () => {
-    const { services } = stubServices()
+    const { services } = createStubServices()
     services['llm'] = { stream: 'not-a-function' }
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, {})
@@ -153,7 +135,7 @@ describe('激活门禁', () => {
   })
 
   it('只缺 llm 时插件停在 PENDING，配置没有被解析，投影也没有注册', async () => {
-    const { services, registered } = stubServices()
+    const { services, registered } = createStubServices()
     delete services['llm']
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, {})
@@ -164,7 +146,7 @@ describe('激活门禁', () => {
   })
 
   it('三个服务都就绪时插件进入 ACTIVE，并注册 navigatorSteps 投影', async () => {
-    const { services, registered } = stubServices()
+    const { services, registered } = createStubServices()
     const ctx = await mountStubs(services)
     const { fiber } = await load(ctx, {})
     expect(fiber.state).toBe(ACTIVE)
