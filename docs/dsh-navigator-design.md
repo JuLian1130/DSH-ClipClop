@@ -100,9 +100,9 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 复核生命周期记录**不使用 Session 事件**，写入插件自有的 storage 域。声明形状：`ctx.storageDomain.open({ name: 'clipclop_review', version: 1, layout: 'per-record', invalidRecords: 'backup-and-skip', tables: { … } })`，表按会话 id 键控；`per-record` 在 JSON 后端下是一条记录一个文档，记录的值需要 schema 校验（该能力用 zod）。取 `backup-and-skip` 而不是默认的「整个域打开失败」，是因为记录是诊断数据，一条坏记录不该让插件加载不了（该选项见 `packages/storage/storage-domain/src/spec.ts:67,129-132`）。取舍与证据见 [ADR 0002](adr/0002-review-records-outside-session-log.md)。
 
-记录内容为：触发步骤、被引用消息的 seq 列表、配置快照、结论、用量、耗时、状态。不复制消息正文（按 seq 可重建）；发给复核的快照不截断。
+记录内容为：触发步骤、快照里每条消息的 id 列表、配置快照、结论、用量、耗时、状态。不复制消息正文（按 id 从当前投影取回）；发给复核的快照不截断。
 
-「回放」的含义是按记录的触发步骤与消息序号回到会话日志重建当时上下文；记录本身不进会话日志、也不参与会话检索。首版不做记录清理，代价是记录随会话长期累积，需要时手工删除。
+「回放」的含义是按记录的触发步骤与消息 id 在会话当前的模型可见消息里定位、重建当时上下文的一部分（被压缩替换掉的消息取不回）；记录本身不进会话日志、也不参与会话检索。首版不做记录清理，代价是记录随会话长期累积，需要时手工删除。
 
 ### 省略辅助请求的 purpose
 
@@ -135,7 +135,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 使用 `agent/pre-step`（`packages/core/agent/src/runtime-types.ts:320`）在下一次模型请求被接受前执行等待模式复核。该 hook 会被 `await`，返回 `{ kind: 'enter', messages }` 可追加 user 消息，返回 `{ kind: 'reject' }` 可拒绝该步。
 
 - 上下文快照：`session.deriveMessages()`（`packages/core/session/src/index.ts:841`），system prompt 为 surface 节点 0。system 消息在该步的 `step/start` 与路由解析之后、模型请求之前提交（`agent.ts:371-373`），而最早一次复核发生在第 `triggerEverySteps + 1` 步的 pre-step，那时它已经存在——不存在「快照里没有 system 消息」的触发点。
-- 消息序号：`Message` 本身不带序号。序号来自 `session.surface.nodes`（`packages/core/session/src/surface.ts:624`），配合 `eventAt(seq)` 与 `deriveEventMessage(event)`（`surface.ts:612-621`，可以为 `null`）成对取出并跳过 `null` 节点。**不能**把 `deriveMessages()` 的下标与 `surface.nodes` 直接对齐——两者长度不保证一致。
+- 记录的标识用消息 id，**不用事件序号**：`Message` 自带稳定 `id`（`packages/llm/llm/src/message.ts:133`），而快照就是 `deriveMessages()` 的返回值，所以取 id 不需要任何额外读取。反过来，要把快照的消息与 `session.surface.nodes`（`packages/core/session/src/surface.ts:624`）的事件序号对齐，就得按序号把事件取出来（`eventAt`），而该方法已标 `@deprecated`「new calls are prohibited」（`packages/core/session/src/index.ts:632`；Agent Note `2026-09-09-deprecate-synchronous-session-event-reads.md` 禁止新代码调用三个同步历史读取器，例外只覆盖 DSH 自己的测试文件，替代方向是投影状态 + 异步分页）。代价：压缩会用替换型消息改写投影，旧 id 因此定位不到——回放按「定位得到的逐条一致、定位不到的按缺失报告」验收。
 - 辅助请求：`ctx.llm.stream(GenerateOptions)` + `BlockAssembler`；路由取自 `session.requestHeader()?.config`；超时用 `deadline(signal, ms, code)`（`packages/util/timeout/src/index.ts:91-113`）。
 - 建议投递：等待模式走 pre-step 决策；并行模式走 `agent.inject()`。
 - 停止与说明：`session.append('user/message', notice, { surfaceOp: 'append' })` + `agent.cancel({ kind: 'hook', reason })`。
