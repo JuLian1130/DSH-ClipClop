@@ -158,6 +158,7 @@ describe('激活门禁', () => {
     const { fiber, error } = await load(ctx, {})
     expect(error).toBeInstanceOf(Error)
     expect(String(error)).toContain('llm.stream')
+    expect(String(error)).not.toContain('sessions.get')
     expect(fiber.state).toBe(FAILED)
   })
 
@@ -165,8 +166,9 @@ describe('激活门禁', () => {
     const { services, registered } = stubServices()
     delete services['llm']
     const ctx = await mountStubs(services)
-    const { fiber } = await load(ctx, {})
+    const { fiber, error } = await load(ctx, {})
     expect(fiber.state).toBe(PENDING)
+    expect(error).toBeUndefined()
     expect(fiber.config).toBeUndefined()
     expect(registered).toEqual([])
   })
