@@ -7,7 +7,7 @@ export type NavigatorMode = 'wait' | 'parallel'
 export type NavigatorFailurePolicy = 'continue' | 'stop'
 
 /** Configuration for one dsh-navigator installation. */
-export interface NavigatorConfig {
+export interface Config {
   /** Number of completed main-task steps between reviews. */
   triggerEverySteps?: number
   /** Wait for the review before admitting the next main-task step, or continue in parallel. */
@@ -23,7 +23,7 @@ export interface NavigatorConfig {
 }
 
 /** Validated navigator configuration schema. */
-export const NavigatorConfig: z<Required<NavigatorConfig>> = z.object({
+export const Config: z<Required<Config>> = z.object({
   triggerEverySteps: z.number().step(1).min(1).default(50),
   mode: z.union([z.const('wait'), z.const('parallel')]).default('wait'),
   reviewTimeoutMs: z.number().step(1).min(1).default(120_000),
