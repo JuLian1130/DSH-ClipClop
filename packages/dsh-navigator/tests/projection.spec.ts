@@ -7,13 +7,10 @@ import {
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection, type NavigatorStepsState } from '../src/projection.ts'
 import { ScriptedAdapter, navigatorMessage, userMessage, type ScriptedResponse } from './support/scripted-adapter.ts'
+import { disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
 
 /** 每个用例一个独立 context：投影注册是全局的，串用会让计数互相干扰。 */
-const mounted: Context[] = []
-
-afterEach(async () => {
-  await Promise.all(mounted.splice(0).map(async (ctx) => { await ctx.fiber.dispose() }))
-})
+afterEach(disposeTrackedContexts)
 
 /**
  * 挂一个真实的 agent loop + 脚本化适配器。
@@ -21,8 +18,7 @@ afterEach(async () => {
  * @returns 驱动 agent 与读取投影所需的句柄。
  */
 async function mount(script?: readonly ScriptedResponse[]) {
-  const ctx = new Context()
-  mounted.push(ctx)
+  const ctx = trackContext(new Context())
   await mountAgentLoopTestDependencies(ctx)
   const adapter = new ScriptedAdapter(script)
   ctx.llm.registerAdapter(['mock'], adapter)

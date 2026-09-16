@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, ValidationError } from '@deepseek-ai/cordis'
-import type { FiberState } from '@deepseek-ai/cordis'
 import { parse } from 'yaml'
 import * as navigator from '../src/index.ts'
 import type { Config as NavigatorConfig, NavigatorMode } from '../src/index.ts'
+import { ACTIVE, FAILED, PENDING, disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
 
 /**
  * 装载与配置契约（票据 02）。
@@ -14,17 +14,8 @@ import type { Config as NavigatorConfig, NavigatorMode } from '../src/index.ts'
  * 插件照样能取到它并进入 ACTIVE，那两个「服务缺失」的用例就不再检验 `inject` 的完整性。
  */
 
-/** `FiberState` 是 const enum，不能运行时具名导入，只能用数值镜像。 */
-const PENDING = 0 as FiberState.PENDING
-const ACTIVE = 2 as FiberState.ACTIVE
-const FAILED = 3 as FiberState.FAILED
-
 /** 每个用例一个独立 context；桩是全局的，串用会互相干扰。 */
-const mounted: Context[] = []
-
-afterEach(async () => {
-  await Promise.all(mounted.splice(0).map(async (ctx) => { await ctx.fiber.dispose() }))
-})
+afterEach(disposeTrackedContexts)
 
 /**
  * 三个注入服务的桩。`sessionProjections.register` 按真实签名返回释放回调，并记下注册单元的 key。
@@ -51,8 +42,7 @@ function stubServices(): { readonly services: Record<string, unknown>, readonly 
  * @returns 根 context。
  */
 async function mountStubs(services: Readonly<Record<string, unknown>>) {
-  const ctx = new Context()
-  mounted.push(ctx)
+  const ctx = trackContext(new Context())
   await ctx.plugin({
     name: 'navigator-test-stubs',
     apply(stubCtx: Context) {

@@ -17,19 +17,15 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import type { FiberState } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { auditStartupEntries, mountRootInclude } from '@deepseek-ai/dsh-app-boot'
+import { ACTIVE, PENDING, disposeTrackedContexts, trackContext } from './support/cordis-fixture.ts'
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
 /** 服务桩走**绝对路径**条目：它不属于任何包，只有本仓那一份。 */
 const stubModulePath = fileURLToPath(new URL('./support/profile-stub-services.mjs', import.meta.url))
 /** 产物验收与装载断言的前置：构建在门禁里，不在夹具里。 */
 const builtEntry = join(packageDir, 'lib/index.js')
-
-/** `FiberState` 是 const enum，不能运行时具名导入，只能用数值镜像。 */
-const PENDING = 0 as FiberState.PENDING
-const ACTIVE = 2 as FiberState.ACTIVE
 
 /** 审计的诊断前缀；warning 走注入的收集器，不去 stderr 上捞。 */
 const BIN_NAME = 'dsh-navigator-profile-fixture'
@@ -65,11 +61,7 @@ let installedDir: string
 let bareBase: string
 
 /** 每个用例一个独立根 context；串用会互相干扰。 */
-const mounted: Context[] = []
-
-afterEach(async () => {
-  await Promise.all(mounted.splice(0).map(async (ctx) => { await ctx.fiber.dispose() }))
-})
+afterEach(disposeTrackedContexts)
 
 afterAll(() => {
   // `lib/` 缺失时 beforeAll 先硬失败，此时还没有临时目录可清理。
@@ -144,8 +136,7 @@ beforeAll(() => {
 async function mountComposition(configName: string, insert: ProfileEntry[]) {
   const configPath = join(profileDir, configName)
   writeFileSync(configPath, '[]\n', 'utf8')
-  const ctx = new Context()
-  mounted.push(ctx)
+  const ctx = trackContext(new Context())
   await ctx.plugin(Loader)
   expect(ctx.loader.internal).toBeDefined()
   const warnings: string[] = []
