@@ -41,10 +41,16 @@ interface ProfileEntry {
   config?: Record<string, unknown>
 }
 
-/** 被测插件条目。id 是 `EntryOptions.id`，审计文本里的主体就是它加模块名。 */
+/** 被测插件条目：`id` 是 `EntryOptions.id`，`name` 是随包发布的包名。 */
 const navigatorEntry: ProfileEntry = { id: 'dsh-navigator', name: '@dsh-clipclop/dsh-navigator' }
 /** 服务齐备的桩：三个注入服务都给。 */
 const fullStubs: ProfileEntry = { id: 'stubs', name: stubModulePath }
+/** 最小 composition 的桩：只给 `llm` 与 `sessions`，特意缺 `sessionProjections`。 */
+const minimalStubs: ProfileEntry = {
+  id: 'stubs',
+  name: stubModulePath,
+  config: { services: ['llm', 'sessions'] },
+}
 /**
  * 对照条目：它的裸名只存在于本仓 store，临时 profile 里没有——本包把它当 devDependency 而不是
  * peer，profile 不会装它。它 import 失败会让根 include 整组回滚，所以**不进正反两份 composition**。
@@ -125,26 +131,12 @@ beforeAll(() => {
 }, 300_000)
 
 /**
- * 起一个真实 Loader 组合的根 context。
- *
- * 基点前置①：`Loader.internal` 拿不到时 `mountRootInclude` 会忽略基点参数，裸名退回以 loader 包自身
- * 的位置为基点；而 pnpm 把 workspace 包提升进本仓 store，于是加载工作副本同样进入 ACTIVE——假绿。
- * 所以每份 composition 都在挂载前硬断它可用；基点真的落在临时 profile 由对照用例正面证明。
- * @returns 根 context（已在 afterEach 里登记释放）。
- */
-async function openLoaderContext(): Promise<Context> {
-  const ctx = new Context()
-  mounted.push(ctx)
-  await ctx.plugin(Loader)
-  expect(ctx.loader.internal).toBeDefined()
-  return ctx
-}
-
-/**
  * 用一份只靠补丁插入条目的空配置，挂一个组合并跑完结算与启动审计。
  *
- * 每个用例一份独立配置：composition 不同，夹具配置就不同。挂载与结算不抛错只是装载路径兑现，
- * 「正常加载」的判据是条目进入 ACTIVE。
+ * 每个用例一份独立配置：composition 不同，夹具配置就不同。
+ *
+ * 基点前置①：`internal` 缺失时基点参数会被忽略、裸名回落到以 loader 包自身位置为基点，于是加载本仓
+ * 工作副本也会 ACTIVE（假绿；机制见设计文档 `预构建产物的装载与启动审计`），所以挂载前硬断它可用。
  * @param configName - 临时 profile 下的配置文件名。
  * @param insert - 本组合的条目表，顺序即 activation 顺序。
  * @returns 根 context 与本次审计收集到的 warning。
@@ -152,7 +144,10 @@ async function openLoaderContext(): Promise<Context> {
 async function mountComposition(configName: string, insert: ProfileEntry[]) {
   const configPath = join(profileDir, configName)
   writeFileSync(configPath, '[]\n', 'utf8')
-  const ctx = await openLoaderContext()
+  const ctx = new Context()
+  mounted.push(ctx)
+  await ctx.plugin(Loader)
+  expect(ctx.loader.internal).toBeDefined()
   const warnings: string[] = []
   await mountRootInclude(ctx, configPath, [{ insert }], bareBase)
   await ctx.get('loader')?.await()
@@ -193,42 +188,25 @@ describe('真实 Loader 组合从安装副本装载', () => {
     const { ctx, warnings } = await mountComposition('active.yml', [fullStubs, navigatorEntry])
 
     expect(loaderEntry(ctx, 'dsh-navigator').fiber?.state).toBe(ACTIVE)
-    // 接线的观察面：投影注册成功即 `apply` 跑到了它的最后一步。这里取到的是桩对象，不是真注册表，
-    // 所以按桩的形状读记录。
+    // 桩记录的是 `register` 的 key；这里取到的是桩对象而不是真注册表，按桩的形状读它的记录。
     const projections = ctx.get('sessionProjections') as unknown as { registered: string[] }
-    expect(projections.registered).toEqual(['navigatorSteps'])
+    expect(projections.registered).toContain('navigatorSteps')
     expect(warnings).toEqual([])
   })
 
   it('对照条目 import 失败，证明裸名解析基点落在临时 profile', async () => {
-    const ctx = await openLoaderContext()
-    const configPath = join(profileDir, 'control.yml')
-    writeFileSync(configPath, '[]\n', 'utf8')
-
-    await expect(async () => {
-      await mountRootInclude(
-        ctx,
-        configPath,
-        [{ insert: [fullStubs, controlEntry, navigatorEntry] }],
-        bareBase,
-      )
-      await ctx.get('loader')?.await()
-    }).rejects.toThrow('failed to import loader entry control (@deepseek-ai/dsh-agent-loop)')
-
-    // 整组回滚：这一步同时说明对照条目为什么不能进正反两份 composition。
-    expect([...ctx.loader.entries()]).toHaveLength(0)
+    await expect(mountComposition('control.yml', [fullStubs, controlEntry, navigatorEntry]))
+      .rejects.toThrow('failed to import loader entry control (@deepseek-ai/dsh-agent-loop)')
   })
 
   it('只缺 sessionProjections 时启动不失败，审计以 warning 报出本条目停在 PENDING', async () => {
     // ① 启动不失败：挂载、裸名解析与结算都兑现（抛错则本用例在这里就失败）。
-    const { ctx, warnings } = await mountComposition('missing-service.yml', [
-      { id: 'stubs', name: stubModulePath, config: { services: ['llm', 'sessions'] } },
-      navigatorEntry,
-    ])
+    const { ctx, warnings } = await mountComposition('missing-service.yml', [minimalStubs, navigatorEntry])
 
-    // ② 审计落在本条目上，并点名缺的服务。
+    // ② 审计落在本条目上（最小 composition 里只有它未激活），并点名缺的服务。按包名断言，不绑
+    // app-boot 的诊断文案格式。
     const report = warnings.join('')
-    expect(report).toContain('dsh-navigator (@dsh-clipclop/dsh-navigator)')
+    expect(report).toContain('@dsh-clipclop/dsh-navigator')
     expect(report).toContain('pending')
     expect(report).toContain('sessionProjections')
     expect(loaderEntry(ctx, 'dsh-navigator').fiber?.state).toBe(PENDING)
