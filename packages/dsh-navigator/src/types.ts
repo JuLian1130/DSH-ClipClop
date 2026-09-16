@@ -22,8 +22,8 @@ export interface Config {
   prompt?: string
 }
 
-/** Validated navigator configuration schema. */
-export const Config: z<Required<Config>> = z.object({
+/** Validated navigator configuration schema: every field is optional on input, resolved to its default. */
+export const Config: z<Config, Required<Config>> = z.object({
   triggerEverySteps: z.number().step(1).min(1).default(50),
   mode: z.union([z.const('wait'), z.const('parallel')]).default('wait'),
   reviewTimeoutMs: z.number().step(1).min(1).default(120_000),
@@ -34,10 +34,3 @@ export const Config: z<Required<Config>> = z.object({
 
 /** Structured conclusions accepted from an auxiliary navigation review. */
 export type NavigatorVerdict = 'continue' | 'adjust' | 'stop'
-
-/** Parsed result of one auxiliary navigation review. */
-export interface NavigatorReviewResult {
-  verdict: NavigatorVerdict
-  reason: string
-  recommendation: string
-}
