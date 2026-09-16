@@ -134,6 +134,7 @@ describe('激活门禁', () => {
     services['llm'] = {}
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, {})
+    expect(error).toBeInstanceOf(Error)
     expect(String(error)).toContain('llm.stream')
     expect(String(error)).not.toContain('sessions.get')
     expect(fiber.state).toBe(FAILED)
@@ -144,6 +145,7 @@ describe('激活门禁', () => {
     services['sessions'] = {}
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, {})
+    expect(error).toBeInstanceOf(Error)
     expect(String(error)).toContain('sessions.get')
     expect(String(error)).not.toContain('llm.stream')
     expect(fiber.state).toBe(FAILED)
@@ -154,6 +156,7 @@ describe('激活门禁', () => {
     services['llm'] = { stream: 'not-a-function' }
     const ctx = await mountStubs(services)
     const { fiber, error } = await load(ctx, {})
+    expect(error).toBeInstanceOf(Error)
     expect(String(error)).toContain('llm.stream')
     expect(fiber.state).toBe(FAILED)
   })
