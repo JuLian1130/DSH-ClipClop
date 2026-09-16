@@ -11,6 +11,9 @@
 - 只开发插件，不修改 deepseek-harness 源码。需要 DSH 不具备的扩展点时，在插件激活阶段或首次取得主会话时直接报错，不静默降级。
   - **服务依赖全部交给原生 `inject`。** Cordis 在依赖就绪前不会激活插件，所以服务缺失时 `apply` 根本不会执行（`vendor/cordis/src/fiber.ts:611-623` 的 `_refresh()` 在任一注入服务缺失时把该插件置为 INACTIVE），「在 `apply` 里检查服务是否存在」是死代码。缺服务时的表现是「插件不激活」，由 DSH 启动审计报告（`packages/boot/app-boot/src/index.ts:779-784` 汇总缺哪个服务，`:801` 打印 `warning: N entries did not activate`；必需条目直接启动失败）。这不是静默降级——插件根本不会运行，只是报告者从插件换成了框架。
   - **`apply` 里只检查 `inject` 表达不了的部分**：我们要调用的 API 形状（`ctx.llm.stream`、`ctx.sessions.get` 是否为函数），以及第一次拿到主会话时的会话级方法（`deriveMessages`、`requestHeader`）。不检查 `agent/pre-step` 事件是否存在——DSH 没有这种查询接口。对 agent loop 行为的依赖改为锁定版本：本版插件针对 `0.1.6-alpha.1`，换成别的版本时**行为不做保证**。不要写成「版本不符就复核不触发」——并不存在一条按版本号判断的机制，那种说法既没有代码支撑也无法验收。
+  - **「API 形状分两处检查」为什么一处用不上了也还留两处**：从 03 起 `ctx.sessions.get` 只服务**激活门禁**——复核取主会话改走 pre-step 载荷的 `agent.session`（下一条），插件里已经没有 `ctx.sessions.get` 的调用方。但「激活时它必须是函数」是规格明写的验收（`测试决策` ①：激活阶段报错并点出缺的是哪个），删掉这条检查会让那一格变绿，所以它保留；变的只是它不再是取主会话的路径。
+  - **复核取主会话走 pre-step 载荷的 `agent.session`**：快照（`session.deriveMessages()`）、路由（`session.requestHeader()?.config`）与结论应用都从这个会话取，不经 `ctx.sessions.get`。载荷里的 `agent` 由派发器注入（`packages/core/agent/src/dispatch.ts` 的 `agentEvents`：`fused` 把 `agent` 并进载荷，且展开在调用方字段之后，调用方盖不掉它）；DSH 自己的 pre-step 监听器同样从载荷取 `agent.session`（`packages/context/tmux-context/src/index.ts`、`packages/context/time-context/src/index.ts`、`packages/session/session-checkpoint-policy/src/index.ts` 等十来处）。因此插件既不需要 `inject` `agent`，也不需要自己按 id 去找会话。
+  - **监听 `agent/pre-step` 不需要新增服务**：事件派发按作用域过滤，未打 scope 标记的监听器**全收**——`packages/core/scope/src/index.ts` 的 `scopeTarget` 在 `tag === undefined` 时直接返回 true。同类先例是 `packages/compaction/compaction-basic/src/index.ts`（它的 `inject` 不含 `agent`，照样 `ctx.on('agent/pre-step', …)`）。这条原先只有源码核对；03 的集成夹具把它变成运行时保证（见「验证状态」G12），所以插件的 `inject` 保持 `['llm', 'sessions', 'sessionProjections']` 不变。
 - 复核请求是只读的：它唯一的写入路径是按「各结论的上下文策略」把结论作为 plugin notice 消息追加到主会话。
 
 ## 已决定的设计选择
@@ -125,7 +128,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - **不用真实 bin**：`@deepseek-ai/dsh` 的 `dsh` 入口与 `@deepseek-ai/dsh-loader-smoke` 的 `runLoaderSmoke` 只能给出「审计输出里没有该条目」这类否定式判据——漏挂、包名写错、被静默忽略时同样为真，证明不了条目真的激活。
 - **接线怎么观察**：`SessionProjectionRegistry` 的公开读法只有 `stateOf(session, key)`、`snapshot(session, keys?)`、`cachedSnapshot(session, …)`、`checkpoint(session)` 等，全都要真实 `Session`；注册表字段是 private，没有「列出已注册单元」的读法。产物验收没有 Session（到 03 才有），所以「真的完成接线」用桩 `sessionProjections` 记录 `register` 的 `key` 来观察——注册成功即 `apply` 跑到了最后一步。（这是对规格「只验证外部行为、不断言函数调用次数」的有意例外：`register` 是插件对宿主服务的对外契约，不是内部计数器。）
 - **服务缺失的正向观测为什么必须用最小 composition**：本插件的三个注入服务同时是必需条目 `agent-loop` 的注入集（`packages/bundle/base/cordis.patch.yml` 声明 `id: agent-loop`，`packages/core/agent-loop/src/index.ts` 的 `inject` 含 `llm`、`sessions`、`sessionProjections`）。在含它的组合里抽掉任一注入服务，`agent-loop` 会先停 PENDING 并被归入必需条目：审计先把可选条目（含本插件）warning 出去，随后直接抛错——「启动不失败」变红，那条 warning 也落在一次注定失败的审计里，不能当正向读数。
-- **Cordis 的同一性**：夹具的桩与本仓库的 `@deepseek-ai/cordis` 同源；从临时 profile 按包名装载时两侧必须解析到同一份 cordis，否则桩 `provide` 的服务对插件不可见。本包产物的运行时 import 只有 `zod` 与 `schemastery`（cordis 与各服务包都是 type-only），所以这条是环境前提，不是判据。
+- **Cordis 的同一性**：夹具的桩与本仓库的 `@deepseek-ai/cordis` 同源；从临时 profile 按包名装载时两侧必须解析到同一份 cordis，否则桩 `provide` 的服务对插件不可见。**产物从 03 起有四个运行时 import**：`@deepseek-ai/dsh-llm`（`BlockAssembler`、`createUserMessage`）、`@deepseek-ai/dsh-timeout`（`deadline`）、`zod`、`schemastery`；其余服务包仍是 type-only。`@deepseek-ai/dsh-llm` 是 peer、`@deepseek-ai/dsh-timeout` 是普通依赖，临时 profile 都要能解析到，否则「条目 ACTIVE」这条断言直接红——所以它仍是环境前提，只是前提比 02b 时多。
 
 ## 验证状态
 
@@ -144,8 +147,9 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 | G9 | 并行建议的过期标注只能在 `agent/inbox/inserted` 那一刻写；「锚点 > 触发步骤」这个判据在那个窗口恒为假 | 探针 `g9-expiry-anchor.mjs`：插入事件时锚点 0、建议触发步骤 1、`replace` 返回 true、判据为假；投递之后锚点变 2、`replace` 返回 false，建议（seq 21）落在用户消息（seq 22）之前 |
 | G10 | `whenIdle()` 与「复核请求收场」的先后不可依赖；任务取消时 `whenIdle()` 兑现时 `signal.aborted` 已经是 true | 探针 `g10-whenidle-race.mjs`：abort 后 0ms 结算 → 复核先到；30ms 结算 → `whenIdle()` 先到且 `signal.aborted === true` |
 | G11 | 没把服务列进 `inject` 时取它**不是** undefined，而是直接抛错 | 探针 `g11-inject-access.mjs`：`cannot get property "sessionProjections" without inject` |
+| G12 | 未打 scope 标记的监听器收得到 agent 作用域事件，所以监听 `agent/pre-step` 不需要额外服务、`inject` 不必含 `agent` | 机制侧只做过源码核对（`packages/core/scope/src/index.ts` 的 `scopeTarget` 在 `tag === undefined` 时返回 true）；03 的集成夹具把它变成运行时保证：插件（`inject = ['llm','sessions','sessionProjections']`）挂进真实 agent loop 后，把缺失方法只遮蔽在 pre-step 载荷的 `agent.session` 上，插件在**第一次 pre-step** 就抛出并让 `turn/end` 走 `error`（`tests/review-request.spec.ts`）；未打标记的监听器若被过滤掉，这条与其余全部复核用例一起变红 |
 
-可重跑性：G6、G7、G8、G9、G10、G11 的探针都在 `.scratch/probes/` 下，可以直接用 `node` 重跑。G1、G2 的探针没落成文件，G5 需要第三方网关，这三条无法在仓库内重跑——表里那一次观测就是它们的全部证据。
+可重跑性：G6、G7、G8、G9、G10、G11 的探针都在 `.scratch/probes/` 下，可以直接用 `node` 重跑。G1、G2 的探针没落成文件，G5 需要第三方网关，这三条无法在仓库内重跑——表里那一次观测就是它们的全部证据。G12 的证据不是一次性探针，而是 03 的集成测试（`packages/dsh-navigator/tests/review-request.spec.ts`），随门禁的 `vitest run` 一起重跑。
 
 ### 仍未验证
 
@@ -158,6 +162,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - 「预构建产物的装载与启动审计」一节各条：装载入口与审计策略、`loadProfile` 一族不装树、裸名基点与 `internal` 的来源、从工作副本装载会假绿、真实 bin 的判据缺陷。依据是发布态 `0.1.6-alpha.1` 的源码与产物，没有探针。
 - G6 的子会话侧、G7 的恢复重折叠（同上表备注）。
 - 用到这些结论的验收（02b）把「拿不到 `Loader.internal`」和「基点落到了本仓 store」变成夹具的硬失败前置，不把源码结论当运行时保证。
+- 「监听 `agent/pre-step` 不需要新增服务」这条（`scopeTarget`）原先也在这里；03 的集成夹具用「pre-step 真的被调到」把它变成运行时保证，已挪进「已实测通过」G12。
 
 ## 技术路线
 
