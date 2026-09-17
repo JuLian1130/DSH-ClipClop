@@ -231,7 +231,7 @@ describe('中途更新配置', () => {
 })
 
 describe('记录项真的接线：重载推导的第一项来自读回入口的列表末条', () => {
-  it('第 105 步的复核已落盘、间隔改 20 后重载：第 120 步不出现复核、第 125 步恰好出现一次', async () => {
+  it('第 105 步的复核已落盘、重载并改间隔 20：第 120 步不出现复核、第 125 步恰好出现一次', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-navigator-trigger-'))
     roots.push(root)
     const fixture = await mountNavigatorLoop({
@@ -247,9 +247,11 @@ describe('记录项真的接线：重载推导的第一项来自读回入口的�
     // 记录项就是读回入口的列表末条，触发步骤确实是 105（读回必须在真实存储栈上，缺省桩重载后读回为空）。
     expect(readReviewRecords(fixture.main.session.id).map(record => record.triggerStep)).toEqual([55, 105])
 
-    // 在第二次复核落盘之后、进下一步之前改间隔并重载（两个动作都不产生复核请求）。
-    await fixture.updateConfig({ triggerEverySteps: 20 })
+    // 在第二次复核落盘之后、进下一步之前先重载、再改间隔（两个动作都落在同一步边界上、都不产生复核
+    // 请求）。重载沿用夹具配置（间隔 50），所以决定性的那次 apply 是随后的配置重启——它带间隔 20，
+    // 且和重载一样清空内存触发点并重开记录域，下一次观察因此按推导式读回记录项。
     await fixture.remountPlugin()
+    await fixture.updateConfig({ triggerEverySteps: 20 })
 
     // 有记录项：max(105、锚点 5、网格 floor(106/20)*20 = 100) + 20 = 125；把记录项留 null 时是 120。
     await fixture.main.drive(15)

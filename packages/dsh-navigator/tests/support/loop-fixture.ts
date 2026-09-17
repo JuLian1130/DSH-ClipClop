@@ -134,7 +134,7 @@ export interface NavigatorLoop {
   pluginFiber(): Fiber | undefined
   /**
    * 重挂载插件：丢弃前一个实例（连带关闭它持有的记录域），再挂一个新的。第 1 条的读回就在这一步
-   * 之后进行——只有重挂载才真的再跑一次域 open。沿用 `updateConfig` 改过的配置（重载读回当前配置）。
+   * 之后进行——只有重挂载才真的再跑一次域 open。
    */
   remountPlugin(): Promise<void>
   /**
@@ -418,8 +418,6 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
 
   /** 当前插件实例的 fiber；`remountPlugin` / `updateConfig` 与「插件仍激活」的断言都用它。 */
   let pluginFiber: Fiber | undefined
-  /** 重挂载沿用的配置：`updateConfig` 改过之后，重载读回的是改过的这一份（票据 05 第 5 条要它跨重载生效）。 */
-  let currentConfig: Config = options.config ?? {}
   /** 取当前插件 fiber，插件还没挂时硬失败——静默返回 undefined 会让用例空转。 */
   const requireFiber = (): Fiber => {
     if (pluginFiber === undefined) {
@@ -428,7 +426,7 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     return pluginFiber
   }
   const mountPlugin = async (): Promise<void> => {
-    pluginFiber = await ctx.plugin(navigator, currentConfig)
+    pluginFiber = await ctx.plugin(navigator, options.config ?? {})
   }
   if (options.mountEagerly !== false) await mountPlugin()
 
@@ -461,7 +459,6 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     },
     async updateConfig(config) {
       const fiber = requireFiber()
-      currentConfig = config
       fiber.update(config)
       await fiber.await()
     },
