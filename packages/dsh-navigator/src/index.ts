@@ -3,8 +3,11 @@
  * `cordis.patch.yml` 按 DSH 原生插件写法装载，不实现自己的配置文件加载器。
  *
  * 等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、按主会话继承的
- * 路由发一次辅助请求；结论为 `continue` 或复核失败时都不触碰会话。输出的严格解析、记录、建议注入、
+ * 路由发一次辅助请求；结论为 `continue` 或复核失败时都不触碰会话。输出的严格解析、建议注入、
  * 停止说明、并行模式与失败表其余格由后续票据实现。
+ *
+ * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
+ * 惰性打开会让「坏记录不挡加载」落空。
  *
  * 主会话取自 pre-step 载荷的 `agent.session`，不经 `ctx.sessions.get`；`ctx.sessions.get` 的函数
  * 检查仍保留，它只服务激活门禁。取法、理由与那条检查为何不删，见设计文档「范围与约束」。
@@ -22,33 +25,35 @@ import { deadline } from '@deepseek-ai/dsh-timeout'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection } from './projection.ts'
+import { openReviewStore } from './records.ts'
 import { composeReviewInstruction } from './review-prompt.ts'
 import { advanceTriggerStep, deriveNextTriggerStep } from './trigger.ts'
 import type { Config } from './types.ts'
 
 export * from './types.ts'
+export * from './records.ts'
 
 /** Cordis 插件名。08 的过期改写按 `source.plugin` 过滤本插件消息时复用这个值。 */
 export const name = 'dsh-navigator'
 
 /**
- * 三个必需服务。任一缺失时 Cordis 让插件停在 PENDING 而不是带着缺能力运行——`inject` 没列的服务
+ * 四个必需服务。任一缺失时 Cordis 让插件停在 PENDING 而不是带着缺能力运行——`inject` 没列的服务
  * 在取用时直接抛错，所以「服务缺失时不激活」由框架兑现，缺哪个服务由 DSH 启动审计报告。
  *
  * 监听 `agent/pre-step` 不需要额外服务——机制、源码依据与先例见设计文档「范围与约束」。
  */
-export const inject = ['llm', 'sessions', 'sessionProjections']
+export const inject = ['llm', 'sessions', 'sessionProjections', 'storageDomain']
 
-/** 复核超时的取消代码，写进 `deadline` 的 `TimeoutReason`。 */
-const REVIEW_TIMEOUT_CODE = 'NAVIGATOR_REVIEW_TIMEOUT'
+/** 复核超时的取消代码，写进 `deadline` 的 `TimeoutReason`；测试也用它判别超时。 */
+export const REVIEW_TIMEOUT_CODE = 'NAVIGATOR_REVIEW_TIMEOUT'
 
 /**
- * 注册计数投影、检查本版要调用的 API 形状，并在触发点发起等待模式复核。
- * @param ctx - 插件的 context；`inject` 的三个服务此时都已就绪。
+ * 注册计数投影、打开记录域、检查本版要调用的 API 形状，并在触发点发起等待模式复核。
+ * @param ctx - 插件的 context；`inject` 的四个服务此时都已就绪。
  * @param config - 解析后的配置（六个字段都已落值）。
  * @throws 当 `ctx.llm.stream` 或 `ctx.sessions.get` 不存在或不是函数时，错误信息点名缺的那个。
  */
-export function apply(ctx: Context, config: Required<Config>): void {
+export async function apply(ctx: Context, config: Required<Config>): Promise<void> {
   if (typeof ctx.llm.stream !== 'function') {
     throw new Error('dsh-navigator requires ctx.llm.stream to be a function')
   }
@@ -56,6 +61,7 @@ export function apply(ctx: Context, config: Required<Config>): void {
     throw new Error('dsh-navigator requires ctx.sessions.get to be a function')
   }
   ctx.sessionProjections.register(navigatorStepsProjection)
+  await openReviewStore(ctx)
 
   /** 每个主会话的下一次触发点（已完成步数）。按 `Session` 弱引用持有，重新观察时重新推导。 */
   const triggerSteps = new WeakMap<Session, number>()
