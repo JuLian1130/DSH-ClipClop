@@ -12,7 +12,7 @@ import type { Session } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import * as navigator from '../src/index.ts'
 import { BUILTIN_PROMPT, FIXED_INSTRUCTIONS } from '../src/review-prompt.ts'
-import { CONTINUE_VERDICT } from './support/scripted-adapter.ts'
+import { CONTINUE_VERDICT, SCRIPTED_TOOL_NAME } from './support/scripted-adapter.ts'
 import { disposeTrackedContexts } from './support/mounted-contexts.ts'
 import {
   isReviewRequest,
@@ -24,6 +24,12 @@ afterEach(disposeTrackedContexts)
 
 /** 一条主请求的脚本回复。 */
 const OK = { text: '收到' }
+
+/**
+ * 多步驱动下主请求的脚本回复：发一次 tool-call，turn 不在这一步收尾，`drive` 才能接着走下一步。
+ * 复核请求按脚本位置另给一条 `CONTINUE_VERDICT`。
+ */
+const STEP = { toolCall: SCRIPTED_TOOL_NAME }
 
 /** 一条消息的正文文本。 */
 function textOf(message: Message | undefined): string {
@@ -69,14 +75,13 @@ describe('复核请求的内容与形态', () => {
     const frozenAtRequest: string[] = []
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 2 },
-      script: [OK, OK, { text: CONTINUE_VERDICT }],
+      script: [STEP, STEP, { text: CONTINUE_VERDICT }, STEP],
       observeRequest: (request) => {
         if (isReviewRequest(request)) frozenAtRequest.push(...request.messages.map(message => message.id))
       },
     })
-    await fixture.send('第一步')
-    await fixture.send('第二步')
-    await fixture.send('第三步')
+    // 一条真实用户消息推到第 3 步：触发点 2 的复核在第 3 步的 pre-step 发出（steps === 2）。
+    await fixture.main.drive(3, '出发')
 
     const review = fixture.reviews()[0]
     expect(review).toBeDefined()
@@ -132,82 +137,93 @@ describe('什么时候复核', () => {
   it('到点才发：判据是已完成步数达到触发点，节奏按「触发点 + 间隔」推进，不补打', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 2 },
-      script: [OK, OK, { text: CONTINUE_VERDICT }, OK, OK, { text: CONTINUE_VERDICT }],
+      script: [STEP, STEP, { text: CONTINUE_VERDICT }, STEP, STEP, { text: CONTINUE_VERDICT }, STEP],
     })
 
-    await fixture.send('1')
+    // 一条真实用户消息推着会话走：此后不再有真实用户消息，运行期重置不会把触发点推着走。
+    await fixture.main.drive(1, '出发')
     // 完成步数到 triggerEverySteps - 1：适配器上还没有复核请求。
+    expect(fixture.main.steps()).toBe(1)
     expect(fixture.reviews()).toHaveLength(0)
-    await fixture.send('2')
+    await fixture.main.drive(1)
+    expect(fixture.main.steps()).toBe(2)
     expect(fixture.reviews()).toHaveLength(0)
     // 再完成一步后的那次 pre-step（触发点 2）恰好出现一条。
-    await fixture.send('3')
-    expect(fixture.reviews()).toHaveLength(1)
-    // 区间内不补打：第 3 步落在触发点 2 与 4 之间。
-    await fixture.send('4')
-    expect(fixture.reviews()).toHaveLength(1)
+    await fixture.main.drive(1)
+    expect(fixture.main.steps()).toBe(3)
+    expect(fixture.reviews().map(call => call.steps)).toEqual([2])
+    // 区间内不补打：第 4 步落在触发点 2 与 4 之间。
+    await fixture.main.drive(1)
+    expect(fixture.main.steps()).toBe(4)
+    expect(fixture.reviews().map(call => call.steps)).toEqual([2])
     // 触发点 4：恰好加一。
-    await fixture.send('5')
-    expect(fixture.reviews()).toHaveLength(2)
+    await fixture.main.drive(1)
+    expect(fixture.main.steps()).toBe(5)
+    expect(fixture.reviews().map(call => call.steps)).toEqual([2, 4])
   })
 
   it('首次观察落在间隔整数倍处时不立刻补打：触发点由推导式给出，不是「步数是间隔的整数倍」', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 2 },
       mountEagerly: false,
-      script: [OK, OK, OK, OK, { text: CONTINUE_VERDICT }],
+      script: [OK, OK, STEP, STEP, { text: CONTINUE_VERDICT }, STEP],
     })
-    // 会话先跑两步，插件再被观察：此时已完成 2 步，正好是间隔的整数倍。
+    // 会话先跑两步，插件再被观察：此时已完成 2 步，正好是间隔的整数倍（投影实测 steps=2、anchorStep=1）。
     await fixture.send('第一步')
     await fixture.send('第二步')
     await fixture.mountPlugin()
 
-    // 推导式取三项最大值（当前步数落在的间隔倍数 2）再加一个间隔，触发点是 4：不立刻补打。
-    await fixture.send('第三步')
+    // 推导式取三项最大值（锚点 1、当前步数落在的间隔倍数 2）再加一个间隔，触发点是 4：不立刻补打。
+    await fixture.main.drive(1, '第三步')
+    expect(fixture.main.steps()).toBe(3)
     expect(fixture.reviews()).toHaveLength(0)
-    await fixture.send('第四步')
+    await fixture.main.drive(1)
+    expect(fixture.main.steps()).toBe(4)
     expect(fixture.reviews()).toHaveLength(0)
-    await fixture.send('第五步')
-    expect(fixture.reviews()).toHaveLength(1)
+    await fixture.main.drive(1)
+    expect(fixture.main.steps()).toBe(5)
+    expect(fixture.reviews().map(call => call.steps)).toEqual([4])
   })
 
   it('首次观察把投影里的锚点算进触发点：锚点晚于区间下界时触发点随之推后', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 4 },
       mountEagerly: false,
-      script: [OK, OK, OK, OK, OK, OK, { text: CONTINUE_VERDICT }],
+      script: [OK, STEP, STEP, STEP, STEP, { text: CONTINUE_VERDICT }, STEP],
     })
-    // 先跑两步再挂插件：投影是 steps=2、anchorStep=1（第二条真实用户消息记在完成 1 步时）。
-    await fixture.send('第一步')
-    await fixture.send('第二步')
+    // 第 1 步收尾让会话空闲，好在这一步之后再送一条真实用户消息；随后在「已完成 3 步」的步边界上
+    // 挂插件，此刻投影实测 steps = 3、anchorStep = 1（那条真实用户消息记在完成 1 步时）。
+    await fixture.main.drive(1, '第一步')
+    await fixture.main.drive(2, '第二步')
+    expect(fixture.main.steps()).toBe(3)
     await fixture.mountPlugin()
 
-    // 触发点 = max(锚点 1、区间下界 floor(2/4)*4 = 0) + 4 = 5。锚点若没接上（null）触发点是 4，
-    // 第 5 步自己那次 pre-step（已完成 4 步）就会发复核——那时下面第一条断言变红。
-    await fixture.send('第三步')
-    await fixture.send('第四步')
-    await fixture.send('第五步')
+    // 触发点 = max(锚点 1、区间下界 floor(3/4)*4 = 0) + 4 = 5。锚点若没接上（null）触发点是 4，
+    // 第 5 步那一刻就会出现复核——那时下面第一条断言变红。
+    await fixture.main.drive(2)
+    expect(fixture.main.steps()).toBe(5)
     expect(fixture.reviews()).toHaveLength(0)
-    await fixture.send('第六步')
-    expect(fixture.reviews()).toHaveLength(1)
+    await fixture.main.drive(1)
+    expect(fixture.main.steps()).toBe(6)
+    expect(fixture.reviews().map(call => call.steps)).toEqual([5])
   })
 
   it('复核自己的请求不计数：没有它产生的助手消息，下一次触发点仍按主会话成功步数推进', async () => {
     const triggerPoints: number[] = []
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 2 },
-      script: [OK, OK, { text: CONTINUE_VERDICT }, OK, OK, { text: CONTINUE_VERDICT }],
+      script: [STEP, STEP, { text: CONTINUE_VERDICT }, STEP, STEP, { text: CONTINUE_VERDICT }, STEP],
       observeRequest: (request, agent) => {
         if (isReviewRequest(request)) triggerPoints.push(assistantIds(agent).length)
       },
     })
 
-    for (const text of ['1', '2', '3', '4', '5']) await fixture.send(text)
+    await fixture.main.drive(5, '出发')
 
-    expect(fixture.reviews()).toHaveLength(2)
+    expect(fixture.reviews().map(call => call.steps)).toEqual([2, 4])
     // 两次复核都发生在主会话成功提交 2 / 4 条助手消息之后——复核请求没有推快节奏。
     expect(triggerPoints).toEqual([2, 4])
-    // 五次发送各一条助手消息，会话里没有多出复核请求产生的助手消息。
+    // 五步各一条助手消息，会话里没有多出复核请求产生的助手消息。
     expect(assistantIds(fixture.agent)).toHaveLength(5)
   })
 })
