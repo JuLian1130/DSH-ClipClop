@@ -211,7 +211,7 @@ async function reviewOnce(attempt: ReviewAttempt): Promise<void> {
     await fail(OUTPUT_UNPARSEABLE)
     return
   }
-  // 完成态不保证有 usage：适配器不给 usage 块时整个字段缺省（口径见设计文档「复核记录的存放位置」）。
+  // 完成态不保证有 usage：流里没有 usage 块时整个字段缺省（口径见设计文档「复核记录的存放位置」）。
   await writeReviewRecord(session.id, {
     ...base,
     durationMs: Date.now() - startedAt,
