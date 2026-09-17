@@ -95,11 +95,9 @@ describe('复核请求的内容与形态', () => {
     const builtin = await reviewInstructionText()
     const replaced = await reviewInstructionText('只看目标与阻塞')
 
-    expect(builtin.startsWith(BUILTIN_PROMPT)).toBe(true)
-    expect(replaced.startsWith('只看目标与阻塞')).toBe(true)
-    expect(builtin.endsWith(FIXED_INSTRUCTIONS)).toBe(true)
-    expect(replaced.endsWith(FIXED_INSTRUCTIONS)).toBe(true)
-    expect(builtin.slice(-FIXED_INSTRUCTIONS.length)).toBe(replaced.slice(-FIXED_INSTRUCTIONS.length))
+    // 断言等式而不是首尾匹配：提示词与固定段之间夹带任何文字都会红。
+    expect(builtin).toBe(`${BUILTIN_PROMPT}\n\n${FIXED_INSTRUCTIONS}`)
+    expect(replaced).toBe(`只看目标与阻塞\n\n${FIXED_INSTRUCTIONS}`)
   })
 
   it('继承服务商、模型与推理强度，温度 0、上限用 maxOutputTokens，且不设 system、不传 tools', async () => {
@@ -109,18 +107,17 @@ describe('复核请求的内容与形态', () => {
       // 「上限来自适配器/路由默认」区分开。
       config: { triggerEverySteps: 1, maxOutputTokens: 1234 },
       script: [OK, { text: CONTINUE_VERDICT }],
-      agentOptions: { reasoningEffort: effort },
+      // 路由也配非默认值：默认的 'mock'/'mock' 与硬编码或省略字段的实现不可区分。
+      agentOptions: { provider: 'mock-alt', model: 'mock-alt', reasoningEffort: effort },
       reasoning: { efforts: [{ id: effort, name: 'High' }] },
     })
     await fixture.send('第一步')
     await fixture.send('第二步')
 
-    const main = fixture.calls()[0]?.request
     const review = fixture.reviews()[0]?.request
     expect(review).toBeDefined()
-    expect(review?.provider).toBe(main?.provider)
-    expect(review?.model).toBe(main?.model)
-    expect(review?.reasoningEffort).toBe(main?.reasoningEffort)
+    expect(review?.provider).toBe('mock-alt')
+    expect(review?.model).toBe('mock-alt')
     expect(review?.reasoningEffort).toBe(effort)
     expect(review?.temperature).toBe(0)
     expect(review?.maxTokens).toBe(1234)

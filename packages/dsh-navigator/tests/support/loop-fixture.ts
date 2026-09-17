@@ -60,7 +60,7 @@ export interface NavigatorLoopOptions {
   readonly mountEagerly?: boolean
   /** 适配器脚本，按调用顺序——主请求与复核请求混排时按顺序写。 */
   readonly script?: readonly ScriptedResponse[]
-  /** 造主会话时在 `{ provider: 'mock', model: 'mock' }` 之上追加的选项。 */
+  /** 造主会话时在 `{ provider: 'mock', model: 'mock' }` 之上追加的选项；改 provider 时适配器按最终 provider 注册。 */
   readonly agentOptions?: AgentOptions
   /** 适配器声明的推理强度档位；继承推理强度的用例需要它。 */
   readonly reasoning?: LlmModelReasoningInfo
@@ -87,10 +87,9 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
   const ctx = trackContext(new Context())
   await mountAgentLoopTestDependencies(ctx)
   const harness = await mountAgentLoopTestHarness(ctx)
-  const agent = await harness.create(
-    SessionId('navigator-review'),
-    { provider: 'mock', model: 'mock', ...options.agentOptions },
-  )
+  // 路由可被用例改成非默认值：断言「继承路由」时，默认值与被硬编码的值不可区分。
+  const route = { provider: 'mock', model: 'mock', ...options.agentOptions }
+  const agent = await harness.create(SessionId('navigator-review'), route)
   // 会话事件按真实实例过滤：用例可能把 `agent.session` 换成替身（票据第 9 条）。
   const session = agent.session
 
@@ -102,7 +101,7 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
       options.observeRequest?.(request, agent)
     },
   })
-  ctx.llm.registerAdapter(['mock'], adapter)
+  ctx.llm.registerAdapter([route.provider], adapter)
 
   const events: SessionEvent[] = []
   ctx.on('session/event', (subject, event) => {
