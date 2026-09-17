@@ -6,10 +6,9 @@
  * 用完一段后重复最后一段；一段也可以把这次请求**挂住不放行**，直到它的 `signal` 被中止（超时与
  * 闸门用例用）。
  *
- * tool-call 那一段是 02c 的多步驱动所依赖的：assistant 消息里带上 `tool-call` 时 turn 不在这一步
- * 收尾，loop 继续走下一步（判据见 `packages/core/agent-loop/src/agent.ts` 的
- * `if (toolCalls.length === 0) return { kind: 'completed' }`）。夹具注册 `SCRIPTED_TOOL_NAME` 这个
- * **不调** `concludeTurn()` 的工具来执行它。
+ * tool-call 那一段是多步驱动所依赖的：assistant 消息里带上 `tool-call` 时 turn 不在这一步收尾，loop
+ * 继续走下一步。夹具注册 `SCRIPTED_TOOL_NAME` 这个**不调** `concludeTurn()` 的工具来执行它，所以脚本
+ * 里那条 tool-call 要写夹具注册的那个名字。
  *
  * @module
  */
@@ -24,26 +23,15 @@ import type {
   UserMessage,
 } from '@deepseek-ai/dsh-llm'
 
-/** 脚本里的一次工具调用。 */
-export interface ScriptedToolCall {
-  /** 工具名；夹具注册的 `SCRIPTED_TOOL_NAME` 是那条步进工具。 */
-  readonly name: string
-  /** 原样 JSON 序列化后作为 `arguments` 发出去；缺省 `{}`。 */
-  readonly arguments?: unknown
-}
-
 /** 一次脚本化回复：返回一段文本、发一次工具调用、让这次请求以错误收场，或把这次请求挂住不放行。 */
 export type ScriptedResponse =
   | { readonly text: string }
-  | { readonly toolCall: ScriptedToolCall }
+  | { readonly toolCall: string }
   | { readonly error: string }
   | { readonly hang: true }
 
 /** 夹具注册的步进工具名：调用它只让这一步成功收尾，turn 因此继续走下一步。 */
 export const SCRIPTED_TOOL_NAME = 'scripted-step'
-
-/** 脚本里的一条「走一步」：发一次 `SCRIPTED_TOOL_NAME` 调用。 */
-export const SCRIPTED_STEP: ScriptedResponse = { toolCall: { name: SCRIPTED_TOOL_NAME } }
 
 /** 收到请求时同步调用的观察钩子；在触发点那一刻读主会话快照用。 */
 export type RequestObserver = (options: GenerateOptions) => void
@@ -117,21 +105,14 @@ export class ScriptedAdapter extends LlmAdapter {
     }
     if ('error' in response) throw new Error(response.error)
     if ('toolCall' in response) {
-      // 调用 id 按请求序号取，同一条会话里不重复；`block` 里的 `arguments` 与 delta 逐字相同。
+      // 调用 id 按请求序号取，同一条会话里不重复；工具不读参数，`arguments` 固定 `{}`。
       const id = ToolCallId(`scripted-${index}`)
-      const argumentsJson = JSON.stringify(response.toolCall.arguments ?? {})
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-      yield {
-        type: 'tool-call-delta',
-        index: 0,
-        id,
-        name: response.toolCall.name,
-        argumentsDelta: argumentsJson,
-      }
+      yield { type: 'tool-call-delta', index: 0, id, name: response.toolCall, argumentsDelta: '{}' }
       yield {
         type: 'block-end',
         index: 0,
-        block: { type: 'tool-call', id, name: response.toolCall.name, arguments: argumentsJson },
+        block: { type: 'tool-call', id, name: response.toolCall, arguments: '{}' },
       }
       yield { type: 'usage', usage: SCRIPTED_USAGE }
       yield { type: 'finish', reason: { kind: 'stop' } }

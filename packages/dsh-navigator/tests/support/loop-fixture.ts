@@ -14,16 +14,13 @@
  *
  * 02c 追加的四样能力：
  * - **多步驱动**：`main.drive(steps, text?)` 先用一条真实用户消息唤醒会话，再推进 `steps` 步，其间不再
- *   出现真实用户消息。脚本每步发一个 tool-call（`SCRIPTED_STEP`）turn 就不会提前收尾；最后一步用纯文本
- *   收尾也一样算这 `steps` 步里的最后一步。驱动结束后该会话的请求数与计数口径的已完成步数都增加了
- *   `steps`。
- * - **步边界暂停**：`drive` 停在「已完成 N 步、正要进第 N+1 步」这个 `agent/pre-step` **之前**——闸门是
- *   夹具自己的 pre-step 监听器（**注册早于插件**，在 `next()` 之前 await 一个可释放的 Promise），所以
- *   暂停点上该会话的请求数恰为 N；用例重载 / 改配置后再次 `drive`，就从第 N+1 步续跑。脚本用纯文本
- *   收尾、turn 先结束而没有下一个步边界时，`drive` 按「会话转入空闲」返回。
- * - **请求归属**：`ObservedCall.session` 是发起这条请求的会话。loop 自建的请求带 `sessionId`（主会话、
- *   子会话、fork 会话都有），插件自建的复核请求**不带**；后者按 pre-step 边界归属到那一刻正在起
- *   pre-step 的会话——夹具监听器先于插件跑，复核请求因此与那一步的主请求落进同一次归属。
+ *   出现真实用户消息。脚本每步发一条 `{ toolCall: SCRIPTED_TOOL_NAME }`，turn 就不会提前收尾；最后一步
+ *   用纯文本收尾也一样算这 `steps` 步里的最后一步。驱动结束后该会话的请求数与计数口径的已完成步数都
+ *   增加了 `steps`。
+ * - **步边界暂停**：`drive` 停在「已完成 N 步、正要进第 N+1 步」之前并把控制权交回用例；此时该会话的
+ *   请求数恰为 N。用例重载 / 改配置后再次 `drive`，就从第 N+1 步续跑。闸门的落位与理由见步进工具的
+ *   注册处。脚本用纯文本收尾、turn 先结束而没有下一个步边界时，`drive` 按「会话转入空闲」返回。
+ * - **请求归属**：`ObservedCall.session` 是发起这条请求的会话。归属规则见 pre-step 监听器。
  * - **会话构造**：`createSubSession`（`meta.origin: 'subagent'`）与 `createForkSession`
  *   （`meta.parentSession`，按 `Sessions.fork` 同款同时带 `seed` 与 `inheritedEventCount`）都走
  *   `ctx.agents.create()`，不新造第二条 loop。
@@ -38,7 +35,6 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import type { Fiber } from '@deepseek-ai/cordis'
-import { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { GenerateOptions, LlmModelReasoningInfo } from '@deepseek-ai/dsh-llm'
 import {
@@ -70,11 +66,17 @@ import {
 import { trackContext } from './mounted-contexts.ts'
 import { createStubServices } from './stub-services.mjs'
 
+/** 一条会话连同它的 agent：逐会话状态与请求归属都用这一对。 */
+interface SessionOwner {
+  readonly agent: Agent
+  readonly session: Session
+}
+
 /** 一次被观察到的模型请求：请求本身，加上发起它的会话与收到它那一刻该会话的快照。 */
 export interface ObservedCall {
   /** 送进适配器的请求对象。 */
   readonly request: GenerateOptions
-  /** 发起这条请求的会话：loop 自建的请求按 `request.sessionId` 归属，插件的复核请求按 pre-step 边界归属。 */
+  /** 发起这条请求的会话；归属规则见 `mountNavigatorLoop` 里的 pre-step 监听器。 */
   readonly session: Session
   /** 收到请求那一刻该会话对模型可见的全部消息 id，按原顺序。 */
   readonly snapshotIds: readonly string[]
@@ -83,17 +85,13 @@ export interface ObservedCall {
 }
 
 /** 一条会话的观察与驱动句柄：主会话、子会话、fork 会话共用它。 */
-export interface NavigatorSession {
-  readonly agent: Agent
-  readonly session: Session
+export interface NavigatorSession extends SessionOwner {
   /** 该会话名下的模型请求，按调用顺序。 */
   calls(): readonly ObservedCall[]
   /** 该会话名下的复核请求（末条消息是本插件注入的 plugin 消息）。 */
   reviews(): readonly ObservedCall[]
   /** 该会话落盘的事件，按顺序（实时 `session/event` 流，不含构造期的 seed）。 */
   events(): readonly SessionEvent[]
-  /** 该会话已落盘的 `turn/end` 原因，按顺序。 */
-  turnEndReasons(): readonly TurnEndReason[]
   /** 该会话按计数口径数出的已完成步数（不带 `interrupted` 的 `assistant/message` 条数）。 */
   steps(): number
   /**
@@ -101,15 +99,13 @@ export interface NavigatorSession {
    * 用户消息。期间不再出现别的真实用户消息。
    */
   drive(steps: number, text?: string): Promise<void>
-  /** 送一条真实用户消息，并等该会话本轮的 turn 收尾。 */
-  send(text: string): Promise<void>
 }
 
 /** 集成夹具的句柄。 */
 export interface NavigatorLoop {
   readonly ctx: Context
   readonly agent: Agent
-  /** 主会话的句柄；`send` / `events` / `turnEndReasons` 是它对应方法的别名。 */
+  /** 主会话的句柄。 */
   readonly main: NavigatorSession
   /** 全部会话的模型请求，按调用顺序，各带发起它的会话与那一刻的快照。 */
   calls(): readonly ObservedCall[]
@@ -141,10 +137,9 @@ export interface NavigatorLoop {
   /** 造一条子会话（`origin: 'subagent'`），与主会话共用同一条 loop 与适配器。 */
   createSubSession(sessionId: string): Promise<NavigatorSession>
   /**
-   * 造一条 fork 会话（`parentSession` 指向主会话、不带 `origin`）。
-   * @param sessionId - 新会话 id。
-   * @param seed - 要继承的父会话前缀；缺省空数组，与 `inheritedEventCount: 0` 一起构成合法 fork 头部。
-   *   需要继承历史的用例传一段**平衡的已完成 turn 前缀**（主会话的实时事件账本见 `main.events()`）。
+   * 造一条 fork 会话（`parentSession` 指向主会话、不带 `origin`）。`seed` 缺省空数组，与
+   * `inheritedEventCount: 0` 一起构成合法 fork 头部；要继承历史就传一段**平衡的已完成 turn 前缀**
+   * （主会话的实时事件账本见 `main.events()`）。
    */
   createForkSession(sessionId: string, seed?: readonly SessionEvent[]): Promise<NavigatorSession>
 }
@@ -211,7 +206,7 @@ interface Boundary {
   target: number | undefined
   /** 已经停在边界上、等下一次 `drive` 放行。 */
   blocked: boolean
-  /** 放行被挡住的那次 pre-step。 */
+  /** 放行被挡住的那次工具调用。 */
   release: (() => void) | undefined
   /** 通知当前 `drive`「已经到边界」。 */
   reached: (() => void) | undefined
@@ -237,30 +232,19 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
   const route = { provider: 'mock', model: 'mock', ...options.agentOptions }
   const agent = await harness.create(SessionId('navigator-review'), route)
 
-  // 步进工具：这一步要能成功收尾又**不**结束 turn，所以工具体不调 `concludeTurn()`。
-  // `parameters` 走 raw 形状（`register` 不校验它）；`output.schema` 用注解式 `{}`（`assertSupportedJsonSchema` 接受）。
-  ctx.tools.register({
-    name: SCRIPTED_TOOL_NAME,
-    description: '脚本化夹具的步进工具：让当前步骤正常收尾，turn 继续。',
-    parameters: { type: 'object', properties: {} },
-    output: { schema: {}, render: () => [{ type: 'text', text: 'ok' }] },
-    execute: () => Promise.resolve({}),
-  })
-
-  const calls: ObservedCall[] = []
   /**
-   * 逐会话的事件账本。在**任何 append 之前**挂上，所以它从 seq 0 起完整；主会话的账本同时充当
-   * fork 的 `seed` 来源（`snapshotEvents()` 已被标记禁止新调用）。
+   * 逐会话的事件账本，按**会话 id** 取键：用例可能把 `agent.session` 换成替身（票据第 9 条），替身
+   * 与真实实例 id 相同，读数因此照旧。账本在**任何 append 之前**挂上，所以它从 seq 0 起完整；主会话的
+   * 账本同时充当 fork 的 `seed` 来源（`snapshotEvents()` 已被标记禁止新调用）。
    */
-  const eventsBySession = new Map<Session, SessionEvent[]>()
+  const eventsBySession = new Map<string, SessionEvent[]>()
   const eventsOf = (session: Session): SessionEvent[] => {
-    const known = eventsBySession.get(session)
+    const known = eventsBySession.get(session.id)
     if (known !== undefined) return known
     const fresh: SessionEvent[] = []
-    eventsBySession.set(session, fresh)
+    eventsBySession.set(session.id, fresh)
     return fresh
   }
-  // 会话事件按真实实例过滤：用例可能把 `agent.session` 换成替身（票据第 9 条）。
   const mainSession = agent.session
   const mainEvents = eventsOf(mainSession)
   ctx.on('session/event', (subject, event) => { eventsOf(subject).push(event) })
@@ -270,16 +254,92 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     event => event.type === 'assistant/message' && event.data.interrupted !== true,
   ).length
 
+  const boundaries = new Map<string, Boundary>()
+  const boundaryOf = (session: Session): Boundary => {
+    const known = boundaries.get(session.id)
+    if (known !== undefined) return known
+    const fresh: Boundary = { target: undefined, blocked: false, release: undefined, reached: undefined }
+    boundaries.set(session.id, fresh)
+    return fresh
+  }
+
+  /**
+   * 到了本次 `drive` 的目标步边界就挂住这一步，等下一次 `drive` 放行。
+   * @param session - 正在跑这一步的会话。
+   * @param signal - 本步的取消信号：取消 / 卸载时一并放行，交给 loop 自己收场，不永久挂住。
+   */
+  const pauseAtBoundary = async (session: Session, signal: AbortSignal): Promise<void> => {
+    const boundary = boundaryOf(session)
+    if (boundary.target === undefined || completedSteps(session) < boundary.target) return
+    boundary.target = undefined
+    boundary.blocked = true
+    boundary.reached?.()
+    boundary.reached = undefined
+    await new Promise<void>((resolve) => {
+      boundary.release = resolve
+      signal.addEventListener('abort', () => resolve(), { once: true })
+    })
+    boundary.blocked = false
+    signal.throwIfAborted()
+  }
+
+  /**
+   * 步进工具，同时是**步边界闸门**。落位与理由（02c 第 2 条要的是「已完成 N 步、正要进第 N+1 步」
+   * 这个可暂停、可续跑的边界，以及暂停点上请求数恰为 N）：
+   * - 工具体在 step N 的 `assistant/message` 提交之后、step N+1 的 `agent/pre-step` 之前运行，此刻
+   *   已完成步数恰为 N、向适配器发出的请求数也恰为 N，插件的到点判据还没对第 N+1 步求值。
+   * - 闸门不能挂在 `agent/pre-step` 监听器里：那次派发会在插件之前被挂住，而暂停期间重挂载 / 改配置
+   *   之后，最初那次派发捕获的插件监听器已随旧 fiber 失效——续跑必须先重派发整条 waterfall，那会让
+   *   注册在闸门之前的监听器把 `next()` 之后的工作做两遍，还要重建 loop 的默认决策（本夹具没有
+   *   runtime context provider 才恰好等于已 claim 的消息）。挂在工具体里，第 N+1 步的 pre-step 是
+   *   释放之后才派发的，天然用当前实例、当前配置。
+   * - 工具体**不调** `concludeTurn()`：这一步要能成功收尾又**不**结束 turn。`parameters` 走 raw 形状
+   *   （`register` 不校验它）；`output.schema` 用注解式 `{}`（`assertSupportedJsonSchema` 接受）。
+   */
+  ctx.tools.register({
+    name: SCRIPTED_TOOL_NAME,
+    description: '脚本化夹具的步进工具：让当前步骤正常收尾，turn 继续。',
+    parameters: { type: 'object', properties: {} },
+    output: { schema: {}, render: () => [{ type: 'text', text: 'ok' }] },
+    execute: async (_arguments, exec) => {
+      const session = exec.agent?.session
+      if (session !== undefined) await pauseAtBoundary(session, exec.signal)
+      return {}
+    },
+  })
+
+  const calls: ObservedCall[] = []
   /** 已知会话：loop 自建的请求按 `request.sessionId` 归到它名下。 */
-  const knownSessions = new Map<string, { agent: Agent; session: Session }>()
+  const knownSessions = new Map<string, SessionOwner>()
   knownSessions.set(mainSession.id, { agent, session: mainSession })
-  /** 没有 `sessionId` 的请求（插件的复核请求）归到最近一次起 pre-step 的会话。 */
-  let preStepOwner: { agent: Agent; session: Session } = { agent, session: mainSession }
+  /** 当前打开的 pre-step 归属窗口；没有 `sessionId` 的请求只在窗口内到达。 */
+  let preStepOwner: SessionOwner | undefined
+
+  /**
+   * 一条请求属于哪条会话。loop 自建的请求带 `sessionId`；插件的复核请求不带，只在它那一步的 pre-step
+   * 窗口内到达。
+   * @param request - 适配器收到的请求。
+   * @returns 发起这条请求的会话连同它的 agent。
+   * @throws 归不出会话时硬失败——两种情形都是夹具的归属表漏了东西，报错好过把请求归错会话。
+   */
+  const ownerOf = (request: GenerateOptions): SessionOwner => {
+    if (request.sessionId !== undefined) {
+      const known = knownSessions.get(request.sessionId)
+      if (known === undefined) {
+        throw new Error(`mountNavigatorLoop: request for unknown session "${request.sessionId}"`)
+      }
+      return known
+    }
+    if (preStepOwner === undefined) {
+      throw new Error('mountNavigatorLoop: a request without sessionId arrived outside a pre-step window')
+    }
+    return preStepOwner
+  }
 
   const adapter = new ScriptedAdapter(options.script, {
     ...options.reasoning === undefined ? {} : { reasoning: options.reasoning },
     onRequest: (request) => {
-      const owner = (request.sessionId === undefined ? undefined : knownSessions.get(request.sessionId)) ?? preStepOwner
+      const owner = ownerOf(request)
       calls.push({
         request,
         session: owner.session,
@@ -291,45 +351,19 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
   })
   ctx.llm.registerAdapter([route.provider], adapter)
 
-  const boundaries = new Map<Session, Boundary>()
-  const boundaryOf = (session: Session): Boundary => {
-    const known = boundaries.get(session)
-    if (known !== undefined) return known
-    const fresh: Boundary = { target: undefined, blocked: false, release: undefined, reached: undefined }
-    boundaries.set(session, fresh)
-    return fresh
-  }
-
   /**
-   * 步边界闸门。注册**早于插件**（同一个 waterfall 里注册在前的最外层先跑），且在 `next()` 之前等
-   * 放行——所以暂停点上插件的到点判据还没对这一步求值，请求数也还是 N。
+   * 归属窗口。夹具的 pre-step 监听器先于插件跑，所以在它被调用与 `next()` 返回之间到达的、没有
+   * `sessionId` 的请求（插件在这一步的 pre-step 里发出的复核请求）归这一步的会话；窗口在 `next()`
+   * 返回后立刻还原，窗口之外的请求不会有第二个归属来源。
    */
-  ctx.on('agent/pre-step', async ({ agent: subject, messages, turn, step, signal }, next) => {
+  ctx.on('agent/pre-step', async ({ agent: subject }, next) => {
+    const previous = preStepOwner
     preStepOwner = { agent: subject, session: subject.session }
-    const boundary = boundaryOf(subject.session)
-    if (boundary.target !== undefined && completedSteps(subject.session) >= boundary.target) {
-      boundary.target = undefined
-      boundary.blocked = true
-      boundary.reached?.()
-      boundary.reached = undefined
-      await new Promise<void>((resolve) => {
-        boundary.release = resolve
-        // 取消 / 卸载会让本步的信号中止：一并放行，交给 loop 自己的 throwIfAborted 收场，不永久挂住。
-        signal.addEventListener('abort', () => resolve(), { once: true })
-      })
-      boundary.blocked = false
-      signal.throwIfAborted()
-      // 放行后**重新派发**这一步的 pre-step：暂停期间用例可能重挂载插件（或改配置重启），最初那次
-      // 派发捕获的监听器会随旧 fiber 失效，继续往下跑它只会让旧实例在自己的 ctx 上抛错。重新派发按
-      // 当前的监听器集合重跑，新实例因此接住第 N+1 步。默认决策 = 这一步已被 claim 的消息——本夹具
-      // 没有 runtime context provider，loop 的默认决策就是它。
-      return agentEvents(ctx, subject).waterfall(
-        'agent/pre-step',
-        { messages, turn, step, signal },
-        () => Promise.resolve({ kind: 'enter', messages }),
-      )
+    try {
+      return await next()
+    } finally {
+      preStepOwner = previous
     }
-    return next()
   })
 
   /** 推进一条会话 `steps` 步并停在步边界。 */
@@ -357,18 +391,11 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     return {
       agent: target,
       session,
-      calls: () => calls.filter(call => call.session === session),
-      reviews: () => calls.filter(call => call.session === session && isReviewRequest(call.request)),
+      calls: () => calls.filter(call => call.session.id === session.id),
+      reviews: () => calls.filter(call => call.session.id === session.id && isReviewRequest(call.request)),
       events: () => eventsOf(session),
-      turnEndReasons: () => eventsOf(session).flatMap(
-        event => event.type === 'turn/end' ? [event.data.reason] : [],
-      ),
       steps: () => completedSteps(session),
       drive: (steps, text) => drive(target, steps, text),
-      send: async (text) => {
-        target.followup(userMessage(text))
-        await target.whenIdle()
-      },
     }
   }
 
@@ -402,8 +429,13 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     calls: () => calls,
     reviews: () => calls.filter(call => isReviewRequest(call.request)),
     events: () => mainEvents,
-    turnEndReasons: () => main.turnEndReasons(),
-    send: (text) => main.send(text),
+    turnEndReasons: () => mainEvents.flatMap(
+      event => event.type === 'turn/end' ? [event.data.reason] : [],
+    ),
+    async send(text) {
+      agent.followup(userMessage(text))
+      await agent.whenIdle()
+    },
     mountPlugin,
     pluginFiber: () => pluginFiber,
     async remountPlugin() {
