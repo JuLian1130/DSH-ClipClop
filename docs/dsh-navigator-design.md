@@ -128,7 +128,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - **不用真实 bin**：`@deepseek-ai/dsh` 的 `dsh` 入口与 `@deepseek-ai/dsh-loader-smoke` 的 `runLoaderSmoke` 只能给出「审计输出里没有该条目」这类否定式判据——漏挂、包名写错、被静默忽略时同样为真，证明不了条目真的激活。
 - **接线怎么观察**：`SessionProjectionRegistry` 的公开读法只有 `stateOf(session, key)`、`snapshot(session, keys?)`、`cachedSnapshot(session, …)`、`checkpoint(session)` 等，全都要真实 `Session`；注册表字段是 private，没有「列出已注册单元」的读法。产物验收没有 Session（到 03 才有），所以「真的完成接线」用桩 `sessionProjections` 记录 `register` 的 `key` 来观察——注册成功即 `apply` 跑到了最后一步。（这是对规格「只验证外部行为、不断言函数调用次数」的有意例外：`register` 是插件对宿主服务的对外契约，不是内部计数器。）
 - **服务缺失的正向观测为什么必须用最小 composition**：本插件的三个注入服务同时是必需条目 `agent-loop` 的注入集（`packages/bundle/base/cordis.patch.yml` 声明 `id: agent-loop`，`packages/core/agent-loop/src/index.ts` 的 `inject` 含 `llm`、`sessions`、`sessionProjections`）。在含它的组合里抽掉任一注入服务，`agent-loop` 会先停 PENDING 并被归入必需条目：审计先把可选条目（含本插件）warning 出去，随后直接抛错——「启动不失败」变红，那条 warning 也落在一次注定失败的审计里，不能当正向读数。
-- **Cordis 的同一性**：夹具的桩与本仓库的 `@deepseek-ai/cordis` 同源；从临时 profile 按包名装载时两侧必须解析到同一份 cordis，否则桩 `provide` 的服务对插件不可见。**产物从 03 起有四个运行时 import**：`@deepseek-ai/dsh-llm`（`createUserMessage`）、`@deepseek-ai/dsh-timeout`（`deadline`）、`zod`、`schemastery`；其余服务包仍是 type-only。`@deepseek-ai/dsh-llm` 是 peer、`@deepseek-ai/dsh-timeout` 是普通依赖，临时 profile 都要能解析到，否则「条目 ACTIVE」这条断言直接红——所以它仍是环境前提，只是前提比 02b 时多。（产物里目前没有 `BlockAssembler`：03 只把复核请求发出去、不读输出，`ctx.llm.stream` 返回的流被整条消费掉即可。）
+- **Cordis 的同一性**：夹具的桩与本仓库的 `@deepseek-ai/cordis` 同源；从临时 profile 按包名装载时两侧必须解析到同一份 cordis，否则桩 `provide` 的服务对插件不可见。**产物的运行时 import 有四个**：`@deepseek-ai/dsh-llm`（`createUserMessage`）、`@deepseek-ai/dsh-timeout`（`deadline`）、`zod`、`schemastery`；其余服务包仍是 type-only。`@deepseek-ai/dsh-llm` 是 peer、`@deepseek-ai/dsh-timeout` 是普通依赖，临时 profile 都要能解析到，否则「条目 ACTIVE」这条断言直接红——所以它仍是环境前提，只是前提比 02b 时多。
 
 ## 验证状态
 
@@ -162,7 +162,6 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - 「预构建产物的装载与启动审计」一节各条：装载入口与审计策略、`loadProfile` 一族不装树、裸名基点与 `internal` 的来源、从工作副本装载会假绿、真实 bin 的判据缺陷。依据是发布态 `0.1.6-alpha.1` 的源码与产物，没有探针。
 - G6 的子会话侧、G7 的恢复重折叠（同上表备注）。
 - 用到这些结论的验收（02b）把「拿不到 `Loader.internal`」和「基点落到了本仓 store」变成夹具的硬失败前置，不把源码结论当运行时保证。
-- 「监听 `agent/pre-step` 不需要新增服务」这条（`scopeTarget`）原先也在这里；03 的集成夹具用「pre-step 真的被调到」把它变成运行时保证，已挪进「已实测通过」G12。
 
 ## 技术路线
 
