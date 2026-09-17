@@ -27,9 +27,9 @@ import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection } from './projection.ts'
-import { openReviewStore, type ReviewWriter } from './records.ts'
+import { openReviewStore, readReviewRecords, type ReviewWriter } from './records.ts'
 import { composeReviewInstruction } from './review-prompt.ts'
-import { advanceTriggerStep, deriveNextTriggerStep } from './trigger.ts'
+import { advanceTriggerStep, deriveNextTriggerStep, resetTriggerStepAtUserMessage } from './trigger.ts'
 import type { Config } from './types.ts'
 import { parseReviewOutcome } from './verdict.ts'
 
@@ -73,20 +73,33 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
 
   ctx.on('agent/pre-step', async ({ agent, signal }, next): Promise<PreStepDecision> => {
     const { session } = agent
+    // 只观察用户发起的顶层会话：子 agent 的子会话不触发复核、也不参与计数（设计文档「观察范围」）。
+    // 判别式是会话头部的 `origin`，不是「没有 parentSession」——用户 fork 出来的会话带 parentSession
+    // 却不带 `origin`，照样算顶层。
+    if (session.header.origin === 'subagent') return next()
     const observed = ctx.sessionProjections.stateOf(session, 'navigatorSteps')
     let triggerStep = triggerSteps.get(session)
     if (triggerStep === undefined) {
       // 第一次取得主会话：能力缺失在这里直接报错，当前 turn 以 error 收尾。检查必须落在第一次
       // pre-step——loop 自己对这些方法的调用都在 pre-step 之后，拖到第一个触发点就轮不到插件点名。
       assertSessionMethods(session)
-      // 首次观察还没有复核记录（04 才有），三项里只有锚点与当前步数。
+      // 首次观察时内存里没有触发点，才按三项取最大的推导式写入；记录项取读回入口的列表末条
+      // （最后一条复核记录里的触发步骤），没有记录时为 null。
       triggerStep = deriveNextTriggerStep({
-        lastReviewStep: null,
+        lastReviewStep: readReviewRecords(session.id).at(-1)?.triggerStep ?? null,
         anchorStep: observed?.anchorStep ?? null,
         currentSteps: observed?.steps ?? 0,
         everySteps: config.triggerEverySteps,
       })
       triggerSteps.set(session, triggerStep)
+    } else {
+      // 运行期：锚点只在新的真实用户消息落盘时移动，所以每个步边界只把内存触发点**提升**到
+      // 「锚点 + 间隔」——推导式的另外两项不在这里重算（设计文档「触发节奏」）。
+      const anchorStep = observed?.anchorStep
+      if (anchorStep !== null && anchorStep !== undefined) {
+        triggerStep = Math.max(triggerStep, resetTriggerStepAtUserMessage(anchorStep, config.triggerEverySteps))
+        triggerSteps.set(session, triggerStep)
+      }
     }
     if ((observed?.steps ?? 0) < triggerStep) return next()
     // 到点。节奏只按「触发点 + 间隔」推进：不重新计时、不顺延、也不补打。
