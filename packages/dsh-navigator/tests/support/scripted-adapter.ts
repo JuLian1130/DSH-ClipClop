@@ -3,8 +3,8 @@
  *
  * testkit 不导出 mock adapter（见设计文档的「测试决策」），所以本仓库自备：每次请求按顺序返回
  * 脚本里的一段文本或一次 tool-call，并记下收到的 `GenerateOptions`，供断言复核请求的构成。脚本
- * 用完一段后重复最后一段；一段也可以把这次请求**挂住不放行**，直到它的 `signal` 被中止（超时与
- * 闸门用例用）。
+ * 用完一段后重复最后一段；一段也可以把这次请求**挂住不放行**，直到它的 `signal` 被中止（超时
+ * 用例用），而 `beforeReply` 钩子则把回复停在「等用例放行」（07 的复核闸门用）。
  *
  * tool-call 那一段是多步驱动所依赖的：assistant 消息里带上 `tool-call` 时 turn 不在这一步收尾，loop
  * 继续走下一步。夹具注册 `SCRIPTED_TOOL_NAME` 这个**不调** `concludeTurn()` 的工具来执行它，所以脚本
@@ -43,6 +43,11 @@ export interface ScriptedAdapterHooks {
    * 在这里读 `deriveMessages()` 拿到的就是触发点那一刻的快照。
    */
   readonly onRequest?: RequestObserver
+  /**
+   * 回复前的等待钩子：返回 Promise 时适配器停在「已记下请求、尚未回复」，兑现之后才回复。
+   * 07 的复核闸门用它把复核停在「在途」那一刻；`hang` 只在 signal 被中止时结算，撑不住这一幕。
+   */
+  readonly beforeReply?: (options: GenerateOptions) => void | Promise<void>
   /** 声明的推理强度档位。继承推理强度的用例需要它——路由校验会拒绝未声明的档位。 */
   readonly reasoning?: LlmModelReasoningInfo
 }
@@ -88,6 +93,7 @@ export class ScriptedAdapter extends LlmAdapter {
     this.requests.push(options)
     // 观察与请求登记在同一次同步回调里，见 `ScriptedAdapterHooks.onRequest`。
     this.#hooks.onRequest?.(options)
+    await this.#hooks.beforeReply?.(options)
     const response = this.#script[Math.min(index, this.#script.length - 1)]
     if (response === undefined) throw new Error('scripted adapter has no response')
     if ('hang' in response) {

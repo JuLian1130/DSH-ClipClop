@@ -29,6 +29,10 @@
  *   （`meta.parentSession`，按 `Sessions.fork` 同款同时带 `seed` 与 `inheritedEventCount`）都走
  *   `ctx.agents.create()`，不新造第二条 loop。
  *
+ * 07 追加一项：**复核闸门**（`reviewGate`）——复核请求到达时同步通知用例，用例在回调里放行这次
+ * 复核或送一条真实用户消息，复核因此停在「已发起、未收场」那一刻。`followup` / `steer` 两条送法
+ * 不需要新能力：会话句柄已暴露 `agent`，用例直接调。
+ *
  * **驱动读数与投影注册时序**（02c 第 5 条，夹具约定、不是验收判据）：需要从第 1 步起计数的用例必须
  * **挂载早于第 1 步**；「先跑几步再挂」的用例第一次观察读到的投影状态是从日志折出的历史，其步数与
  * 「当时那一步」可能差一格，期望值按实测运行读数写。步边界闸门不读投影——它按会话事件里的
@@ -169,6 +173,12 @@ export interface NavigatorLoopOptions {
    * 发起这条请求的会话的 agent，与 `ObservedCall.session` 同源。
    */
   readonly observeRequest?: (request: GenerateOptions, agent: Agent) => void
+  /**
+   * 复核闸门（07 追加）：本插件的复核请求到达时**同步**调用，用例在回调里放行这次复核（`release`）
+   * 或送一条真实用户消息——两件事都在同一次同步调用里做完，复核因此停在「已发起、未收场」那一刻。
+   * 不放行时适配器不回复；复核自己的 signal 被中止时兜底放行，只为不永久挂住。只对复核请求生效。
+   */
+  readonly reviewGate?: (release: () => void) => void
   /**
    * 记录域的存储形态：给了它就挂真实存储栈并把 JSON 后端根落在它下面（同一条 loop 上二选一），
    * 缺省用共享桩。第 1、4、5、7、8、9 条要给这个值。
@@ -357,6 +367,23 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
         steps: ctx.sessionProjections.stateOf(owner.session, 'navigatorSteps')?.steps ?? 0,
       })
       options.observeRequest?.(request, owner.agent)
+    },
+    beforeReply: (request) => {
+      const gate = options.reviewGate
+      if (gate === undefined || !isReviewRequest(request)) return
+      return new Promise<void>((resolve) => {
+        /** 放行这次复核；重复调用无害，兜底的 abort 与用例的 release 共用一个出口。 */
+        const release = (): void => {
+          request.signal?.removeEventListener('abort', release)
+          resolve()
+        }
+        if (request.signal?.aborted === true) {
+          release()
+          return
+        }
+        request.signal?.addEventListener('abort', release, { once: true })
+        gate(release)
+      })
     },
   })
   ctx.llm.registerAdapter([route.provider], adapter)
