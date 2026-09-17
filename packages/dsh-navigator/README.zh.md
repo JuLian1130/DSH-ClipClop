@@ -10,4 +10,4 @@
 
 ## 复核记录
 
-复核生命周期记录（触发步骤、快照里每条消息的 id 列表、配置快照、结论、用量、耗时、失败原因、取消原因、状态）写入插件自有的 storage 域 `clipclop_review`，按 SessionId 键控。不使用 Session 事件，原因见 [ADR 0002](../../docs/adr/0002-review-records-outside-session-log.md)。
+复核生命周期记录（触发步骤、快照里每条消息的 id 列表、配置快照、结论、用量、耗时、失败原因、取消原因、状态）写入插件自有的 storage 域 `clipclop_review`，**一会话多条**（键 = 会话 id 的路径安全变换 + 触发步骤，读回按触发步骤升序）。不使用 Session 事件，原因见 [ADR 0002](../../docs/adr/0002-review-records-outside-session-log.md)。

@@ -84,6 +84,8 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 失败、超时或输出无法解析时只写诊断记录，不注入建议，也不追加用户可见说明。`failurePolicy: stop` 仅对等待模式生效，且复用与 `stop` 结论相同的停止机制，说明为复核失败。并行模式一律 `continue`，不做降级注入。
 
+**失败与取消的判别式**：两者都要写记录，靠两个信号分开。超时由 `deadline` 用带 `REVIEW_TIMEOUT_CODE` 的 `TimeoutReason` 中止融合信号，判别式是 `timeoutOf(signal, REVIEW_TIMEOUT_CODE)` 命中——命中算超时（失败）；未命中的 `aborted` 是任务结束 / 任务取消 / 插件释放（取消），结算不为它落失败记录，否则取消记录会被同键的迟到失败写入覆盖。输出无法解析走正常收场（`finish { kind: 'stop' }` + 文本过不了 `parseReviewOutcome`），算失败。**失败分类的输入有两条来源**：流的终止 `finish`（适配器抛错 / 输出无法解析 / 超时）与消费循环抛出的异常（中间件 / 下游抛错）——后者的机制见「测试决策」的「中间件失败保持抛出」，它照原样抛进插件的消费循环，必须由结算自己 catch 并落一条失败记录；适配器侧抛错则由 `adapterFailureChunk` 归一成终态块，插件侧 catch 不到。拿不到路由（会话还没有路由信息）也是失败之一，按同一张表落记录，但触发点必然已写入 `request/header`，构造不出可证伪的用例。
+
 ### 注入与停止机制
 
 - **建议注入**（`adjust`、并行 `stop`）统一用 `form: 'notice'` 的 user 消息（`packages/llm/llm/src/message.ts:90-94`），**必须带可读的 `summary`**，并用 `boundContextSummary()` 截断到 120 字符上限（`packages/llm/llm/src/message.ts:114-125`）：客户端把它渲染成默认折叠的「上下文注入」行，没有可读 summary 就降级成不透明内容（`packages/client/ui-chat/src/client/chat/ContextBody.tsx:533-574`）。消息正文固定包含触发步骤，且写在正文开头——摘要就是正文的截断（`boundContextSummary()` 作用于正文），折叠行里才看得到触发步骤；若投递时触发点已不属于当前自主执行区间，还必须写出「它来自上一段执行、可能已不适用」，由模型和用户自行判断。**过期的判据与落点**（只对并行建议）：判据是「从触发点算起、到建议送达为止，主会话收到过真实用户消息」——不论那条消息落在建议产生之前还是之后；它与「触发点已不属于当前执行区间」等价，因为真实用户消息就是执行区间的边界。落点分两段，都不依赖内存状态：（a）**产生时**——复核返回、准备注入之前，先比较锚点（最后一条真实用户消息记入会话日志时的已完成步数，由「计数口径」的投影折叠得到）与建议携带的触发步骤：锚点 ≥ 触发步骤就直接把标注写进正文再注入（相等意味着那条用户消息正好落在触发点上；新执行区间里触发的复核不会满足这一条，因为触发点至少比锚点晚一个间隔）；（b）**待投递期间**——观察到真实用户消息时（`agent/inbox/inserted`，按 `source.kind === 'user'` 过滤），遍历 `agent.inbox.nextStep` 与 `agent.inbox.nextTurn`（`packages/core/agent/src/runtime-types.ts:47-52`），把其中属于本插件（`source.kind === 'plugin'` 且 `source.plugin` 是本插件名，`packages/llm/llm/src/message.ts:104`）、还没带标注的消息用 `agent.inbox.replace(messageId, 改写后的消息)`（`runtime-types.ts:71-77`，返回该消息是否仍在 pending）补上标注。**不能用步数比较代替（b）**：真实用户消息在 `agent/inbox/inserted` 那一刻还没落盘（它作为 `user/message` 由某一步打开时的提交写出，`agent.ts:376`），锚点还是旧值，所以「锚点 > 触发步骤」在唯一还能改写正文的那个窗口里恒为假（G9 实测：插入事件时锚点 0、建议触发步骤 1、`replace` 返回 true、判据为假；投递之后锚点变 2，但 `replace` 已经返回 false）。建议正文在 `agent.inject()` 那一刻就随 splice 落进 durable inbox（`inbox.ts:229-238`），而送达时这一步的 pre-step 已经把它 claim 走（`agent.ts:245` 早于 `:250` 的 waterfall），所以补标注只能在 claim 之前做。等待模式的说明没有这个窗口——等待期间出现真实用户消息时本次复核直接作废，说明不会迟到。等待模式 `stop` 与 `failurePolicy: stop` 追加的**停止说明**走同一种消息形态（同样是 `form: 'notice'` 且必须带可读 `summary`），正文写明触发步骤与停止原因。
@@ -101,11 +103,17 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 ### 复核记录的存放位置
 
-复核生命周期记录**不使用 Session 事件**，写入插件自有的 storage 域。声明形状：`ctx.storageDomain.open({ name: 'clipclop_review', version: 1, layout: 'per-record', invalidRecords: 'backup-and-skip', tables: { … } })`，表按会话 id 键控；`per-record` 在 JSON 后端下是一条记录一个文档，记录的值需要 schema 校验（该能力用 zod）。取 `backup-and-skip` 而不是默认的「整个域打开失败」，是因为记录是诊断数据，一条坏记录不该让插件加载不了（该选项见 `packages/storage/storage-domain/src/spec.ts:67,129-132`）。取舍与证据见 [ADR 0002](adr/0002-review-records-outside-session-log.md)。
+复核生命周期记录**不使用 Session 事件**，写入插件自有的 storage 域。声明形状用裸对象字面量（不引入 `defineDomain`——它是运行期导出，会让产物多一个运行期 import，见「预构建产物的装载与启动审计」的运行期 import 清单）：`ctx.storageDomain.open({ name: 'clipclop_review', version: 1, layout: 'per-record', invalidRecords: 'backup-and-skip', tables: { … } })`。取 `backup-and-skip` 而不是默认的「整个域打开失败」，是因为记录是诊断数据，一条坏记录不该让插件加载不了（该选项见 `packages/storage/storage-domain/src/spec.ts:67,129-132`；它需要后端提供 `KvUnit.backupRecord`，缺这个能力的后端会退回整个域打开失败）。`per-record` 在 JSON 后端下是一条记录一个文档，记录的值需要 schema 校验（该能力用 zod）。取舍与证据见 [ADR 0002](adr/0002-review-records-outside-session-log.md)。
+
+**域在插件加载路径上 open**：`apply` 里 `open` 并持有句柄，由该 fiber 的释放回调 `close`。惰性打开会让「坏记录不挡加载」落空——坏记录正是在 `open` 的装载路径上被 `backup-and-skip` 跳过的。代价两句：`open` 会 `loadAll` 把整张记录表读进内存，而首版不做记录清理；`internal/update` 重启（改配置）会先 `close` 再重新 `apply`（→ 再 `open` → 再 `loadAll`），把整张表再读一次。
+
+**键的形状是一会话多条**：一次复核一条记录、一条记录一个 JSON 文档，所以同一会话的多次复核各占一个文档；表只有一张，键 = 会话 id 的路径安全变换 + `_` + 按次递增的十进制判别值（用触发步骤）。`SessionId` 是任意字符串、可能自带 `_`，所以读回时按键的**最右**一个 `_` 解析出会话 id 再**精确比较**，不做前缀匹配——前缀会让会话 `a` 读到会话 `a_1` 的记录。键还必须 path-safe：`per-record` 布局的 JSON 后端在写入时断言键匹配 `[a-zA-Z0-9_-]+`（不匹配直接抛错，见 `packages/storage/storage-json/src/per-record-unit.ts`），载入侧静默跳过不匹配的键；而会话 id 允许调用方自带（`session-controller` 的 `request.sessionId ?? session-<uuid>`，`SessionId()` 只是品牌转换），任意字符串会同时踩「写不进」与「读不回」。所以会话判别段取会话 id 的**确定性路径安全变换**：字母表落在 `[a-zA-Z0-9_-]` 内、不产出 `_`、**且必须单射**，首版用十六进制；「把危险字符换成 `-`」这类非单射写法会把两个不同会话混成一个键，与「不做前缀匹配」防的是同一类错。读回列表按触发步骤升序，「最后一条复核记录的触发步骤」取这个列表的末条。
+
+**读写入口与 writer 的关闭次序**：记录在插件自有存储域里，外部行为观察不到，所以本包导出两个函数——写入入口（接受完整参数、落一条记录、用唯一的存储域）与读回入口（按会话 id 返回该会话的记录列表，已按声明 schema 解析、按触发步骤升序）。两者都是**随包发布的对外表面**，不只是测试面。运行时写入不得依赖模块级可变量：`apply` 内部持有的 writer 才是运行时唯一入口，它绑到本实例的域与自己的 disposer。次序不变式两条：①writer 承诺「记录已落盘」时本实例的域仍开着；②fiber 释放（`internal/update` 重启、卸载、重挂载）时，取消结算要么在域关闭之前落盘，要么按「无法落盘」处理，绝不写进一个已关闭或已换代的句柄。
 
 记录内容为：触发步骤、快照里每条消息的 id 列表、配置快照、结论、用量、耗时、失败原因、取消原因、状态（各状态下的取值以规格的记录表为准）。不复制消息正文（按 id 从当前投影取回）；发给复核的快照不截断。
 
-「回放」的含义是按记录的触发步骤与消息 id 在会话当前的模型可见消息里定位：只保证命中的 id 与顺序，不比内容（存在保留 id、只改写内容的投影），被压缩替换掉的消息取不回；记录本身不进会话日志、也不参与会话检索。首版不做记录清理，代价是记录随会话长期累积，需要时手工删除。
+**回放**是插件导出的诊断用纯函数（运行时不被插件自己调用）：输入记录里的消息 id 列表与会话当前的模型可见消息，返回两个列表——命中的 id 序列、定位不到的 id 列表。它只保证命中的 id 与顺序，不比内容（存在保留 id、只改写内容的投影），被压缩替换掉的消息取不回；记录本身不进会话日志、也不参与会话检索。首版不做记录清理，代价是记录随会话长期累积，需要时手工删除。
 
 ### 省略辅助请求的 purpose
 
@@ -161,6 +169,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 - 「预构建产物的装载与启动审计」一节各条：装载入口与审计策略、`loadProfile` 一族不装树、裸名基点与 `internal` 的来源、从工作副本装载会假绿、真实 bin 的判据缺陷。依据是发布态 `0.1.6-alpha.1` 的源码与产物，没有探针。
 - G6 的子会话侧、G7 的恢复重折叠（同上表备注）。
+- 记录依赖的存储能力：`per-record` 布局一条记录一个文档、`invalidRecords: 'backup-and-skip'` 需要后端提供 `KvUnit.backupRecord`（缺这个能力的后端退回「整个域打开失败」）、JSON 后端 `per-record` 的键断言 `[a-zA-Z0-9_-]+`（写入时断言、载入侧静默跳过）。依据是 `packages/storage/storage-domain/src/index.ts`、`packages/storage/storage-json/src/per-record-unit.ts` 与同目录 `format.ts` 的源码，没有探针；票据 04 的第 9 条（坏记录备份）会在真实 JSON 后端上把它跑成运行时保证，届时按 G12 的先例移到「已实测通过」。
 - 用到这些结论的验收（02b）把「拿不到 `Loader.internal`」和「基点落到了本仓 store」变成夹具的硬失败前置，不把源码结论当运行时保证。
 
 ## 技术路线
