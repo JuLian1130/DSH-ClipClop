@@ -70,7 +70,7 @@ export interface ReviewRecordInput {
 export const REVIEW_DOMAIN_NAME = 'clipclop_review'
 
 /** 记录域的版本戳。 */
-export const REVIEW_DOMAIN_VERSION = 1
+const REVIEW_DOMAIN_VERSION = 1
 
 /** 记录表（域里唯一一张）。 */
 export const REVIEW_TABLE = 'records'
@@ -117,7 +117,7 @@ const reviewRecordSchema: z.ZodType<ReviewRecordInput> = z.object({
  * 会让本包产物多一个运行期 import（理由见设计文档「复核记录的存放位置」）。`open` 接受任何
  * `DomainSpec` 形状的对象，`invalidRecords` 也由域层直接从这个对象上读。
  */
-export const reviewDomainSpec = {
+const reviewDomainSpec = {
   name: REVIEW_DOMAIN_NAME,
   version: REVIEW_DOMAIN_VERSION,
   layout: 'per-record',
