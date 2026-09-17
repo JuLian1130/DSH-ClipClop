@@ -226,7 +226,7 @@ describe('结论与失败', () => {
     // 只收到一次复核请求：超时不重试。
     expect(fixture.reviews()).toHaveLength(1)
     expect(deadlineMs).toEqual([50])
-    // 这一步原样放行：两个回合都正常收尾。
+    // 这一步原样放行：两个 turn 都正常收尾。
     expect(fixture.turnEndReasons()).toEqual([{ kind: 'completed' }, { kind: 'completed' }])
     expect(assistantIds(fixture.agent)).toHaveLength(2)
     expect(pluginMessages(fixture.agent)).toEqual([])

@@ -2,14 +2,12 @@
  * dsh-navigator 的 Cordis 插件入口：具名导出 `name`、`inject`、`Config`、`apply`，由 profile 的
  * `cordis.patch.yml` 按 DSH 原生插件写法装载，不实现自己的配置文件加载器。
  *
- * 本票（03）兑现等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、
- * 按主会话继承的路由发一次辅助请求。结论为 `continue` 或复核失败时都不触碰会话（等待 ×
- * `failurePolicy: continue` 这一格）；输出的严格解析、记录、建议注入、停止说明、并行模式与失败表
- * 其余格由后续票据实现。
+ * 等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、按主会话继承的
+ * 路由发一次辅助请求；结论为 `continue` 或复核失败时都不触碰会话。输出的严格解析、记录、建议注入、
+ * 停止说明、并行模式与失败表其余格由后续票据实现。
  *
- * 主会话一律取自 pre-step 载荷的 `agent.session`——快照、路由与（后续票据的）结论应用都从它取，
- * 不经 `ctx.sessions.get`；`ctx.sessions.get` 的形状检查只服务于激活门禁（规格要求），本票之后
- * 插件里没有它的调用方。
+ * 主会话取自 pre-step 载荷的 `agent.session`，不经 `ctx.sessions.get`；`ctx.sessions.get` 的函数
+ * 检查仍保留，它只服务激活门禁。取法、理由与那条检查为何不删，见设计文档「范围与约束」。
  *
  * @module
  */
@@ -37,9 +35,7 @@ export const name = 'dsh-navigator'
  * 三个必需服务。任一缺失时 Cordis 让插件停在 PENDING 而不是带着缺能力运行——`inject` 没列的服务
  * 在取用时直接抛错，所以「服务缺失时不激活」由框架兑现，缺哪个服务由 DSH 启动审计报告。
  *
- * 监听 `agent/pre-step` 不需要额外服务：事件派发按作用域过滤，未打 scope 标记的监听器全收
- * （`packages/core/scope/src/index.ts` 的 `scopeTarget`）。同类先例是 `compaction-basic`
- * （它的 `inject` 不含 `agent`）。
+ * 监听 `agent/pre-step` 不需要额外服务——机制、源码依据与先例见设计文档「范围与约束」。
  */
 export const inject = ['llm', 'sessions', 'sessionProjections']
 
