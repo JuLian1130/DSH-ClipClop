@@ -184,7 +184,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - 只验证外部行为——触发时机、送进复核的消息、结论如何影响主会话、记录内容、停止与失败处理；不测内部计数器，也不断言函数调用次数。
 - 「结论断言用确定值」的前提是温度固定为 0；若将来改为继承主会话温度，就放宽为「结论属于确定集合」。确定性断言只对 mock LLM 成立。
 - testkit 提供 `mountAgentLoopTestDependencies` 与 `mountAgentLoopTestHarness`（另有 `createInboxStub`、`unsupportedInbox`，`packages/test-support/agent-loop-testkit/src/index.ts:21,67,87`），但不提供 pre-step 驱动，也不导出 mock adapter，所以脚本化 adapter 必须在本仓库自备。
-- **中间件失败保持抛出、不会变成终态 chunk**：`adapterStream` 只把适配器选择、调度、迭代器构造与迭代的失败收成一个终态 chunk，**中间件与下游消费者的失败照原样抛出**（`packages/llm/llm/src/index.ts:1009-1014`）。`streamWithRegistration` 是 `waterfall(this, 'llm/stream', options, () => this.adapterStream(...))`（同文件 `:1113-1122`），中间件先 `next()` 再抛错时适配器已经被调用；03 的用例只在 `next()` 之前抛错，所以那条请求到不了适配器，只能挂在 `llm/stream` 钩子上数次数。
+- **中间件失败保持抛出、不会变成终态 chunk**：`adapterStream` 只把适配器选择、调度、迭代器构造与迭代的失败收成一个终态 chunk，**中间件与下游消费者的失败照原样抛出**（`packages/llm/llm/src/index.ts:1009-1014`）。`streamWithRegistration` 是 `waterfall(this, 'llm/stream', options, () => this.adapterStream(...))`（同文件 `:1113-1122`），而回退返回的是尚未迭代的异步生成器——适配器要到迭代时才被调用。03 的用例在 `next()` 之前抛错，生成器从未被迭代，所以那条请求到不了适配器，只能挂在 `llm/stream` 钩子上数次数。
 - 参考 DSH 现有的 pre-step、辅助 LLM 与 guard 插件测试，但不修改 DSH 的测试与快照。
 
 ## 范围外

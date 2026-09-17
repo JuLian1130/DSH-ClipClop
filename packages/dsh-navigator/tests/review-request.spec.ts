@@ -171,6 +171,27 @@ describe('什么时候复核', () => {
     expect(fixture.reviews()).toHaveLength(1)
   })
 
+  it('首次观察把投影里的锚点算进触发点：锚点晚于区间下界时触发点随之推后', async () => {
+    const fixture = await mountNavigatorLoop({
+      config: { triggerEverySteps: 4 },
+      mountEagerly: false,
+      script: [OK, OK, OK, OK, OK, OK, { text: CONTINUE_VERDICT }],
+    })
+    // 先跑两步再挂插件：投影是 steps=2、anchorStep=1（第二条真实用户消息记在完成 1 步时）。
+    await fixture.send('第一步')
+    await fixture.send('第二步')
+    await fixture.mountPlugin()
+
+    // 触发点 = max(锚点 1、区间下界 floor(2/4)*4 = 0) + 4 = 5。锚点若没接上（null）触发点是 4，
+    // 第 5 步自己那次 pre-step（已完成 4 步）就会发复核——那时下面第一条断言变红。
+    await fixture.send('第三步')
+    await fixture.send('第四步')
+    await fixture.send('第五步')
+    expect(fixture.reviews()).toHaveLength(0)
+    await fixture.send('第六步')
+    expect(fixture.reviews()).toHaveLength(1)
+  })
+
   it('复核自己的请求不计数：没有它产生的助手消息，下一次触发点仍按主会话成功步数推进', async () => {
     const triggerPoints: number[] = []
     const fixture = await mountNavigatorLoop({
