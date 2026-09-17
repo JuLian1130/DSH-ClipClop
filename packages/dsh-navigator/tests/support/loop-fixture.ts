@@ -19,8 +19,10 @@
  *   `steps` 步里的最后一步。实际推进的步数用 `main.steps()` 读：脚本份额提前用完、或插件让 turn 提前
  *   收尾（后续票的 `stop` 结论）时它会小于 `steps`。
  * - **步边界暂停**：`drive` 停在「已完成 N 步、正要进第 N+1 步」之前并把控制权交回用例；此时该会话的
- *   请求数恰为 N。用例重载 / 改配置后再次 `drive`，就从第 N+1 步续跑。闸门的落位与理由见步进工具的
- *   注册处。脚本用纯文本收尾、turn 先结束而没有下一个步边界时，`drive` 按「会话转入空闲」返回。
+ *   请求数与已完成步数都恰为 N——请求数**不含**插件自建的复核请求（复核对同一会话发起、也走适配器，
+ *   装插件且到点复核已发生时用 `isReviewRequest` / `main.reviews()` 排除）。用例重载 / 改配置后再次
+ *   `drive`，就从第 N+1 步续跑。闸门的落位与理由见步进工具的注册处。脚本用纯文本收尾、turn 先结束
+ *   而没有下一个步边界时，`drive` 按「会话转入空闲」返回。
  * - **请求归属**：`ObservedCall.session` 是发起这条请求的会话。归属规则见 pre-step 监听器。
  * - **会话构造**：`createSubSession`（`meta.origin: 'subagent'`）与 `createForkSession`
  *   （`meta.parentSession`，按 `Sessions.fork` 同款同时带 `seed` 与 `inheritedEventCount`）都走
@@ -34,6 +36,7 @@
  * @module
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Context } from '@deepseek-ai/cordis'
 import type { Fiber } from '@deepseek-ai/cordis'
 import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
@@ -313,8 +316,8 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
   /** 已知会话：loop 自建的请求按 `request.sessionId` 归到它名下。 */
   const knownSessions = new Map<string, SessionOwner>()
   knownSessions.set(mainSession.id, { agent, session: mainSession })
-  /** 当前打开的 pre-step 归属窗口；没有 `sessionId` 的请求只在窗口内到达。 */
-  let preStepOwner: SessionOwner | undefined
+  /** 当前打开的 pre-step 归属窗口，按**异步链**记录：没有 `sessionId` 的请求只在某一步的窗口内到达。 */
+  const preStepWindow = new AsyncLocalStorage<SessionOwner>()
 
   /**
    * 一条请求属于哪条会话。loop 自建的请求带 `sessionId`；插件的复核请求不带，只在它那一步的 pre-step
@@ -331,10 +334,11 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
       }
       return known
     }
-    if (preStepOwner === undefined) {
+    const owner = preStepWindow.getStore()
+    if (owner === undefined) {
       throw new Error('mountNavigatorLoop: a request without sessionId arrived outside a pre-step window')
     }
-    return preStepOwner
+    return owner
   }
 
   const adapter = new ScriptedAdapter(options.script, {
@@ -353,19 +357,16 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
   ctx.llm.registerAdapter([route.provider], adapter)
 
   /**
-   * 归属窗口。夹具的 pre-step 监听器先于插件跑，所以在它被调用与 `next()` 返回之间到达的、没有
-   * `sessionId` 的请求（插件在这一步的 pre-step 里发出的复核请求）归这一步的会话；窗口在 `next()`
-   * 返回后立刻还原，窗口之外的请求不会有第二个归属来源。
+   * 归属窗口。夹具的 pre-step 监听器先于插件跑，所以在它被调用与 `next()` 返回之间、由这一步的
+   * **异步链**发出的、没有 `sessionId` 的请求（插件在这一步的 pre-step 里发出的复核请求）归这一步的
+   * 会话。按异步链记账（`AsyncLocalStorage`）而不是记「当前那一个窗口」：两条会话的 pre-step 交叠
+   * 时各自的请求仍跟着发出它的那条链走；记单槽的话，后开窗的那条会覆盖先开窗的（实测并发驱动主 /
+   * 子两条会话时，主会话的复核请求会整批记到子会话名下，`main.reviews()` 恒为 0——正是本票要防的假绿）。
    */
-  ctx.on('agent/pre-step', async ({ agent: subject }, next) => {
-    const previous = preStepOwner
-    preStepOwner = { agent: subject, session: subject.session }
-    try {
-      return await next()
-    } finally {
-      preStepOwner = previous
-    }
-  })
+  ctx.on('agent/pre-step', ({ agent: subject }, next) => preStepWindow.run(
+    { agent: subject, session: subject.session },
+    () => next(),
+  ))
 
   /**
    * 推进一条会话 `steps` 步并停在步边界。
