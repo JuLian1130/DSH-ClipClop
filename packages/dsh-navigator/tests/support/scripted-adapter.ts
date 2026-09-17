@@ -87,6 +87,7 @@ export class ScriptedAdapter extends LlmAdapter {
         }
         options.signal?.addEventListener('abort', fail, { once: true })
       })
+      // 上面那个 Promise 只 reject，类型上是 `never`；这个 return 只为把控制流收在这里。
       return
     }
     if ('error' in response) throw new Error(response.error)

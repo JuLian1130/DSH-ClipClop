@@ -3,9 +3,9 @@
  * `cordis.patch.yml` 按 DSH 原生插件写法装载，不实现自己的配置文件加载器。
  *
  * 本票（03）兑现等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、
- * 按主会话继承的路由发一次辅助请求，严格解析输出。结论为 `continue` 或复核失败时都不触碰会话
- * （等待 × `failurePolicy: continue` 这一格）。建议注入、停止说明、记录、并行模式与失败表其余格
- * 由后续票据实现。
+ * 按主会话继承的路由发一次辅助请求。结论为 `continue` 或复核失败时都不触碰会话（等待 ×
+ * `failurePolicy: continue` 这一格）；输出的严格解析、记录、建议注入、停止说明、并行模式与失败表
+ * 其余格由后续票据实现。
  *
  * 主会话一律取自 pre-step 载荷的 `agent.session`——快照、路由与（后续票据的）结论应用都从它取，
  * 不经 `ctx.sessions.get`；`ctx.sessions.get` 的形状检查只服务于激活门禁（规格要求），本票之后
@@ -26,7 +26,6 @@ import type {} from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection } from './projection.ts'
 import { composeReviewInstruction } from './review-prompt.ts'
 import { advanceTriggerStep, deriveNextTriggerStep } from './trigger.ts'
-import { parseReviewOutcome, type ReviewOutcome } from './verdict.ts'
 import type { Config } from './types.ts'
 
 export * from './types.ts'

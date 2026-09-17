@@ -235,6 +235,9 @@ describe('结论与失败', () => {
     expect(pluginMessages(fixture.agent)).toEqual([])
   })
 
+  // 三个输入在本票里的动作完全相同（放行、不留内容、不抛错）——结论为 `continue` 时也是这个动作。
+  // 因此这条用例钉的是「任何输入都不产生有害动作」：实现若在复核失败时抛错或写入消息就会红。
+  // 「输出无法解析」的严格判定与失败记录的写法归 04/09，本票不解析输出。
   it.each([
     { name: '复核请求报错', response: { error: 'boom' } },
     { name: '超时', response: { hang: true } },
