@@ -42,7 +42,7 @@ export type ReviewCancelReason = typeof REVIEW_CANCEL_REASONS[number]
  * 一条复核记录的完整形状：写入路径与三条取消路径共用，存储的 `record` 与它同形，
  * 域声明的 zod schema 就按它写（形状的出处是规格「记录与诊断」的记录表）。
  *
- * 逐状态不变式：完成态 `verdict` 与 `usage` 必有、两个原因缺省；失败态 `failureReason` 必有、
+ * 逐状态不变式：完成态 `verdict` 必有、`usage` 在适配器给出 usage 块时有值、两个原因缺省；失败态 `failureReason` 必有、
  * `verdict` 缺省；取消态 `cancelReason` 必有、`verdict` 与 `failureReason` 缺省。
  */
 export interface ReviewRecordInput {
@@ -58,7 +58,7 @@ export interface ReviewRecordInput {
   readonly messageIds?: readonly string[]
   /** 复核结论；完成态必有。 */
   readonly verdict?: ReviewOutcome
-  /** 复核用量；完成态必有。 */
+  /** 复核用量；完成态在适配器给出 usage 块时有值，否则整个字段缺省。 */
   readonly usage?: TokenUsage
   /** 失败原因（自由文本）；失败态必有。 */
   readonly failureReason?: string
