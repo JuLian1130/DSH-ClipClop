@@ -46,11 +46,10 @@ export interface NavigatorLoop {
   /** 送一条真实用户消息，并等本轮收尾。 */
   send(text: string): Promise<void>
   /**
-   * 把插件挂进这个 loop。缺省在 `mountNavigatorLoop` 返回前就已挂好；需要「会话先跑几步、
-   * 插件再被观察」的用例把 `mountEagerly` 置 false，在自己想要的时刻调用它。
-   * @param config - 插件配置；缺省用夹具选项里的 `config`。
+   * 把插件挂进这个 loop，配置取夹具选项里的 `config`。缺省在 `mountNavigatorLoop` 返回前就已挂好；
+   * 需要「会话先跑几步、插件再被观察」的用例把 `mountEagerly` 置 false，在自己想要的时刻调用它。
    */
-  mountPlugin(config?: Config): Promise<void>
+  mountPlugin(): Promise<void>
 }
 
 /** 夹具挂载参数。 */
@@ -110,8 +109,8 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     if (subject === session) events.push(event)
   })
 
-  const mountPlugin = async (config: Config = options.config ?? {}): Promise<void> => {
-    await ctx.plugin(navigator, config)
+  const mountPlugin = async (): Promise<void> => {
+    await ctx.plugin(navigator, options.config ?? {})
   }
   if (options.mountEagerly !== false) await mountPlugin()
 
