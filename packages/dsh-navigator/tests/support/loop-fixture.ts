@@ -119,7 +119,7 @@ export interface NavigatorLoop {
   events(): readonly SessionEvent[]
   /** 主会话已落盘的 `turn/end` 原因，按顺序。 */
   turnEndReasons(): readonly TurnEndReason[]
-  /** 送一条真实用户消息给主会话，并等本轮收尾。 */
+  /** 送一条真实用户消息给主会话，并等本轮收尾；会话停在步边界时不可用（硬失败，改用 `main.drive`）。 */
   send(text: string): Promise<void>
   /**
    * 把插件挂进这个 loop，配置取夹具选项里的 `config`。缺省在 `mountNavigatorLoop` 返回前就已挂好；
@@ -433,6 +433,12 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
       event => event.type === 'turn/end' ? [event.data.reason] : [],
     ),
     async send(text) {
+      // 暂停点上这一步被闸门挂着，`whenIdle()` 等的是一个不会自己结束的 turn——送出去的消息照旧
+      // 进队列，但 Promise 静默不 settle，用例只会看到超时。要「送一条真实用户消息再继续走」用
+      // `main.drive(steps, text)`。
+      if (boundaryOf(agent.session).blocked) {
+        throw new Error('mountNavigatorLoop: send() cannot be used while paused at a step boundary; use drive(steps, text)')
+      }
       agent.followup(userMessage(text))
       await agent.whenIdle()
     },
