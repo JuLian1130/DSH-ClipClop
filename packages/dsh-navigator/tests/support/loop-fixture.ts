@@ -42,6 +42,8 @@ export interface ObservedCall {
   readonly request: GenerateOptions
   /** 触发点那一刻主会话对模型可见的全部消息 id，按原顺序。 */
   readonly snapshotIds: readonly string[]
+  /** 收到请求那一刻本会话已完成的步数（投影读数）——触发点用例拿它当已知的触发点。 */
+  readonly steps: number
 }
 
 /** 集成夹具的句柄。 */
@@ -156,7 +158,11 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
   const adapter = new ScriptedAdapter(options.script, {
     ...options.reasoning === undefined ? {} : { reasoning: options.reasoning },
     onRequest: (request) => {
-      calls.push({ request, snapshotIds: agent.session.deriveMessages().map(message => message.id) })
+      calls.push({
+        request,
+        snapshotIds: agent.session.deriveMessages().map(message => message.id),
+        steps: ctx.sessionProjections.stateOf(agent.session, 'navigatorSteps')?.steps ?? 0,
+      })
       options.observeRequest?.(request, agent)
     },
   })

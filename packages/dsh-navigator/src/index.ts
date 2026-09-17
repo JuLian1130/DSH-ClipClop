@@ -3,8 +3,9 @@
  * `cordis.patch.yml` 按 DSH 原生插件写法装载，不实现自己的配置文件加载器。
  *
  * 等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、按主会话继承的
- * 路由发一次辅助请求；结论为 `continue` 或复核失败时都不触碰会话。输出的严格解析、建议注入、
- * 停止说明、并行模式与失败表其余格由后续票据实现。
+ * 路由发一次辅助请求，并把收场结算成一条记录（装配输出、严格解析取结论、收用量与耗时，按终止原因
+ * 分完成 / 失败）；结论为 `continue` 或复核失败时都不触碰会话。建议注入、停止说明、并行模式与失败表
+ * 其余格由后续票据实现。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -17,18 +18,20 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { deadline } from '@deepseek-ai/dsh-timeout'
+import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 // 显式引入服务包，让本文件的 `ctx.llm` / `ctx.sessions` 类型不依赖 projection.ts 的偶然 import 链；
 // 删掉这两行今天也能通过编译，保留是为了入口的类型自足（DSH 自身的插件入口也这么写）。
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection } from './projection.ts'
-import { openReviewStore } from './records.ts'
+import { openReviewStore, type ReviewWriter } from './records.ts'
 import { composeReviewInstruction } from './review-prompt.ts'
 import { advanceTriggerStep, deriveNextTriggerStep } from './trigger.ts'
 import type { Config } from './types.ts'
+import { parseReviewOutcome } from './verdict.ts'
 
 export * from './types.ts'
 export * from './records.ts'
@@ -61,7 +64,8 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     throw new Error('dsh-navigator requires ctx.sessions.get to be a function')
   }
   ctx.sessionProjections.register(navigatorStepsProjection)
-  await openReviewStore(ctx)
+  // 运行时写入的唯一入口：绑到本实例的域与它自己的 disposer（设计文档「读写入口与 writer 的关闭次序」）。
+  const writeReviewRecord = await openReviewStore(ctx)
 
   /** 每个主会话的下一次触发点（已完成步数）。按 `Session` 弱引用持有，重新观察时重新推导。 */
   const triggerSteps = new WeakMap<Session, number>()
@@ -86,7 +90,7 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     if ((observed?.steps ?? 0) < triggerStep) return next()
     // 到点。节奏只按「触发点 + 间隔」推进：不重新计时、不顺延、也不补打。
     triggerSteps.set(session, advanceTriggerStep(triggerStep, config.triggerEverySteps))
-    await reviewOnce(ctx, config, session, signal)
+    await reviewOnce({ ctx, config, session, upstream: signal, triggerStep, writeReviewRecord })
     return next()
   })
 }
@@ -106,25 +110,58 @@ function assertSessionMethods(session: Session): void {
   }
 }
 
+/** `reviewOnce` 的全部输入。 */
+interface ReviewAttempt {
+  readonly ctx: Context
+  readonly config: Required<Config>
+  readonly session: Session
+  /** 本步的取消信号，与复核超时融合。 */
+  readonly upstream: AbortSignal
+  /** 这次复核的触发步骤，记录里按它归位（也是键的判别值）。 */
+  readonly triggerStep: number
+  /** 落一条记录：本实例的 writer。 */
+  readonly writeReviewRecord: ReviewWriter
+}
+
+/** 输出过不了严格解析时记进失败原因的那一条。 */
+const OUTPUT_UNPARSEABLE = '复核输出无法解析'
+
+/** 「拿不到路由」的防御分支记进失败原因的那一条。 */
+const NO_ROUTE = '拿不到会话路由'
+
 /**
- * 发起一次复核请求。请求形态按设计文档「辅助请求的消息构成」「模型配置继承粒度」，超时按「技术路线」。
+ * 发起一次复核请求，并把这次复核的收场结算成一条记录。请求形态按设计文档「辅助请求的消息构成」
+ * 「模型配置继承粒度」，超时按「技术路线」。
  *
- * 本票不读复核的输出，也不按结论分支：`continue`、`adjust`/`stop` 与复核失败（超时、输出无法
- * 解析、传输层抛错、拿不到路由）在这一步都只等于「不触碰会话」——三类结论的干预归 06、记录归 04。
- * @param ctx - 提供 `ctx.llm` 的 context。
- * @param config - 触发那一刻的配置。
- * @param session - 主会话：快照与路由的来源。
- * @param upstream - 本步的取消信号，与复核超时融合。
+ * **失败分类的输入有两条来源，读法不同**（机制见设计文档 `失败处理`）：适配器侧的抛错与「挂住到
+ * 超时」都被 `adapterFailureChunk` 归一成终态块，`for await` 不会抛；中间件 / 下游的抛错落在
+ * `ctx.llm.stream(...)` 这个调用表达式上、根本到不了迭代，只有它走异常这一支。两类都要收，
+ * 且超时按 `timeoutOf` 判在**复核自己的 signal** 上：只看异常收场，超时格会落进「不是失败」；
+ * 只按 `signal.aborted` 收场，任务结束 / 任务取消的迟到失败又会盖掉 10、11 的取消记录。
+ *
+ * 三种状态按规格的记录表逐格取值；一次复核最多落一条记录。
+ * @param attempt - 本次复核的全部输入。
  */
-async function reviewOnce(
-  ctx: Context,
-  config: Required<Config>,
-  session: Session,
-  upstream: AbortSignal,
-): Promise<void> {
+async function reviewOnce(attempt: ReviewAttempt): Promise<void> {
+  const { ctx, config, session, upstream, triggerStep, writeReviewRecord } = attempt
+  const startedAt = Date.now()
+  const snapshot = session.deriveMessages()
+  const base = { triggerStep, config, messageIds: snapshot.map(message => message.id) }
+  const fail = async (failureReason: string): Promise<void> => {
+    await writeReviewRecord(session.id, {
+      ...base,
+      durationMs: Date.now() - startedAt,
+      status: 'failed',
+      failureReason,
+    })
+  }
+
   // 「拿不到路由」（会话还没有路由信息）是防御分支：等待模式的触发点必然已写入 request/header。
   const route = session.requestHeader()?.config
-  if (route === undefined) return
+  if (route === undefined) {
+    await fail(NO_ROUTE)
+    return
+  }
 
   const instruction = createUserMessage({
     content: [{ type: 'text', text: composeReviewInstruction(config.prompt) }],
@@ -132,21 +169,61 @@ async function reviewOnce(
   })
 
   const timeout = deadline(upstream, config.reviewTimeoutMs, REVIEW_TIMEOUT_CODE)
+  const assembler = new BlockAssembler()
+  let thrown: unknown
   try {
-    for await (const _chunk of ctx.llm.stream({
+    for await (const chunk of ctx.llm.stream({
       provider: route.provider,
       model: route.model,
       ...route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort },
       temperature: 0,
       maxTokens: config.maxOutputTokens,
-      messages: [...session.deriveMessages(), instruction],
+      messages: [...snapshot, instruction],
       signal: timeout.signal,
     })) {
-      // 消费整条流就是「等这次复核收场」；内容本票不读，超时由 `deadline` 中止 signal 收场。
+      assembler.push(chunk)
     }
-  } catch {
-    // 传输层抛错（中间件、嵌套调用）按复核失败处理，不打断主会话。
+  } catch (error) {
+    // 中间件 / 下游抛错：在 `ctx.llm.stream(...)` 调用点就抛出，必须由结算自己收。
+    thrown = error
   } finally {
     timeout[Symbol.dispose]()
   }
+
+  if (thrown !== undefined) {
+    await fail(thrown instanceof Error ? thrown.message : String(thrown))
+    return
+  }
+  const finish = assembler.finish
+  if (finish.kind === 'aborted') {
+    // 超时才算失败；其余中止（任务结束 / 任务取消 / 插件释放）的记录归 10、11，本票不为它落失败记录，
+    // 否则它们写下的取消记录会被同键的迟到失败写入覆盖。
+    if (timeoutOf(timeout.signal, REVIEW_TIMEOUT_CODE) !== undefined) await fail(finish.failure.message)
+    return
+  }
+  if (finish.kind === 'error') {
+    await fail(finish.failure.message)
+    return
+  }
+  const outcome = parseReviewOutcome(textOf(assembler.blocks()))
+  if (outcome === null) {
+    await fail(OUTPUT_UNPARSEABLE)
+    return
+  }
+  await writeReviewRecord(session.id, {
+    ...base,
+    durationMs: Date.now() - startedAt,
+    status: 'completed',
+    verdict: outcome,
+    ...assembler.usage === undefined ? {} : { usage: assembler.usage },
+  })
+}
+
+/**
+ * 把装配好的内容块里的正文拼起来。
+ * @param blocks - `BlockAssembler.blocks()` 的结果。
+ * @returns 全部文本块的正文，按块顺序。
+ */
+function textOf(blocks: readonly ContentBlock[]): string {
+  return blocks.flatMap(block => block.type === 'text' ? [block.text] : []).join('')
 }

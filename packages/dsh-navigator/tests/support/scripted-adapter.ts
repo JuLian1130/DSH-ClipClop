@@ -14,6 +14,7 @@ import type {
   LlmModelReasoningInfo,
   LlmResolvedModelInfo,
   StreamChunk,
+  TokenUsage,
   UserMessage,
 } from '@deepseek-ai/dsh-llm'
 
@@ -39,6 +40,9 @@ export interface ScriptedAdapterHooks {
 
 /** 一段合法的复核结论，作为脚本的默认回复。 */
 export const CONTINUE_VERDICT = '{"verdict":"continue","reason":"看起来正常","recommendation":"无"}'
+
+/** 每次正常回复附带的用量：真实适配器都会给一个 `usage` 块，完成态记录的「用量 有值」靠它。 */
+export const SCRIPTED_USAGE: TokenUsage = { inputTokens: 11, outputTokens: 7 }
 
 /** 脚本化适配器：用完脚本后重复最后一段。 */
 export class ScriptedAdapter extends LlmAdapter {
@@ -94,6 +98,7 @@ export class ScriptedAdapter extends LlmAdapter {
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: response.text }
     yield { type: 'block-end', index: 0, block: { type: 'text', text: response.text } }
+    yield { type: 'usage', usage: SCRIPTED_USAGE }
     yield { type: 'finish', reason: { kind: 'stop' } }
   }
 }
