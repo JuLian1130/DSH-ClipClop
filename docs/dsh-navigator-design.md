@@ -156,8 +156,9 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 | G10 | `whenIdle()` 与「复核请求收场」的先后不可依赖；任务取消时 `whenIdle()` 兑现时 `signal.aborted` 已经是 true | 探针 `g10-whenidle-race.mjs`：abort 后 0ms 结算 → 复核先到；30ms 结算 → `whenIdle()` 先到且 `signal.aborted === true` |
 | G11 | 没把服务列进 `inject` 时取它**不是** undefined，而是直接抛错 | 探针 `g11-inject-access.mjs`：`cannot get property "sessionProjections" without inject` |
 | G12 | 未打 scope 标记的监听器收得到 agent 作用域事件，所以监听 `agent/pre-step` 不需要额外服务、`inject` 不必含 `agent` | 机制侧只做过源码核对（`packages/core/scope/src/index.ts` 的 `scopeTarget` 在 `tag === undefined` 时返回 true）；03 的集成夹具把它变成运行时保证：插件（`inject = ['llm','sessions','sessionProjections']`）挂进真实 agent loop 后，把缺失方法只遮蔽在 pre-step 载荷的 `agent.session` 上，插件在**第一次 pre-step** 就抛出并让 `turn/end` 走 `error`（`tests/review-request.spec.ts`）；未打标记的监听器若被过滤掉，这条与其余全部复核用例一起变红 |
+| G13 | 记录依赖的存储能力：`per-record` 布局一条记录一个文档、`invalidRecords: 'backup-and-skip'` 需要后端提供 `KvUnit.backupRecord`（缺这个能力的后端退回「整个域打开失败」）、JSON 后端 `per-record` 的键断言 `[a-zA-Z0-9_-]+`（写入时断言、载入侧静默跳过）、**per-record 文档契约**（一条记录一个带版本戳的信封 `{ version, record }`，畸形或版本戳不在接受集合内的文档在读路径上被静默读作 absent、**到不了 `backupRecord`**，所以 `backup-and-skip` 实际只备份「版本戳合法、`record` 不过域 schema」那一种） | 机制侧只做过源码核对（`packages/storage/storage-domain/src/index.ts`、`packages/storage/storage-json/src/per-record-unit.ts` 与同目录 `format.ts`）；04 的集成夹具把它跑成运行时保证：真实 JSON 后端根下先落一条好记录、从它的信封取版本戳，再往同一张表塞一条「版本戳合法、`record` 不过域 schema」的文档——重挂载后插件仍 ACTIVE、坏文档被移成 `<key>.json.bak.<stamp>`、按会话 id 读回只剩那条好记录（`packages/dsh-navigator/tests/records.spec.ts`）；同文件另两条用例覆盖同一个根下重挂载仍读得回、`update` 重启后记录仍在。域若改回惰性 open，或坏记录走静默丢弃那条路径，这两条一起红 |
 
-可重跑性：G6、G7、G8、G9、G10、G11 的探针都在 `.scratch/probes/` 下，可以直接用 `node` 重跑。G1、G2 的探针没落成文件，G5 需要第三方网关，这三条无法在仓库内重跑——表里那一次观测就是它们的全部证据。G12 的证据不是一次性探针，而是 03 的集成测试（`packages/dsh-navigator/tests/review-request.spec.ts`），随门禁的 `vitest run` 一起重跑。
+可重跑性：G6、G7、G8、G9、G10、G11 的探针都在 `.scratch/probes/` 下，可以直接用 `node` 重跑。G1、G2 的探针没落成文件，G5 需要第三方网关，这三条无法在仓库内重跑——表里那一次观测就是它们的全部证据。G12 的证据不是一次性探针，而是 03 的集成测试（`packages/dsh-navigator/tests/review-request.spec.ts`）；G13 的也一样，是 04 的集成测试（`packages/dsh-navigator/tests/records.spec.ts`），两者随门禁的 `vitest run` 一起重跑。
 
 ### 仍未验证
 
@@ -169,7 +170,6 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 - 「预构建产物的装载与启动审计」一节各条：装载入口与审计策略、`loadProfile` 一族不装树、裸名基点与 `internal` 的来源、从工作副本装载会假绿、真实 bin 的判据缺陷。依据是发布态 `0.1.6-alpha.1` 的源码与产物，没有探针。
 - G6 的子会话侧、G7 的恢复重折叠（同上表备注）。
-- 记录依赖的存储能力：`per-record` 布局一条记录一个文档、`invalidRecords: 'backup-and-skip'` 需要后端提供 `KvUnit.backupRecord`（缺这个能力的后端退回「整个域打开失败」）、JSON 后端 `per-record` 的键断言 `[a-zA-Z0-9_-]+`（写入时断言、载入侧静默跳过）、**per-record 文档的契约**——一条记录一个带版本戳的信封 `{ version, record }`，畸形或版本戳不在接受集合内的文档在读路径上被静默读作 absent，**到不了 `backupRecord`**，于是 `backup-and-skip` 实际只备份「版本戳合法、`record` 不过域 schema」那一种。依据是 `packages/storage/storage-domain/src/index.ts`、`packages/storage/storage-json/src/per-record-unit.ts` 与同目录 `format.ts` 的源码，没有探针；票据 04 的第 9 条（坏记录备份）会在真实 JSON 后端上把它跑成运行时保证，届时按 G12 的先例移到「已实测通过」。
 - 用到这些结论的验收（02b）把「拿不到 `Loader.internal`」和「基点落到了本仓 store」变成夹具的硬失败前置，不把源码结论当运行时保证。
 
 ## 技术路线

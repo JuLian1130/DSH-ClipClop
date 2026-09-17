@@ -17,6 +17,7 @@ import {
   REVIEW_TABLE,
   REVIEW_TIMEOUT_CODE,
   readReviewRecords,
+  replayReviewRecord,
   reviewRecordKey,
   writeReviewRecord,
   type Config,
@@ -281,6 +282,24 @@ describe('复核结算：配置快照与记录的边界', () => {
     expect(after?.messages).toEqual(before?.messages)
     expect(after?.agents).toEqual(before?.agents)
     expect(fixture.ctx.agents.roots()).toHaveLength(1)
+  })
+
+  it('回放：命中的 id 序列与记录一致，第二个列表能证伪', async () => {
+    const { fixture, sessionId } = await settledReview()
+    const [record] = readReviewRecords(sessionId)
+    // 两样输入都不手搓：id 列表取自那次真实复核落下的完成态记录，消息取自同一 loop 的会话。
+    const messageIds = [...(record?.messageIds ?? [])]
+    expect(messageIds.length).toBeGreaterThan(0)
+
+    const replayed = replayReviewRecord(messageIds, fixture.agent.session.deriveMessages())
+    expect(replayed.hit).toEqual(messageIds)
+    expect(replayed.missing).toEqual([])
+
+    // 第二个列表要能证伪：只按原 id 列表定位时它恒为 `[]`，追加一个当前消息里不存在的 id 才测得出来。
+    const ghost = 'ghost-message-id'
+    const withGhost = replayReviewRecord([...messageIds, ghost], fixture.agent.session.deriveMessages())
+    expect(withGhost.hit).toEqual(messageIds)
+    expect(withGhost.missing).toEqual([ghost])
   })
 
   it('原始文档里不存事件序号、也不复制消息正文', async () => {

@@ -35,6 +35,7 @@ import { parseReviewOutcome } from './verdict.ts'
 
 export * from './types.ts'
 export * from './records.ts'
+export * from './replay.ts'
 
 /** Cordis 插件名。08 的过期改写按 `source.plugin` 过滤本插件消息时复用这个值。 */
 export const name = 'dsh-navigator'
