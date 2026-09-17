@@ -98,6 +98,8 @@ export interface NavigatorSession extends SessionOwner {
   events(): readonly SessionEvent[]
   /** 该会话按计数口径数出的已完成步数（不带 `interrupted` 的 `assistant/message` 条数）。 */
   steps(): number
+  /** 该会话已落盘的 `turn/end` 原因，按顺序（与 loop 级那个同源，只是按会话取）。 */
+  turnEndReasons(): readonly TurnEndReason[]
   /**
    * 从当前步边界再推进 `steps` 步，然后停在下一个步边界并交回控制权；`text` 给出时先送一条真实
    * 用户消息。期间不再出现别的真实用户消息。`text` 缺省时会话必须已经停在步边界上，否则报错；
@@ -398,6 +400,9 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
       reviews: () => calls.filter(call => call.session.id === session.id && isReviewRequest(call.request)),
       events: () => eventsOf(session),
       steps: () => completedSteps(session),
+      turnEndReasons: () => eventsOf(session).flatMap(
+        event => event.type === 'turn/end' ? [event.data.reason] : [],
+      ),
       drive: (steps, text) => drive(target, steps, text),
     }
   }

@@ -137,6 +137,10 @@ export function userMessage(text: string): UserMessage {
 
 /**
  * 造一条本插件注入的说明或建议消息（`form: 'notice'`，必须带 summary）。
+ *
+ * 这是**测试侧脚手架**，不是插件要照着写的形状：真实追加路径上的 `summary` 由实现从同一个正文
+ * 派生（`boundContextSummary`），不接受调用方另给一份。本用例只用它造一条已入队的消息，不复用它
+ * 定义 notice 的构造口径；本票落地时若两处合流，把它收成「只给正文、内部算 summary」的单一入口。
  * @param text - 正文。
  * @param summary - 折叠行上的一行说明。
  * @returns `source.kind === 'plugin'` 的用户消息。
