@@ -4,9 +4,15 @@
  *
  * 等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、按主会话继承的
  * 路由发一次辅助请求，并把收场结算成一条记录（装配输出、严格解析取结论、收用量与耗时，按终止原因
- * 分完成 / 失败）。复核的结论交回调用点，由监听器按 `verdict` 分派：完成态里 `adjust` 把复核建议
- * 追加进本步的 `decision.messages`，`stop` 先追加停止说明再取消当前 turn；失败 / 取消（没有结论）
- * 与 `continue` 都不触碰会话。并行模式与失败表其余格由后续票据实现。
+ * 分完成 / 失败）。复核的结论交回调用点，由监听器按 `verdict` 分派：`adjust` 把复核建议追加进本步
+ * 的 `decision.messages`，`stop` 先追加停止说明再取消当前 turn；失败 / 取消（没有结论）与 `continue`
+ * 都不触碰会话。并行模式与失败表其余格由后续票据实现。
+ *
+ * **等待期作废**（07）：等待复核期间到达的真实用户消息让本次复核作废——不注入、不追加停止说明、
+ * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）。作废只有一条判定：
+ * 消息在复核在途时到达，由唯一的 `agent/inbox/inserted` 监听器在送消息那一次同步调用里置位；
+ * 消息在触发点那次 pre-step 的 claim 之前就已入队，则由应用点检查本步被 claim 的消息逮住。作废时
+ * 只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废判定之后。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -20,7 +26,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, TokenUsage, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
 // 显式引入服务包，让本文件的 `ctx.llm` / `ctx.sessions` 类型不依赖 projection.ts 的偶然 import 链；
@@ -71,8 +77,19 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
 
   /** 每个主会话的下一次触发点（已完成步数）。按 `Session` 弱引用持有，重新观察时重新推导。 */
   const triggerSteps = new WeakMap<Session, number>()
+  /** 每个主会话当前在途的复核：值是这次复核的作废标记。每次复核新建一个单元格，逐次覆盖。 */
+  const inFlightReviews = new WeakMap<Session, InFlightReview>()
 
-  ctx.on('agent/pre-step', async ({ agent, signal }, next): Promise<PreStepDecision> => {
+  // 唯一的 `agent/inbox/inserted` 监听器（08 的并行建议过期改写在这里追加，不另注册一份）。
+  // 判别式只认真实用户消息，不放宽成「任何插入事件都作废」；只有**在途**复核会被置位——消息在
+  // 触发点那次复核发起之前入队时，这里没有可作废的对象，那一格由应用点检查 claim 批次认领。
+  ctx.on('agent/inbox/inserted', ({ agent, message }) => {
+    if (!isRealUserMessage(message)) return
+    const review = inFlightReviews.get(agent.session)
+    if (review !== undefined) review.invalidated = true
+  })
+
+  ctx.on('agent/pre-step', async ({ agent, messages, signal }, next): Promise<PreStepDecision> => {
     const { session } = agent
     // 只观察用户发起的顶层会话：子 agent 的子会话不触发复核、也不参与计数（设计文档「观察范围」）。
     // 判别式是会话头部的 `origin`，不是「没有 parentSession」——用户 fork 出来的会话带 parentSession
@@ -108,16 +125,64 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     // 先取回内层决策，再按结论追加通知：waterfall 的内层默认返回「本步被 claim 的消息 +
     // runtime-context 消息」，自造 `{ kind: 'enter', messages }` 会静默丢掉后者。
     const decision = await next()
-    const outcome = await reviewOnce({ ctx, config, session, upstream: signal, triggerStep, writeReviewRecord })
-    // 完成态才应用结论：失败 / 取消（outcome 为 null）与 `continue` 都原样返回内层决策。
+    // 复核在途期间到达的真实用户消息由插入事件监听器在那一次同步调用里置位。先登记在途对象，
+    // 让监听器找得到它；收场之后注销。
+    const review: InFlightReview = { invalidated: false }
+    inFlightReviews.set(session, review)
+    let settlement: ReviewSettlement | null
+    try {
+      settlement = await reviewOnce({ ctx, config, session, upstream: signal, triggerStep, writeReviewRecord })
+    } finally {
+      inFlightReviews.delete(session)
+    }
+    // 作废只有一条判定语义，两处信号合成它：在途置位，或本步被 claim 的消息里有真实用户消息。
+    // 判定落在收场之后；09 的失败策略停止与它共用这一条（作废优先、不停止）。
+    const invalidated = review.invalidated || messages.some(isRealUserMessage)
+    // 失败 / 取消（没有结论）不触碰会话。
+    if (settlement === null) return decision
+    // 完成态写入挪到作废判定之后：作废时只落那条取消记录，不落完成态——先落完成态再同键覆盖正是
+    // 04 要避免的。只有会产生干预的结论才因作废而改写记录：`continue` 什么也不做，照旧落完成态
+    // （04 的完成态三态格与 06 的用例建在这条上）。
+    if (invalidated && settlement.outcome.verdict !== 'continue') {
+      // 也不调用 `agent.cancel`——它默认清空待处理队列，会把用户刚发的话一起丢掉。
+      await writeReviewRecord(session.id, {
+        ...settlement.base,
+        durationMs: settlement.durationMs,
+        status: 'cancelled',
+        cancelReason: 'invalidated',
+      })
+      return decision
+    }
+    await writeReviewRecord(session.id, {
+      ...settlement.base,
+      durationMs: settlement.durationMs,
+      status: 'completed',
+      verdict: settlement.outcome,
+      ...settlement.usage === undefined ? {} : { usage: settlement.usage },
+    })
     // `reject` 决策意味着这一步不打开、不会有模型请求，通知无处落地，所以只在 `enter` 上追加。
-    if (outcome?.verdict === 'adjust' && decision.kind === 'enter') {
-      decision.messages.push(noticeMessage(composeAdjustNotice(triggerStep, outcome.recommendation)))
-    } else if (outcome?.verdict === 'stop') {
-      stopWithNotice(agent, triggerStep, outcome.reason)
+    if (settlement.outcome.verdict === 'adjust' && decision.kind === 'enter') {
+      decision.messages.push(noticeMessage(composeAdjustNotice(triggerStep, settlement.outcome.recommendation)))
+    } else if (settlement.outcome.verdict === 'stop') {
+      stopWithNotice(agent, triggerStep, settlement.outcome.reason)
     }
     return decision
   })
+}
+
+/** 在途复核的作废标记：插入事件监听器置位，应用点在收场之后读它。 */
+interface InFlightReview {
+  invalidated: boolean
+}
+
+/**
+ * 真实用户消息的判别式（规格「什么算真实用户消息」）：`role === 'user' && source.kind === 'user'`。
+ * 工具结果、插件写入的说明与建议、批准都不算；遇到不认识的来源一律按「不是」处理。
+ * @param message - 一条插入事件或本步被 claim 的消息。
+ * @returns 是真实用户消息时为 true。
+ */
+function isRealUserMessage(message: UserMessage): boolean {
+  return message.role === 'user' && message.source.kind === 'user'
 }
 
 /**
@@ -148,6 +213,26 @@ interface ReviewAttempt {
   readonly writeReviewRecord: ReviewWriter
 }
 
+/** 一条记录里与收场状态无关的部分（完成态与取消态共用）。 */
+interface ReviewRecordBase {
+  readonly triggerStep: number
+  readonly config: Required<Config>
+  /** 触发点那一刻快照里每条消息的 id，按原顺序。 */
+  readonly messageIds: readonly string[]
+}
+
+/** 一次可解析收场的结算：结论与落完成态所需的记录字段，由调用点在作废判定之后落盘。 */
+interface ReviewSettlement {
+  /** 解析成功的结论。 */
+  readonly outcome: ReviewOutcome
+  /** 记录里与结论无关的部分。 */
+  readonly base: ReviewRecordBase
+  /** 复核耗时。 */
+  readonly durationMs: number
+  /** 流里出现 usage 块时的用量；没有该块时整个字段缺省。 */
+  readonly usage?: TokenUsage
+}
+
 /** 输出过不了严格解析时记进失败原因的那一条。 */
 const OUTPUT_UNPARSEABLE = '复核输出无法解析'
 
@@ -164,16 +249,16 @@ const NO_ROUTE = '拿不到会话路由'
  * 且超时按 `timeoutOf` 判在**复核自己的 signal** 上：只看异常收场，超时格会落进「不是失败」；
  * 只按 `signal.aborted` 收场，任务结束 / 任务取消的迟到失败又会盖掉 10、11 的取消记录。
  *
- * 三种状态按规格的记录表逐格取值；一次复核最多落一条记录。结论交回调用点：只有完成态有值，
- * 失败 / 取消都是 null，调用点因此不需要再判别收场状态。
+ * 失败 / 取消在这里落盘（一次复核最多落一条记录）；可解析的收场**不在这里落完成态**——结论与
+ * 记录字段交回调用点，由它在作废判定之后落完成态或取消记录，见 `apply`。
  * @param attempt - 本次复核的全部输入。
- * @returns 完成态的结论；失败 / 取消时为 null。
+ * @returns 完成态的结算；失败 / 取消时为 null。
  */
-async function reviewOnce(attempt: ReviewAttempt): Promise<ReviewOutcome | null> {
+async function reviewOnce(attempt: ReviewAttempt): Promise<ReviewSettlement | null> {
   const { ctx, config, session, upstream, triggerStep, writeReviewRecord } = attempt
   const startedAt = Date.now()
   const snapshot = session.deriveMessages()
-  const base = { triggerStep, config, messageIds: snapshot.map(message => message.id) }
+  const base: ReviewRecordBase = { triggerStep, config, messageIds: snapshot.map(message => message.id) }
   const fail = async (failureReason: string): Promise<void> => {
     await writeReviewRecord(session.id, {
       ...base,
@@ -238,14 +323,12 @@ async function reviewOnce(attempt: ReviewAttempt): Promise<ReviewOutcome | null>
     return null
   }
   // 完成态不保证有 usage：流里没有 usage 块时整个字段缺省（口径见设计文档「复核记录的存放位置」）。
-  await writeReviewRecord(session.id, {
-    ...base,
+  return {
+    outcome,
+    base,
     durationMs: Date.now() - startedAt,
-    status: 'completed',
-    verdict: outcome,
     ...assembler.usage === undefined ? {} : { usage: assembler.usage },
-  })
-  return outcome
+  }
 }
 
 /**
