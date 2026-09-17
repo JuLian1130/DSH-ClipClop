@@ -3,8 +3,9 @@
   "compilerOptions": {
     "outDir": "lib",
     "rootDir": "src",
-    // `deadline()` 的释放器挂在 `Symbol.dispose` 上；ES2022 的默认 lib 里没有它。
-    // 显式给 lib 会顶掉 target 的默认 lib 集，所以把 ES2022 的默认内容一并列出。
+    // `deadline()` 的释放器挂在 `Symbol.dispose` 上；target 的默认 lib 里没有它。
+    // 显式给 lib 会顶掉 target 的默认 lib 集：DOM/DOM.Iterable 是 `AbortSignal` 所需，从被顶掉的
+    // 默认集里补回的两项。
     "lib": ["ES2022", "DOM", "DOM.Iterable", "ESNext.Disposable"]
   },
   "include": ["src/**/*.ts"]

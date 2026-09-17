@@ -260,8 +260,8 @@ describe('结论与失败', () => {
       config: { triggerEverySteps: 1 },
       script: [OK],
     })
-    // DSH 的 `llm/stream` 中间件失败保持抛出（见设计文档引用的 `LlmRuntime.adapterStream` 注释），
-    // 与适配器返回的错误不同：它不会变成终态 chunk，所以请求到不了适配器，只能在这里数。
+    // 中间件失败保持抛出、不会变成终态 chunk（机制与出处见设计文档「测试决策」），与适配器返回的
+    // 错误不同：请求到不了适配器，只能在这里数。
     let attempts = 0
     fixture.ctx.on('llm/stream', (options, next) => {
       if (!isReviewRequest(options)) return next()
