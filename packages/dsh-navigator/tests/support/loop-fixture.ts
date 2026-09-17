@@ -13,10 +13,11 @@
  * 只有它做得到「看原始文档 / 塞坏记录 / 让记录跨 `update` 与重挂载存活」。
  *
  * 02c 追加的四样能力：
- * - **多步驱动**：`main.drive(steps, text?)` 先用一条真实用户消息唤醒会话，再推进 `steps` 步，其间不再
- *   出现真实用户消息。脚本每步发一条 `{ toolCall: SCRIPTED_TOOL_NAME }`，turn 就不会提前收尾；最后一步
- *   用纯文本收尾也一样算这 `steps` 步里的最后一步。驱动结束后该会话的请求数与计数口径的已完成步数都
- *   增加了 `steps`。
+ * - **多步驱动**：`main.drive(steps, text?)` 把会话再推进 `steps` 步，其间不再出现真实用户消息；`text`
+ *   给出时先送一条真实用户消息（会话已空闲时必须有它——没有可推进的 turn，`drive` 直接报错）。脚本每步
+ *   发一条 `{ toolCall: SCRIPTED_TOOL_NAME }`，turn 就不会提前收尾；最后一步用纯文本收尾也一样算这
+ *   `steps` 步里的最后一步。实际推进的步数用 `main.steps()` 读：脚本份额提前用完、或插件让 turn 提前
+ *   收尾（后续票的 `stop` 结论）时它会小于 `steps`。
  * - **步边界暂停**：`drive` 停在「已完成 N 步、正要进第 N+1 步」之前并把控制权交回用例；此时该会话的
  *   请求数恰为 N。用例重载 / 改配置后再次 `drive`，就从第 N+1 步续跑。闸门的落位与理由见步进工具的
  *   注册处。脚本用纯文本收尾、turn 先结束而没有下一个步边界时，`drive` 按「会话转入空闲」返回。
@@ -96,7 +97,7 @@ export interface NavigatorSession extends SessionOwner {
   steps(): number
   /**
    * 从当前步边界再推进 `steps` 步，然后停在下一个步边界并交回控制权；`text` 给出时先送一条真实
-   * 用户消息。期间不再出现别的真实用户消息。
+   * 用户消息。期间不再出现别的真实用户消息。`text` 缺省时会话必须已经停在步边界上，否则报错。
    */
   drive(steps: number, text?: string): Promise<void>
 }
@@ -366,8 +367,17 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     }
   })
 
-  /** 推进一条会话 `steps` 步并停在步边界。 */
+  /**
+   * 推进一条会话 `steps` 步并停在步边界。
+   * @param target - 要推进的会话的 agent。
+   * @param steps - 再推进多少步。
+   * @param text - 先送出的真实用户消息；缺省时会话必须已经停在步边界上（否则没有可推进的 turn）。
+   * @throws 空闲会话上不带 `text` 时——那会一步都不走地静默返回。
+   */
   const drive = async (target: Agent, steps: number, text?: string): Promise<void> => {
+    if (text === undefined && target.status === 'idle') {
+      throw new Error('mountNavigatorLoop: drive(steps) without text needs a session paused at a step boundary')
+    }
     const session = target.session
     const boundary = boundaryOf(session)
     boundary.target = completedSteps(session) + steps
