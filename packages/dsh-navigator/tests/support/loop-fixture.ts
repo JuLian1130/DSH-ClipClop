@@ -100,7 +100,9 @@ export interface NavigatorSession extends SessionOwner {
   steps(): number
   /**
    * 从当前步边界再推进 `steps` 步，然后停在下一个步边界并交回控制权；`text` 给出时先送一条真实
-   * 用户消息。期间不再出现别的真实用户消息。`text` 缺省时会话必须已经停在步边界上，否则报错。
+   * 用户消息。期间不再出现别的真实用户消息。`text` 缺省时会话必须已经停在步边界上，否则报错；
+   * 会话正停在步边界（turn 未结束）时给 `text`，那条消息走「下一轮」、留给下一次 turn，本次驱动的
+   * 这几步看不到它。
    */
   drive(steps: number, text?: string): Promise<void>
 }
@@ -362,6 +364,7 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
    * @param target - 要推进的会话的 agent。
    * @param steps - 再推进多少步。
    * @param text - 先送出的真实用户消息；缺省时会话必须已经停在步边界上（否则没有可推进的 turn）。
+   *   会话正停在步边界时它留给下一轮，本次驱动的这几步看不到它。
    * @throws 空闲会话上不带 `text` 时——那会一步都不走地静默返回。
    */
   const drive = async (target: Agent, steps: number, text?: string): Promise<void> => {
@@ -434,10 +437,10 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
     ),
     async send(text) {
       // 暂停点上这一步被闸门挂着，`whenIdle()` 等的是一个不会自己结束的 turn——送出去的消息照旧
-      // 进队列，但 Promise 静默不 settle，用例只会看到超时。要「送一条真实用户消息再继续走」用
-      // `main.drive(steps, text)`。
+      // 进队列（`followup` 走「下一轮」），但 Promise 静默不 settle，用例只会看到超时。续跑用
+      // `main.drive(steps)`；暂停点在 turn 中途，带 `text` 的 `drive` 会把那条消息留给下一轮。
       if (boundaryOf(agent.session).blocked) {
-        throw new Error('mountNavigatorLoop: send() cannot be used while paused at a step boundary; use drive(steps, text)')
+        throw new Error('mountNavigatorLoop: send() cannot be used while paused at a step boundary; resume with main.drive(steps)')
       }
       agent.followup(userMessage(text))
       await agent.whenIdle()
