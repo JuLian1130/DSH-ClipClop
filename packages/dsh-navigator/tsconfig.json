@@ -4,8 +4,8 @@
     "outDir": "lib",
     "rootDir": "src",
     // `deadline()` 的释放器挂在 `Symbol.dispose` 上；target 的默认 lib 里没有它。
-    // 显式给 lib 会顶掉 target 的默认 lib 集：DOM/DOM.Iterable 是 `AbortSignal` 所需，从被顶掉的
-    // 默认集里补回的两项。
+    // 显式给 lib 会顶掉 target 的默认 lib 集：DOM 提供 `AbortSignal`，DOM.Iterable 随这一默认集
+    // 一并补回。
     "lib": ["ES2022", "DOM", "DOM.Iterable", "ESNext.Disposable"]
   },
   "include": ["src/**/*.ts"]
