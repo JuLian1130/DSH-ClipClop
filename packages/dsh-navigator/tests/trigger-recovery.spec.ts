@@ -47,14 +47,14 @@ afterEach(async () => {
  * @returns 按请求顺序排好的脚本。
  */
 function scriptedRun(options: {
-  readonly turns: number
+  readonly steps: number
   readonly turnEnds?: readonly number[]
   readonly triggers: readonly number[]
 }): ScriptedResponse[] {
   const ends = new Set(options.turnEnds ?? [])
   const triggers = new Set(options.triggers)
   const script: ScriptedResponse[] = []
-  for (let step = 1; step <= options.turns; step += 1) {
+  for (let step = 1; step <= options.steps; step += 1) {
     if (triggers.has(step - 1)) script.push({ text: CONTINUE_VERDICT })
     script.push(ends.has(step) ? { text: '这一步收尾' } : { toolCall: SCRIPTED_TOOL_NAME })
   }
@@ -86,7 +86,7 @@ describe('重载：不立刻补打、也不会永久不再触发', () => {
   it('① 在间隔整数倍处重载：第 100 步那一刻不出现复核，第 150 步那一刻恰好出现一次', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 50 },
-      script: scriptedRun({ turns: 220, triggers: [50, 150] }),
+      script: scriptedRun({ steps: 220, triggers: [50, 150] }),
     })
     // 一条真实用户消息推到第 50 步：触发点 50 的复核在 steps === 50 被收到。
     await fixture.main.drive(51, '出发')
@@ -106,7 +106,7 @@ describe('重载：不立刻补打、也不会永久不再触发', () => {
   it('② 在 150 重载后不会永久不再触发：往后跑满一个间隔，第 200 步那一刻出现复核', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 50 },
-      script: scriptedRun({ turns: 260, triggers: [50, 100, 200] }),
+      script: scriptedRun({ steps: 260, triggers: [50, 100, 200] }),
     })
     await fixture.main.drive(150, '出发')
     expect(fixture.main.steps()).toBe(150)
@@ -125,7 +125,7 @@ describe('新的自主执行区间：真实用户消息带来的运行期重置'
   it('③ 第 50 步触发过、第 70 步来消息、第 80 步重载：下一次触发点是 120，不是记录项算出的 100', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 50 },
-      script: scriptedRun({ turns: 220, turnEnds: [70], triggers: [50, 120] }),
+      script: scriptedRun({ steps: 220, turnEnds: [70], triggers: [50, 120] }),
     })
     // 跑到第 70 步；那一步收尾让会话空闲，好在这里再送一条真实用户消息。
     await fixture.main.drive(70, '出发')
@@ -147,7 +147,7 @@ describe('新的自主执行区间：真实用户消息带来的运行期重置'
   it('不重载：第 70 步的真实用户消息把内存触发点提升到 120，第 100 步不出现复核、第 120 步出现一次', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 50 },
-      script: scriptedRun({ turns: 220, turnEnds: [70], triggers: [50, 120] }),
+      script: scriptedRun({ steps: 220, turnEnds: [70], triggers: [50, 120] }),
     })
     await fixture.main.drive(70, '出发')
     await fixture.main.drive(50, '转弯')
@@ -163,7 +163,7 @@ describe('新的自主执行区间：真实用户消息带来的运行期重置'
   it('在 120 重载：推导式第三项网格 100 胜出，下一次触发点是 150', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 50 },
-      script: scriptedRun({ turns: 220, turnEnds: [70], triggers: [50, 150] }),
+      script: scriptedRun({ steps: 220, turnEnds: [70], triggers: [50, 150] }),
     })
     await fixture.main.drive(70, '出发')
     // 第 70 步的真实用户消息之后跑到「已完成 120 步、正要进第 121 步」这一刻。
@@ -214,7 +214,7 @@ describe('中途更新配置', () => {
   it('之后的复核请求末条消息用新 prompt，触发步骤按重载公式重新推导', async () => {
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 50 },
-      script: scriptedRun({ turns: 140, triggers: [50, 100] }),
+      script: scriptedRun({ steps: 140, triggers: [50, 100] }),
     })
     await fixture.main.drive(51, '出发')
     expect(reviewSteps(fixture)).toEqual([50])
@@ -238,19 +238,21 @@ describe('记录项真的接线：重载推导的第一项来自读回入口的�
       storageRoot: root,
       config: { triggerEverySteps: 50 },
       // 第 5 步用纯文本收尾：会话空闲后才能在「第 5 步」再送一条真实用户消息（此后锚点不再移动）。
-      script: scriptedRun({ turns: 160, turnEnds: [5], triggers: [55, 105, 125] }),
+      script: scriptedRun({ steps: 160, turnEnds: [5], triggers: [55, 105, 125] }),
     })
     await fixture.main.drive(5, '先跑五步')
     await fixture.main.drive(101, '转弯')
     expect(fixture.main.steps()).toBe(106)
     expect(reviewSteps(fixture)).toEqual([55, 105])
-    // 记录项就是读回入口的列表末条，触发步骤确实是 105（读回必须在真实存储栈上，缺省桩重载后读回为空）。
-    expect(readReviewRecords(fixture.main.session.id).map(record => record.triggerStep)).toEqual([55, 105])
 
     // 在第二次复核落盘之后、进下一步之前先重载、再改间隔（两个动作都落在同一步边界上、都不产生复核
     // 请求）。重载沿用夹具配置（间隔 50），所以决定性的那次 apply 是随后的配置重启——它带间隔 20，
     // 且和重载一样清空内存触发点并重开记录域，下一次观察因此按推导式读回记录项。
     await fixture.remountPlugin()
+    // 重载的可观察贡献：重开记录域之后记录仍读得回来，末条的触发步骤确实是 105（不是 55，否则推导
+    // 退化成与无记录项同值的 120）。缺省桩每次 open() 新建一张表，这条会红——正是票面要求挂
+    // storageRoot 的那个理由。
+    expect(readReviewRecords(fixture.main.session.id).map(record => record.triggerStep)).toEqual([55, 105])
     await fixture.updateConfig({ triggerEverySteps: 20 })
 
     // 有记录项：max(105、锚点 5、网格 floor(106/20)*20 = 100) + 20 = 125；把记录项留 null 时是 120。
