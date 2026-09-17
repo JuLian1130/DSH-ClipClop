@@ -4,8 +4,9 @@
  *
  * 等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、按主会话继承的
  * 路由发一次辅助请求，并把收场结算成一条记录（装配输出、严格解析取结论、收用量与耗时，按终止原因
- * 分完成 / 失败）；结论为 `continue` 或复核失败时都不触碰会话。建议注入、停止说明、并行模式与失败表
- * 其余格由后续票据实现。
+ * 分完成 / 失败）。复核的结论交回调用点，由监听器按 `verdict` 分派：完成态里 `adjust` 把复核建议
+ * 追加进本步的 `decision.messages`，`stop` 先追加停止说明再取消当前 turn；失败 / 取消（没有结论）
+ * 与 `continue` 都不触碰会话。并行模式与失败表其余格由后续票据实现。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -28,17 +29,17 @@ import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection } from './projection.ts'
 import { openReviewStore, readReviewRecords, type ReviewWriter } from './records.ts'
+import { composeAdjustNotice, name, noticeMessage, stopWithNotice } from './interventions.ts'
 import { composeReviewInstruction } from './review-prompt.ts'
 import { advanceTriggerStep, deriveNextTriggerStep, resetTriggerStepAtUserMessage } from './trigger.ts'
 import type { Config } from './types.ts'
-import { parseReviewOutcome } from './verdict.ts'
+import { parseReviewOutcome, type ReviewOutcome } from './verdict.ts'
 
 export * from './types.ts'
 export * from './records.ts'
 export * from './replay.ts'
 
-/** Cordis 插件名。08 的过期改写按 `source.plugin` 过滤本插件消息时复用这个值。 */
-export const name = 'dsh-navigator'
+export { name }
 
 /**
  * 四个必需服务。任一缺失时 Cordis 让插件停在 PENDING 而不是带着缺能力运行——`inject` 没列的服务
@@ -104,8 +105,18 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     if ((observed?.steps ?? 0) < triggerStep) return next()
     // 到点。节奏只按「触发点 + 间隔」推进：不重新计时、不顺延、也不补打。
     triggerSteps.set(session, advanceTriggerStep(triggerStep, config.triggerEverySteps))
-    await reviewOnce({ ctx, config, session, upstream: signal, triggerStep, writeReviewRecord })
-    return next()
+    // 先取回内层决策，再按结论追加通知：waterfall 的内层默认返回「本步被 claim 的消息 +
+    // runtime-context 消息」，自造 `{ kind: 'enter', messages }` 会静默丢掉后者。
+    const decision = await next()
+    const outcome = await reviewOnce({ ctx, config, session, upstream: signal, triggerStep, writeReviewRecord })
+    // 完成态才应用结论：失败 / 取消（outcome 为 null）与 `continue` 都原样返回内层决策。
+    // `reject` 决策意味着这一步不打开、不会有模型请求，通知无处落地，所以只在 `enter` 上追加。
+    if (outcome?.verdict === 'adjust' && decision.kind === 'enter') {
+      decision.messages.push(noticeMessage(composeAdjustNotice(triggerStep, outcome.recommendation)))
+    } else if (outcome?.verdict === 'stop') {
+      stopWithNotice(agent, triggerStep, outcome.reason)
+    }
+    return decision
   })
 }
 
@@ -153,10 +164,12 @@ const NO_ROUTE = '拿不到会话路由'
  * 且超时按 `timeoutOf` 判在**复核自己的 signal** 上：只看异常收场，超时格会落进「不是失败」；
  * 只按 `signal.aborted` 收场，任务结束 / 任务取消的迟到失败又会盖掉 10、11 的取消记录。
  *
- * 三种状态按规格的记录表逐格取值；一次复核最多落一条记录。
+ * 三种状态按规格的记录表逐格取值；一次复核最多落一条记录。结论交回调用点：只有完成态有值，
+ * 失败 / 取消都是 null，调用点因此不需要再判别收场状态。
  * @param attempt - 本次复核的全部输入。
+ * @returns 完成态的结论；失败 / 取消时为 null。
  */
-async function reviewOnce(attempt: ReviewAttempt): Promise<void> {
+async function reviewOnce(attempt: ReviewAttempt): Promise<ReviewOutcome | null> {
   const { ctx, config, session, upstream, triggerStep, writeReviewRecord } = attempt
   const startedAt = Date.now()
   const snapshot = session.deriveMessages()
@@ -174,7 +187,7 @@ async function reviewOnce(attempt: ReviewAttempt): Promise<void> {
   const route = session.requestHeader()?.config
   if (route === undefined) {
     await fail(NO_ROUTE)
-    return
+    return null
   }
 
   const instruction = createUserMessage({
@@ -206,23 +219,23 @@ async function reviewOnce(attempt: ReviewAttempt): Promise<void> {
 
   if (thrown !== undefined) {
     await fail(thrown instanceof Error ? thrown.message : String(thrown))
-    return
+    return null
   }
   const finish = assembler.finish
   if (finish.kind === 'aborted') {
     // 超时才算失败；其余中止（任务结束 / 任务取消 / 插件释放）的记录归 10、11，本票不为它落失败记录，
     // 否则它们写下的取消记录会被同键的迟到失败写入覆盖。
     if (timeoutOf(timeout.signal, REVIEW_TIMEOUT_CODE) !== undefined) await fail(finish.failure.message)
-    return
+    return null
   }
   if (finish.kind === 'error') {
     await fail(finish.failure.message)
-    return
+    return null
   }
   const outcome = parseReviewOutcome(textOf(assembler.blocks()))
   if (outcome === null) {
     await fail(OUTPUT_UNPARSEABLE)
-    return
+    return null
   }
   // 完成态不保证有 usage：流里没有 usage 块时整个字段缺省（口径见设计文档「复核记录的存放位置」）。
   await writeReviewRecord(session.id, {
@@ -232,6 +245,7 @@ async function reviewOnce(attempt: ReviewAttempt): Promise<void> {
     verdict: outcome,
     ...assembler.usage === undefined ? {} : { usage: assembler.usage },
   })
+  return outcome
 }
 
 /**
