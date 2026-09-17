@@ -230,15 +230,24 @@ describe('结论与失败', () => {
 
   it('超时用 reviewTimeoutMs、不重试，主会话不因此被打断', async () => {
     const deadlineMs: Array<number | undefined> = []
+    /** 请求与复核收场的先后：主请求记 `main`、复核请求记 `review`、复核的 signal abort 记 `review-aborted`。 */
+    const order: string[] = []
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 1, reviewTimeoutMs: 50 },
       // 请求顺序：主请求、复核请求（挂住不放行）、超时放行后的主请求。
       script: [OK, { hang: true }, OK],
       observeRequest: (request) => {
         const { signal } = request
-        if (!isReviewRequest(request) || signal === undefined) return
+        if (!isReviewRequest(request)) {
+          order.push('main')
+          return
+        }
+        order.push('review')
         // 「超时用 reviewTimeoutMs」要钉到值上：超时信号带的是配置的那个毫秒数。
-        signal.addEventListener('abort', () => { deadlineMs.push(timeoutOf(signal)?.timeoutMs) })
+        signal?.addEventListener('abort', () => {
+          order.push('review-aborted')
+          deadlineMs.push(timeoutOf(signal)?.timeoutMs)
+        })
       },
     })
     await fixture.send('第一步')
@@ -247,6 +256,10 @@ describe('结论与失败', () => {
     // 只收到一次复核请求：超时不重试。
     expect(fixture.reviews()).toHaveLength(1)
     expect(deadlineMs).toEqual([50])
+    // 等待模式的判据：主会话在复核收场之后才发起它自己的下一次请求。非阻塞实现（不 await 复核）会先记下
+    // 第二个 `main`——那时复核的 50ms 超时还没到，`review-aborted` 必然排在它后面。这一序比单看
+    // `deadlineMs` 是否已填更不容易被机器快慢掩盖，但仍有依赖：机器卡顿超过那个毫秒数时它也会漏判。
+    expect(order).toEqual(['main', 'review', 'review-aborted', 'main'])
     // 这一步原样放行：两个 turn 都正常收尾。
     expect(fixture.turnEndReasons()).toEqual([{ kind: 'completed' }, { kind: 'completed' }])
     expect(assistantIds(fixture.agent)).toHaveLength(2)
