@@ -22,9 +22,9 @@
  * 中止时只兜底放行，放行后适配器照脚本收场，只认 `settlement === null` 会把这一格落成完成态。并行模式
  * 在续体里让 `agent.whenIdle()` 与复核收场赛跑：复核收场晚于静止时按 `signal.aborted` 分「任务取消 /
  * 任务结束」，复核先收场但信号已经中止（G10 实测的时序）同样落取消记录；晚到的结算一律不注入、也不再写
- * 第二条记录。`{ kind: 'disposed' }` 是 Agent 释放这一条路径，归 11，本票不为它落记录。判据用的 `signal`
- * 还必须跨 turn 边界的 `phase.abort` 替换仍成立，所以按会话记住最近一次 pre-step 的信号（见
- * `phaseSignals`）。
+ * 第二条记录。`{ kind: 'disposed' }` 是 Agent 实例释放这一条路径，不经过这里的终态分流（插件释放那条
+ * 路径见下）。判据用的 `signal` 还必须跨 turn 边界的 `phase.abort` 替换仍成立，所以按会话记住最近一次
+ * pre-step 的信号（见 `phaseSignals`）。
  *
  * **等待期作废**（07）：等待复核期间到达的真实用户消息让本次复核作废——不注入、不追加停止说明、
  * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）；作废只落那条取消
@@ -90,6 +90,12 @@ export const inject = ['llm', 'sessions', 'sessionProjections', 'storageDomain']
 export const REVIEW_TIMEOUT_CODE = 'NAVIGATOR_REVIEW_TIMEOUT'
 
 /**
+ * 本票这一格的取消原因取值：取 04 导出的闭集里的 `plugin-disposed`，`satisfies` 把它钉在闭集上，
+ * 释放回调与等待步的停止说明共用这一个常量（不各写一份字面量）。
+ */
+const PLUGIN_DISPOSED = 'plugin-disposed' satisfies ReviewCancelReason
+
+/**
  * 注册计数投影、打开记录域、检查本版要调用的 API 形状，并在触发点发起复核（等待模式在 `pre-step`
  * 里等它收场并应用结论，并行模式把它放到续体里、收场后注入建议）。
  * @param ctx - 插件的 context；`inject` 的四个服务此时都已就绪。
@@ -127,11 +133,13 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
   const releaseInFlightReviews = (): Promise<void> => {
     const writes: Promise<void>[] = []
     for (const [sessionId, review] of inFlightReviews) {
-      // 标记必须落在跳过之前：基底还没取到的那一小段（`await next()` 期间）虽然落不了记录，
-      // 晚到的结算同样不许再应用结论（记录表的三态基底一起缺，按「无法落盘」处理）。
+      // 标记先置：本步的 handler 与并行的续体都按它跳过落盘与结论，`point` 有没有取到不影响这件事。
       review.released = true
-      if (review.point === undefined) continue
-      writes.push(cancelReview(writeReviewRecord, sessionId, review.point, 'plugin-disposed').catch(() => {}))
+      // 基底只差快照的消息 id 时（释放落在 `await next()` 期间）照落一条 `messageIds` 缺省的取消记录——
+      // 记录表允许它缺省（「取到快照之前就结束则没有」）。
+      writes.push(
+        cancelReview(writeReviewRecord, sessionId, review.base, review.startedAt, PLUGIN_DISPOSED).catch(() => {}),
+      )
     }
     inFlightReviews.clear()
     return Promise.all(writes).then(() => undefined)
@@ -199,15 +207,20 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     // 已有复核在跑：跳过这一次，不排队，节奏照旧。
     if (inFlightReviews.has(session.id)) return next()
     // 在途登记要早于 `next()`：claim 早于 waterfall 派发，登记晚了这一段到达的消息就只剩应用点的
-    // 队列那一半认领。收场之后注销。记录基底在取到快照那一刻填进登记（并行那一支就在下面同步填）。
-    const review: InFlightReview = { invalidated: false, released: false, point: undefined }
+    // 队列那一半认领。收场之后注销。触发步骤与配置快照在登记这一刻冻结（释放因此能在 `next()` 期间
+    // 就落一条 `messageIds` 缺省的取消记录），快照的消息 id 之后由 `reviewPoint` 填进同一份基底。
+    const review: InFlightReview = {
+      invalidated: false,
+      released: false,
+      base: { triggerStep, config },
+      startedAt: Date.now(),
+    }
     inFlightReviews.set(session.id, review)
     if (config.mode === 'parallel') {
       // 记录基底与计时起点在触发点冻结：完成 / 失败 / 取消三条写入路径共用它；并行这一支没有可回去的
       // 应用点，终态取消要在复核收场之前落记录，所以在这里取（见 `ReviewPoint`）。
       // 并行：复核脱离本步，先发起再取回决策，主会话照常走下一步。续体自己收异常，绝不打断主会话。
-      const point = reviewPoint(session, config, triggerStep)
-      review.point = point
+      const point = reviewPoint(session, review)
       void settleParallelReview({
         ctx,
         session,
@@ -227,10 +240,9 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
       // 先取回内层决策，再按结论追加通知：waterfall 的内层默认返回「本步被 claim 的消息 +
       // runtime-context 消息」，自造 `{ kind: 'enter', messages }` 会静默丢掉后者。
       decision = await next()
-      // 快照与计时起点在触发点冻结；落在 `next()` 之后，与 03 起取快照的时刻一致——内层 handler 若在
-      // 这一步追加了会话内容，快照仍照规格「等于那一刻主会话对模型可见的完整上下文」。
-      point = reviewPoint(session, config, triggerStep)
-      review.point = point
+      // 快照在触发点冻结；落在 `next()` 之后，与 03 起取快照的时刻一致——内层 handler 若在这一步追加
+      // 了会话内容，快照仍照规格「等于那一刻主会话对模型可见的完整上下文」。
+      point = reviewPoint(session, review)
       settlement = await reviewOnce({ ctx, session, upstream: signal, point })
     } finally {
       inFlightReviews.delete(session.id)
@@ -245,7 +257,7 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     // 命中就作废、不追加说明、不停止，释放回调落下的那条取消记录就是这一格的记录（不再写第二条）。
     if (review.released) {
       if (config.failurePolicy === 'stop' && !review.invalidated && !unprocessed.some(isRealUserMessage)) {
-        stopWithNotice(agent, triggerStep, 'plugin-disposed')
+        stopWithNotice(agent, triggerStep, PLUGIN_DISPOSED)
       }
       return decision
     }
@@ -253,7 +265,7 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     // 与结算交回的是 null / 完成 / 失败无关。也不调用 `agent.cancel`——它默认清空待处理队列，会把
     // 用户刚发的话一起丢掉（终态取消同理）。
     if (signal.aborted) {
-      await cancelTerminalReview(writeReviewRecord, session.id, point, signal)
+      await cancelTerminalReview(writeReviewRecord, session.id, point.base, point.startedAt, signal)
       return decision
     }
     if (settlement === null) return decision
@@ -265,7 +277,7 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     const invalidated = review.invalidated || (intervenes && unprocessed.some(isRealUserMessage))
     // 写入挪到作废判定之后：作废 / 取消时只落那条取消记录——先落完成态或失败态再同键覆盖正是 04 要避免的。
     if (invalidated) {
-      await cancelReview(writeReviewRecord, session.id, point, 'invalidated')
+      await cancelReview(writeReviewRecord, session.id, point.base, point.startedAt, 'invalidated')
       return decision
     }
     if (settlement.status === 'failed') {
@@ -298,17 +310,19 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
   })
 }
 
-/** 在途复核的登记：作废标记、释放标记，加上释放路径要用的那份记录基底。 */
+/** 在途复核的登记：作废标记、释放标记，加上释放路径落取消记录要用的记录基底。 */
 interface InFlightReview {
   /** 插入事件监听器置位（真实用户消息在复核在途时到达），等待模式的应用点在收场之后读它。 */
   invalidated: boolean
   /** 释放回调置位：释放路径已经落过取消记录，晚到的结算不再落盘、也不再应用结论。 */
   released: boolean
   /**
-   * 触发点冻结的记录基底与计时起点（见 `ReviewPoint`）；等待模式在 `next()` 之后才取到，
-   * 在那之前被释放时没有基底可落——这一小段按「无法落盘」处理（见 `releaseInFlightReviews`）。
+   * 触发点冻结的记录基底与计时起点，完成 / 失败 / 取消三条写入路径共用；触发步骤与配置快照在登记时
+   * 就有，快照的消息 id 要等 `next()` 之后由 `reviewPoint` 填进同一个对象。
    */
-  point: ReviewPoint | undefined
+  readonly base: ReviewRecordBase
+  /** 计时起点：登记的这一刻（即触发点）。 */
+  readonly startedAt: number
 }
 
 /** 并行复核续体的全部输入。 */
@@ -384,14 +398,14 @@ async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
     if (winner.kind === 'settled' && aborted) {
       // 复核先收场、取消信号也已经中止（G10 实测：abort 后 0ms 结算是复核先到）：这次复核同样是在途
       // 被取消，按终态落取消记录，不注入、也不落完成 / 失败记录。
-      await cancelTerminalReview(writeReviewRecord, session.id, point, signal)
+      await cancelTerminalReview(writeReviewRecord, session.id, point.base, point.startedAt, signal)
       return
     }
     if (winner.kind === 'idle') {
       // 终态：复核还在途就等到了整个 agent 静止。先注销在途登记（这次复核已经作废，不该继续挡住后续
       // 触发），再按信号落「任务取消 / 任务结束」。
       releaseInFlight()
-      await cancelTerminalReview(writeReviewRecord, session.id, point, signal)
+      await cancelTerminalReview(writeReviewRecord, session.id, point.base, point.startedAt, signal)
       return
     }
     const { settlement } = winner
@@ -502,37 +516,33 @@ interface ReviewAttempt {
 interface ReviewRecordBase {
   readonly triggerStep: number
   readonly config: Required<Config>
-  /** 触发点那一刻快照里每条消息的 id，按原顺序。 */
-  readonly messageIds: readonly string[]
+  /** 触发点那一刻快照里每条消息的 id，按原顺序；取到快照之前就结束则整个字段缺省。 */
+  messageIds?: readonly string[]
 }
 
-/** 一次复核在触发点冻结的部分：记录基底（快照已取）与计时起点；完成、失败、取消三条写入路径共用。 */
+/** 一次复核在触发点冻结的部分：记录基底与快照、计时起点；完成、失败、取消三条写入路径共用。 */
 interface ReviewPoint {
-  /** 记录里与收场状态无关的部分。 */
+  /** 记录里与收场状态无关的部分（登记那一刻建好，取快照时补上消息 id）。 */
   readonly base: ReviewRecordBase
-  /** 触发点那一刻的模型可见消息快照，复核请求按它原样发送。 */
+  /** 触发点那一刻的模型可见消息快照，复核请求按它原样发送；落在 `next()` 之后取。 */
   readonly snapshot: readonly Message[]
-  /** 计时起点：记录的耗时按「写入那一刻 − 它」算。 */
+  /** 计时起点：登记那一刻（即触发点）；记录的耗时按「写入那一刻 − 它」算。 */
   readonly startedAt: number
 }
 
 /**
- * 在触发点取一次复核的记录基底与计时起点（快照也在这一刻冻结，规格「快照在触发点取一次」）。
+ * 在触发点取一次复核的快照，并把消息 id 填进这次复核登记里那份记录基底（规格「快照在触发点取一次」）。
  *
- * 基底由调用点持有、不再由结算交回：并行模式的终态取消要在复核还没收场时落记录，那一格没有结算
- * 可用（见 `settleParallelReview`）。
+ * 基底在登记那一刻就建好、由 `reviewPoint` 补上快照那一半，三条写入路径因此共用同一个对象：释放路径
+ * 在 `next()` 期间就要落记录，那时快照还没取到，记的是一条 `messageIds` 缺省的取消记录。
  * @param session - 主会话。
- * @param config - 触发那一刻的配置快照。
- * @param triggerStep - 这次复核的触发步骤。
+ * @param review - 这次复核的登记。
  * @returns 记录基底、快照与计时起点。
  */
-function reviewPoint(session: Session, config: Required<Config>, triggerStep: number): ReviewPoint {
+function reviewPoint(session: Session, review: InFlightReview): ReviewPoint {
   const snapshot = session.deriveMessages()
-  return {
-    base: { triggerStep, config, messageIds: snapshot.map(message => message.id) },
-    snapshot,
-    startedAt: Date.now(),
-  }
+  review.base.messageIds = snapshot.map(message => message.id)
+  return { base: review.base, snapshot, startedAt: review.startedAt }
 }
 
 /**
@@ -540,18 +550,20 @@ function reviewPoint(session: Session, config: Required<Config>, triggerStep: nu
  * 释放路径共用这一次写入（各自的触发点不同）；取消态不带结论与失败原因（规格「记录与诊断」的取消列）。
  * @param writeReviewRecord - 本实例的 writer（04 的写入入口）。
  * @param sessionId - 记录归属的会话。
- * @param point - 触发点冻结的记录基底与计时起点。
+ * @param base - 触发点冻结的记录基底。
+ * @param startedAt - 计时起点。
  * @param cancelReason - 取消原因，取 04 导出的闭集取值。
  */
 async function cancelReview(
   writeReviewRecord: ReviewWriter,
   sessionId: SessionId,
-  point: ReviewPoint,
+  base: ReviewRecordBase,
+  startedAt: number,
   cancelReason: ReviewCancelReason,
 ): Promise<void> {
   await writeReviewRecord(sessionId, {
-    ...point.base,
-    durationMs: Date.now() - point.startedAt,
+    ...base,
+    durationMs: Date.now() - startedAt,
     status: 'cancelled',
     cancelReason,
   })
@@ -564,21 +576,23 @@ async function cancelReview(
  * 并行续体的复核先收场与 `whenIdle()` 先兑现两臂）共用这一条判据。
  * @param writeReviewRecord - 本实例的 writer（04 的写入入口）。
  * @param sessionId - 记录归属的会话。
- * @param point - 触发点冻结的记录基底与计时起点。
+ * @param base - 触发点冻结的记录基底。
+ * @param startedAt - 计时起点。
  * @param signal - 该会话最近一次 pre-step 的取消信号。
  */
 async function cancelTerminalReview(
   writeReviewRecord: ReviewWriter,
   sessionId: SessionId,
-  point: ReviewPoint,
+  base: ReviewRecordBase,
+  startedAt: number,
   signal: AbortSignal | undefined,
 ): Promise<void> {
   if (signal?.aborted !== true) {
-    await cancelReview(writeReviewRecord, sessionId, point, 'task-ended')
+    await cancelReview(writeReviewRecord, sessionId, base, startedAt, 'task-ended')
     return
   }
   if (isDisposed(signal.reason)) return
-  await cancelReview(writeReviewRecord, sessionId, point, 'task-cancelled')
+  await cancelReview(writeReviewRecord, sessionId, base, startedAt, 'task-cancelled')
 }
 
 /**

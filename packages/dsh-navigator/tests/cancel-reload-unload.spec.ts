@@ -8,7 +8,7 @@
  * `expectCancelledRecord` 在等待与并行两条真实释放路径上各复验一次）。释放动作按票面备注「释放路径的
  * 前置核实」钉死：把释放取**重载**（夹具的 `remountPlugin`），不取裸卸载——裸卸载后读回入口会抛。
  *
- * 五条用例覆盖第 1、2 条（第 3 条不另立构造）：
+ * 六条用例覆盖第 1、2 条（第 3 条不另立构造）：
  *  ① `等待 × continue`：第 3 步的复核停在闸门上，释放（重载）落下取消记录后放行；这次 `adjust` 成功
  *     收场也不注入（对话、两处待处理队列与随后那次请求都没有它）、不再写第二条记录，该步原样放行。
  *  ② `等待 × stop`：同一帧，`failurePolicy: stop` 时释放让等待步追加写取消原因的停止说明并停止本 turn
@@ -20,6 +20,8 @@
  *     失活，续体取不到注入所需的锚点、writer 也随域关闭，所以那一读数按票面在 ① 上构造）。
  *  ④ `第 2 条`：停止说明已落盘、`turn/end` 未到时释放（释放由用例自挂的 `session/event` 监听器在说明
  *     落盘那一刻发起），`turn/end` 仍以 hook 原因到达，说明仍在会话里、并出现在随后那次请求的 `messages`。
+ *  ⑤ 释放落在等待步 `await next()` 期间：登记已立、快照还没取，仍落一条 `messageIds` 缺省的取消记录
+ *     （记录表「取到快照之前就结束则没有」），该步原样放行。
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -419,5 +421,53 @@ describe('④ 停止流程已经开始（说明已落盘）时释放', () => {
     // (c) 停后再送一条消息，该次请求的 messages 里仍含这条说明。
     await fixture.send('继续')
     expect(fixture.main.calls().at(-1)?.request.messages.some(message => message.id === noticeId)).toBe(true)
+  })
+})
+
+describe('⑤ 释放落在等待步 `await next()` 期间（基底只差快照）', () => {
+  it('仍落一条 messageIds 缺省的取消记录，该步原样放行', async () => {
+    const root = await tempRoot()
+    const fixture = await mountNavigatorLoop({
+      config: { triggerEverySteps: EVERY_STEPS },
+      script: [STEP, STEP, ADJUST_VERDICT, DONE, STEP],
+      storageRoot: root,
+    })
+    // 注册在插件之后的 pre-step 监听器跑在插件 handler 的 `next()` 里；把触发步（已完成 2 步）那一次挂住，
+    // 释放因此钉在「登记已立、快照还没取」的那一小段上。
+    let armed = false
+    let held: (() => void) | undefined
+    let reached!: () => void
+    const atNext = new Promise<void>((resolve) => { reached = resolve })
+    fixture.ctx.on('agent/pre-step', async (payload, next) => {
+      const steps = fixture.ctx.sessionProjections.stateOf(payload.agent.session, 'navigatorSteps')?.steps
+      if (armed && steps === TRIGGER_STEP) {
+        armed = false
+        reached()
+        await new Promise<void>((resolve) => { held = resolve })
+      }
+      return next()
+    })
+
+    armed = true
+    const driving = fixture.main.drive(STEPS_TO_TRIGGER, '出发')
+    await atNext
+    await fixture.remountPlugin()
+    held?.()
+    await driving
+
+    // 记录表允许消息 id 列表缺省（「取到快照之前就结束则没有」），所以这一格仍恰一条取消记录。
+    const records = readReviewRecords(fixture.main.session.id)
+    expect(records.map(record => [record.triggerStep, record.status, record.cancelReason]))
+      .toEqual([[TRIGGER_STEP, 'cancelled', PLUGIN_DISPOSED]])
+    expect(records[0]?.messageIds).toBeUndefined()
+    const raw = await rawRecord(root, fixture.main.session.id, TRIGGER_STEP)
+    expect(raw['messageIds']).toBeUndefined()
+    expect(raw['verdict']).toBeUndefined()
+    expect(raw['failureReason']).toBeUndefined()
+
+    // 等待步按失败表那一格放行：复核请求根本没发出去，该步照常收尾，没有永久等待。
+    expect(fixture.main.reviews()).toHaveLength(0)
+    expect(fixture.main.steps()).toBe(STEPS_TO_TRIGGER)
+    expect(hasHookAbort(fixture)).toBe(false)
   })
 })
