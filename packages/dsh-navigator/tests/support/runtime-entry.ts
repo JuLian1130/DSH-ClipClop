@@ -19,13 +19,19 @@ import { fileURLToPath } from 'node:url'
 import { stringify } from 'yaml'
 import { navigatorLegScript, startMockModel, type MockModelServer } from './mock-model.ts'
 
-const packageDir = fileURLToPath(new URL('../..', import.meta.url))
+/**
+ * 本包根目录：由本文件位置往上三级（`tests/support/runtime-entry.ts` → 包根）。
+ *
+ * **不用 `new URL('../..', import.meta.url)`**：Vite 会把这种写法改写成 dev server 的 http URL（jsdom
+ * 档实测拿到 `http://localhost:3000/@fs/...`），`fileURLToPath` 随即抛 `URL must be of scheme file`。
+ */
+const packageDir = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 
 /** 被测插件的构建产物入口；由覆盖补丁按绝对路径装载。 */
 const pluginEntry = join(packageDir, 'lib/index.js')
 
 /** 观察者条目；同样按绝对路径装载，所以是 `.mjs`。 */
-const observerEntry = fileURLToPath(new URL('./notice-observer.mjs', import.meta.url))
+const observerEntry = join(packageDir, 'tests/support/notice-observer.mjs')
 
 /** 与 02b 同口径：产物缺失时硬失败，不隐式跳过。 */
 export function assertBuiltEntry(): void {
