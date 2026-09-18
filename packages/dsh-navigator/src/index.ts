@@ -304,7 +304,7 @@ async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
       ...settlement.usage === undefined ? {} : { usage: settlement.usage },
     })
   } catch {
-    // 续体不打断主会话：失败 / 取消的落盘已由 `reviewOnce` 完成，这里只兜收尾路径上的异常。
+    // 续体不打断主会话：失败记录已由本续体在上一段落盘，这里只兜收尾路径（注入建议、落完成态）上的异常。
   }
 }
 
