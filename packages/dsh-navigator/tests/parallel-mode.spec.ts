@@ -236,13 +236,14 @@ describe('并行模式下复核不阻塞主会话', () => {
 
     rig.releaseFirstReview()
     const suggestion = await rig.firstSuggestion
-    // 建议正文以触发步骤开头（`summary` 就是正文开头的截断）。
-    expect(textOf(suggestion).startsWith('第 1 步')).toBe(true)
 
-    // 送达那一半：建议进入下一次 pre-step 主会话请求的 messages。在全部请求里按 id 找承载它的那条
-    // （夹具的 `isReviewRequest` 启发式在这一帧会把承载请求误认成复核请求，不能借它过滤）。
+    // 送达那一半：建议进入下一次 pre-step 主会话请求的 messages，且**送达的那一份**正文以触发步骤
+    // 开头（`summary` 就是正文开头的截断）。在全部请求里按 id 找承载它的那条——夹具的
+    // `isReviewRequest` 启发式在这一帧会把承载请求误认成复核请求，不能借它过滤。
     await rig.fixture.main.drive(1)
-    expect(deliveredMessage(rig.fixture, suggestion.id)).toBeDefined()
+    const delivered = deliveredMessage(rig.fixture, suggestion.id)
+    expect(delivered).toBeDefined()
+    expect(textOf(delivered).startsWith('第 1 步')).toBe(true)
     // 停止那一半：全表里没有 hook 触发的 aborted。
     expect(hasHookAbort(rig.fixture)).toBe(false)
   })
