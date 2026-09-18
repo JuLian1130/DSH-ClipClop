@@ -10,6 +10,7 @@
  */
 
 import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { FIXED_INSTRUCTIONS } from '../../src/review-prompt.ts'
 
 /**
@@ -95,8 +96,9 @@ export function startMockModel(
   })
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      if (address === null || typeof address === 'string') throw new Error('mock model server bound no TCP port')
+      // `listen(0, host)` 的 listening 回调里 `address()` 必然是 `AddressInfo`，所以断言而不是留一条
+      // 永不可达的护栏——那条护栏即使触发也 reject 不了外层 Promise（回调里抛错只会变成未捕获异常）。
+      const address = server.address() as AddressInfo
       resolve({
         baseURL: `http://127.0.0.1:${address.port}`,
         requests,
@@ -144,6 +146,17 @@ export function navigatorLegScript(
 }
 
 /**
+ * 哪些请求是**主会话**请求；复核请求不算。
+ * @param requests - 待筛的请求体。
+ * @returns 主会话请求体列表。
+ */
+export function mainRequests(
+  requests: readonly Record<string, unknown>[],
+): readonly Record<string, unknown>[] {
+  return requests.filter(request => !isReviewRequest(request))
+}
+
+/**
  * 哪些**主会话**请求的模型可见上下文里含给定文本；复核请求不算——它的快照本来就会带上此前的建议，
  * 混进来会把「后续多轮里主会话上下文含它」读成恒真句。
  * @param requests - 待筛的请求体。
@@ -154,5 +167,5 @@ export function mainRequestsContaining(
   requests: readonly Record<string, unknown>[],
   text: string,
 ): readonly Record<string, unknown>[] {
-  return requests.filter(request => !isReviewRequest(request) && JSON.stringify(request).includes(text))
+  return mainRequests(requests).filter(request => JSON.stringify(request).includes(text))
 }

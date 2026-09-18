@@ -22,6 +22,7 @@ import {
   PROTOCOL_VERSION,
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
+import { mainRequests } from './support/mock-model.ts'
 import {
   assertBuiltEntry,
   createLegScope,
@@ -90,6 +91,11 @@ describe('ACP 入口腿', () => {
     const stream = JSON.stringify(updates)
     expect(stream).not.toContain(NOTICE_TEXT)
     expect(stream).not.toContain(STOP_REASON)
+
+    // 停止真的生效了，`end_turn` 才不是「自然跑完」的同义词：hook 取消与正常结束在 ACP 里都映射成
+    // `end_turn`（`packages/acp/acp/src/codec.ts`），光断 `end_turn` 分不出停止有没有落地。所以再断
+    // notice 之后主会话没再走一步——停止失效时 turn 会继续走到脚本里的下一句答复，多出一次主会话请求。
+    expect(mainRequests(model.requests)).toHaveLength(1)
   }, 180_000)
 })
 

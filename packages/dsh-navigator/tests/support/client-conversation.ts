@@ -102,10 +102,11 @@ function loadClientModules(): (spec: string) => unknown {
     if (cache.has(id)) return cache.get(id)
     const factory = registry.get(id)
     if (factory === undefined) throw new Error(`no client bundle registered for ${JSON.stringify(id)}`)
-    const shell: { exports: unknown } = { exports: {} }
-    cache.set(id, shell.exports)
-    cache.set(id, factory(load) ?? shell.exports)
-    return cache.get(id)
+    // 工厂形态是 CJS，交不出半成品 exports，所以不预置占位：生产模块系统对 require 环就是直接报错
+    // （`dsh-client-modules` 的 `materialize()`），预置会让环里的 require 静默拿到一个空模块。
+    const exports = factory(load)
+    cache.set(id, exports)
+    return exports
   }
   return load
 }

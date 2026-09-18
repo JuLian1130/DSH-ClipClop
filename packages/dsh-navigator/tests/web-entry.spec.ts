@@ -92,7 +92,11 @@ describe('Web 入口腿', () => {
       entry.event.type === 'user/message'
       && entry.event.data.source.kind === 'plugin'
       && entry.event.data.source.form === 'notice')
-    expect(noticeEntry?.event.data.id).toBe(observed[0].id)
+    if (noticeEntry === undefined) throw new Error('web leg: the run events carry no plugin notice message')
+    // 两侧都要求非空 id：线上一旦不发 id，`undefined === undefined` 会让这条等式恒真，身份核对就白断了。
+    expect(noticeEntry.event.data.id).toMatch(/\S/)
+    expect(observed[0].id).toMatch(/\S/)
+    expect(noticeEntry.event.data.id).toBe(observed[0].id)
 
     // 持久化物：重载两次都从它重新读入（两次读成两个独立数组）。
     const persisted = join(home, 'session-events.json')
