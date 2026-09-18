@@ -15,7 +15,7 @@
 
 ## 0. 前置条件
 
-- [ ] 机器上装了 DSH Desktop，且其自带 runtime 的 dsh 版本是 `0.1.6-alpha.1`（从应用的「关于 / 版本」看，或看随包 runtime 里 `@deepseek-ai/dsh/package.json` 的 `version`；对不上就**停止**，在记录里写「Desktop 版本不符，未验」）。
+- [ ] 机器上装了 DSH Desktop，且其自带 runtime 的 dsh 版本是 `0.1.6-alpha.1`（从应用的「关于 / 版本」看，或看随包 runtime 里 `@deepseek-ai/dsh/package.json` 的 `version`；对不上就**停止**，在记录里写「Desktop 版本不符，未验」）。**为什么这条必须人眼确认**：本包只对 `0.1.6-alpha.1` 承诺行为，而 peer 范围 `^0.1.6-alpha.1` 会接受同段号的其它预发布版（`0.1.6-alpha.2`、`0.1.6-beta.1` 都满足，semver 已核），Node 的模块解析又根本不校验 peer 范围——所以「装上了」「跑起来了」都说明不了绑到的是 alpha.1。
 - [ ] Desktop 已经能正常跑一轮对话（模型凭据已在应用里配好）。联调要真实发一次复核请求，没凭据会把它记成复核失败——Part A 会因此看不结论，Part B 反而照样能过（它本来就靠超时）。
 - [ ] 本仓检出就绪，`node -v` 落在 DSH 声明的范围 `^22.19.0 || >=24.0.0`（DSH 检出根 `package.json` 的 `engines`；本包只对 DSH `0.1.6-alpha.1` 承诺行为），`pnpm -v` 是 `10.12.1`（本仓根 `packageManager` 声明）。
 - [ ] 记下 `$DSH_HOME` 的实际值：`echo "${DSH_HOME:-$HOME/.dsh}"`。下文用 `<DSH_HOME>` 指代。
@@ -77,29 +77,19 @@ test ! -e node_modules/@dsh-clipclop/dsh-navigator/src && echo '副本不含 src
 - [ ] 安装副本里有 `lib/index.js` 与 `lib/index.d.ts`。
 - [ ] 安装副本里**没有** `src/`（证明它是预构建产物，不是源码）。
 
-### 4b. 记下插件绑定到哪一份 peer（必做）
+### 4b. 两条「看着像坏了、其实正常」的预期（必做）
 
-本包的 `peerDependencies` 是六个 DSH 服务包（`cordis` / `dsh-agent` / `dsh-llm` / `dsh-session` / `dsh-session-projection` / `dsh-storage-domain`）。**Desktop 不会让 pnpm 为它们另装一份**：它把 profile 的 `pnpm-workspace.yaml` 钉成 `nodeLinker: hoisted` + `autoInstallPeers: false`（`apps/desktop/src/project-manager.ts` 的 `WORKSPACE_SETTINGS`），peer 因此由 profile 顶层 `node_modules` 里 Desktop 自带的那一套兑现——这正是我们要的结果（插件与 Desktop 共用同一份）。
-
-**残余风险不是「混装」，而是「peer 兑现不了」**：若 Desktop 自带的版本落在本包 `^0.1.6-alpha.1` 之外，pnpm 不会补装，插件装载时 import 失败（表现为启动审计里该条目不 ACTIVE / 模块解析报错），不会静默换成另一个版本。
+装完之后（尤其**每次启动过 Desktop 之后**）profile 树会变样：Desktop 在每次生产启动时回收它自己的核心包（`apps/desktop/src/profile-core-cleanup.ts` 的 `cleanProfileCorePackages`，由 `project-manager.ts` 的 `applyRelease` 调用），并在有残留时删掉 `profile/pnpm-lock.yaml`。
 
 ```bash
 cd "$PROFILE"
-cat pnpm-workspace.yaml                      # 应能看到 autoInstallPeers: false 与 nodeLinker: hoisted
-grep -c "0.1.6-alpha.2" pnpm-lock.yaml || echo '0（无 alpha.2）'
-# 插件运行时 import 的那一份到底落在哪、哪个版本
-node -e "const p=require.resolve('@deepseek-ai/dsh-llm/package.json',{paths:['$PROFILE/node_modules/@dsh-clipclop/dsh-navigator']});console.log(p);console.log(require(p).version)"
+ls -d node_modules/@dsh-clipclop/dsh-navigator   # 你的包不是核心包，应当一直在
+ls node_modules/@deepseek-ai 2>/dev/null || echo '（核心包已被 Desktop 回收，正常）'
 ```
 
-- [ ] `pnpm-workspace.yaml` 里有 `autoInstallPeers: false`（没有就说明这个 profile 不是 Desktop 初始化出来的，回第 3 步核对）。
-- [ ] `pnpm-lock.yaml` 里 `0.1.6-alpha.2` 计数为 0；若不是 0，把是哪条把它拉进来的记进结论（Desktop 自己不会为 peer 另装，见上）。
-- [ ] 上面 `node -e` 打出的路径与版本，与 Desktop 自带那一套一致（两项都记进结论）。
-- [ ] 若这条 `node -e` 报 `Cannot find module`，那是「peer 兑现不了」而不是混装：在 profile 的 `package.json` 里把该 peer 钉到 Desktop 自带的版本，再 `pnpm install --ignore-scripts` 重查，例如
-
-      ```jsonc
-      "pnpm": { "overrides": { "@deepseek-ai/dsh-llm": "<Desktop 自带版本>", "@deepseek-ai/dsh-session": "<同左>" } }
-      ```
-      （需要哪几个就钉哪几个；仍不行就按第 9 步收窄。）
+- [ ] `node_modules/@dsh-clipclop/dsh-navigator` 还在（这是「按包名装载进 profile」在本步的读数）。
+- [ ] `node_modules/@deepseek-ai/` 或 `pnpm-lock.yaml` 不见了 —— 记为**预期现象**，不要据此改配置或重装。
+- [ ] 不要在磁盘上推「插件绑到了哪一份 DSH」：装完时的磁盘树不是 Host 运行期真正用的那一份，`require.resolve(…, {paths:[…]})` 这类读数通过与否都说明不了问题。本包最终绑到哪一份，以第 6 步「插件真的激活 + 有复核记录」为准。
 
 ## 5. 启用 bundle 并写联调配置
 
@@ -195,7 +185,8 @@ rm -rf /tmp/dsh-nav-g3
 | 插件装了、配置也改了，但行为没变化 | profile 的 `cordis.patch.yml` 没被读到（文件名/层级不对） | 对照 `$DSH_HOME/profiles/desktop/cordis.yml`（根配置，应为空数组）与 `cordis.patch.yml`；注意本插件条目 id 必须是 `dsh-navigator` |
 | 之前还能用，某次启动后设置被重置 | Desktop 的**原生恢复**会 `sanitizeProfile`：把 profile 的 `cordis.patch.yml` 备份成 `.bak-<时间戳>`，并把 `bundles` 重置回 web 模板（第三方 bundle 被关掉） | 从 `.bak-<时间戳>` 恢复 patch，重新把包名加回 `bundles`；这在记录里注明一次即可 |
 | 装的时候报 prepare / 构建脚本被拦 | 装的是源码包或 `file:` 目录，而不是第 2 步的 tarball | 只用 tarball 装，且带 `--ignore-scripts` |
-| profile lock 里冒出 `0.1.6-alpha.2`，或插件激活了但注入的消息形状不对 | 有包把 alpha.2 拉进了 profile（Desktop 自己不会为 peer 另装，见 4b），插件可能与它共用了另一份 | 回第 4b 步核对并记下解析路径与版本；必要时把 peer 钉回 Desktop 自带版本再重装重查；仍不行就按下面收窄 |
+| profile 里 `node_modules/@deepseek-ai/` 或 `pnpm-lock.yaml` 不见了 | Desktop 每次生产启动都在回收自己的核心包（有残留时连 lock 一起删）——见 4b | 预期现象，不要重装或改配置 |
+| Desktop 自带的 dsh 不是 `0.1.6-alpha.1`，或插件激活了但注入的消息形状不对 | 本包只对 alpha.1 承诺行为；peer 范围与 Node 解析都拦不住版本错配（见第 0 步） | 按第 0 步停止并记「Desktop 版本不符，未验」 |
 | 记录文件没有、复核也没发 | 插件没激活（多半是 bundle 未启用），或该会话不是顶层会话（子 agent 会话不触发） | 核对第 5 步；确认用的是自己新建的普通会话 |
 
 **收窄退路**（设计文档已写死）：若 Desktop 这一路在本机确认走不通，就把联调范围收窄到 **CLI / Web / SDK**（这三条在本仓已有可重跑的自动化用例：`prebuilt-artifact.spec.ts`、`web-entry.spec.ts`、`sdk-entry.spec.ts`），并在记录里写清「Desktop 路径失败的**具体一步**与报错」。
@@ -206,4 +197,4 @@ rm -rf /tmp/dsh-nav-g3
 
 - [ ] 设计文档 `docs/dsh-navigator-design.md` 的「验证状态」：把 G3 从「仍未验证」移到「已实测通过」，或在原行写明失败与收窄结论（含日期、Desktop 版本、dsh 版本）。本清单已在该行挂上链接。
 - [ ] 结论一句话模板：
-      `G3：Desktop <版本>（dsh <版本>，pnpm <版本>）上按本清单链接 tarball 产物并启用 bundle，<通过 | 失败>；peer 解析到 <路径>（<版本>）；证据：复核记录 <路径>、对话里的折叠行 <截图/描述>；<未收窄 | 已收窄到 CLI/Web/SDK，原因 …>。`
+      `G3：Desktop <版本>（dsh <版本>，pnpm <版本>）上按本清单链接 tarball 产物并启用 bundle，<通过 | 失败>；证据：profile 里的安装副本 <路径>、复核记录 <路径>、对话里的折叠行 <截图/描述>；<未收窄 | 已收窄到 CLI/Web/SDK，原因 …>。`
