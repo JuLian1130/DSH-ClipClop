@@ -203,13 +203,11 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     } finally {
       inFlightReviews.delete(session)
     }
-    // 任务取消（用户停止或进程退出）：本步 pre-step 的 signal 被中止就是终态取消，原因取 04 闭集里的
-    // 「任务取消」。判据只看 signal，与结算交回的是 null / 完成 / 失败无关——闸门在 signal 中止时只兜底
-    // 放行，放行后适配器照脚本正常收场，只认 `settlement === null` 会把这一格落成完成态。也不调用
-    // `agent.cancel`——它默认清空待处理队列，会把用户刚发的话一起丢掉（终态取消同理）。
-    // `{ kind: 'disposed' }` 是 Agent 实例释放这一条路径，归 11；本票不为它落记录。
+    // 任务取消（用户停止或进程退出）：本步 pre-step 的 signal 被中止就是终态取消；判据只看 signal，
+    // 与结算交回的是 null / 完成 / 失败无关。也不调用 `agent.cancel`——它默认清空待处理队列，会把
+    // 用户刚发的话一起丢掉（终态取消同理）。
     if (signal.aborted) {
-      if (!isDisposed(signal.reason)) await cancelReview(writeReviewRecord, session, point, 'task-cancelled')
+      await cancelTerminalReview(writeReviewRecord, session, point, signal)
       return decision
     }
     if (settlement === null) return decision
@@ -331,20 +329,15 @@ async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
     const aborted = signal?.aborted === true
     if (winner.kind === 'settled' && aborted) {
       // 复核先收场、取消信号也已经中止（G10 实测：abort 后 0ms 结算是复核先到）：这次复核同样是在途
-      // 被取消，按终态落取消记录，不注入、也不落完成 / 失败记录。`{ kind: 'disposed' }` 是 Agent 实例
-      // 释放、归 11，不为它落记录。
-      if (!isDisposed(signal?.reason)) {
-        await cancelReview(writeReviewRecord, session, point, 'task-cancelled')
-      }
+      // 被取消，按终态落取消记录，不注入、也不落完成 / 失败记录。
+      await cancelTerminalReview(writeReviewRecord, session, point, signal)
       return
     }
     if (winner.kind === 'idle') {
-      // 终态：复核还在途就等到了整个 agent 静止。已 abort 就是「任务取消」，否则是「任务结束」；
-      // `{ kind: 'disposed' }` 归 11，不为它落记录。先注销在途登记：这次复核已经作废，不该继续挡住后续触发。
+      // 终态：复核还在途就等到了整个 agent 静止。先注销在途登记（这次复核已经作废，不该继续挡住后续
+      // 触发），再按信号落「任务取消 / 任务结束」。
       releaseInFlight()
-      if (!(aborted && isDisposed(signal?.reason))) {
-        await cancelReview(writeReviewRecord, session, point, aborted ? 'task-cancelled' : 'task-ended')
-      }
+      await cancelTerminalReview(writeReviewRecord, session, point, signal)
       return
     }
     const { settlement } = winner
@@ -508,6 +501,29 @@ async function cancelReview(
     status: 'cancelled',
     cancelReason,
   })
+}
+
+/**
+ * 终态取消：按本步 pre-step 的取消信号落一条取消记录——已中止就是「任务取消」，否则是「任务结束」。
+ * `{ kind: 'disposed' }` 是 Agent 实例释放这一条路径、归 11，本票不为它落记录。三个终态触发点
+ * （等待模式的 signal 中止、并行续体的复核先收场与 `whenIdle()` 先兑现两臂）共用这一条判据。
+ * @param writeReviewRecord - 本实例的 writer（04 的写入入口）。
+ * @param session - 记录归属的会话。
+ * @param point - 触发点冻结的记录基底与计时起点。
+ * @param signal - 该会话最近一次 pre-step 的取消信号。
+ */
+async function cancelTerminalReview(
+  writeReviewRecord: ReviewWriter,
+  session: Session,
+  point: ReviewPoint,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (signal?.aborted !== true) {
+    await cancelReview(writeReviewRecord, session, point, 'task-ended')
+    return
+  }
+  if (isDisposed(signal.reason)) return
+  await cancelReview(writeReviewRecord, session, point, 'task-cancelled')
 }
 
 /**
