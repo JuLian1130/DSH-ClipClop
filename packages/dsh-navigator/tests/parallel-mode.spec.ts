@@ -42,9 +42,12 @@ const ADJUST_VERDICT: ScriptedResponse = {
 /** `stop` 结论的原因。 */
 const STOP_REASON = '主会话已经偏离目标'
 
+/** `stop` 结论里的建议内容。 */
+const STOP_RECOMMENDATION = '停下来重新对齐'
+
 /** 一条 `stop` 结论。 */
 const STOP_VERDICT: ScriptedResponse = {
-  text: JSON.stringify({ verdict: 'stop', reason: STOP_REASON, recommendation: '停下来重新对齐' }),
+  text: JSON.stringify({ verdict: 'stop', reason: STOP_REASON, recommendation: STOP_RECOMMENDATION }),
 }
 
 /** 一条 `continue` 结论：不产生任何消息，用于让后续复核安静收场。 */
@@ -244,6 +247,10 @@ describe('并行模式下复核不阻塞主会话', () => {
     const delivered = deliveredMessage(rig.fixture, suggestion.id)
     expect(delivered).toBeDefined()
     expect(textOf(delivered).startsWith('第 1 步')).toBe(true)
+    // 送达的必须是**这条 `stop` 结论**的内容（`CONTEXT.md` 的「复核建议」指 `adjust` 与并行 `stop`
+    // 结论的内容），不只是触发步骤前缀——换一个结论的正文合成器要在这里变红。
+    expect(textOf(delivered)).toContain(STOP_REASON)
+    expect(textOf(delivered)).toContain(STOP_RECOMMENDATION)
     // 停止那一半：全表里没有 hook 触发的 aborted。
     expect(hasHookAbort(rig.fixture)).toBe(false)
   })
@@ -316,6 +323,28 @@ describe('并行建议的过期标注', () => {
     expect(textOf(rewritten)).toContain(EXPIRY_PHRASE)
 
     // 落点 (b) 的读数落在请求体上，不是队列上：送达的那条正文也带标注。
+    await rig.fixture.main.drive(1)
+    const delivered = deliveredMessage(rig.fixture, suggestion.id)
+    expect(delivered).toBeDefined()
+    expect(textOf(delivered)).toContain(EXPIRY_PHRASE)
+  })
+
+  it('真实用户消息正好落在触发点上：锚点等于触发步骤，也带标注', async () => {
+    const rig = await mountParallel(
+      { triggerEverySteps: 1 },
+      [STEP, ADJUST_VERDICT, STEP, STEP, CONTINUE_VERDICT, STEP],
+    )
+    // 只先走一步，再把消息送到「第 2 步 claim 它」的位置：它记入会话日志时的已完成步数正好是 1，
+    // 而这次复核的触发步骤也是 1——设计文档 `注入与停止机制` 那一格「相等意味着那条用户消息正好
+    // 落在触发点上」，判据是 `锚点 ≥ 触发步骤`。两格正例（锚点 2、触发步骤 1）与否定控制（锚点 0）
+    // 都盖不到等号，只断它们时把 `≥` 写成 `>` 同样全绿。
+    await rig.fixture.main.drive(1, '出发')
+    rig.fixture.main.agent.steer(userMessage('正好落在触发点上'))
+    await rig.fixture.main.drive(1)
+
+    rig.releaseFirstReview()
+    const suggestion = await rig.firstSuggestion
+
     await rig.fixture.main.drive(1)
     const delivered = deliveredMessage(rig.fixture, suggestion.id)
     expect(delivered).toBeDefined()
