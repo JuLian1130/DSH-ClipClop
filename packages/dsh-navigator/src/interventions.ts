@@ -1,11 +1,13 @@
 /**
- * 等待模式的干预动作：复核建议（`adjust`）与停止说明的正文、消息形态，以及停止动作。
+ * 干预动作：复核建议（等待模式 `adjust` 与并行 `adjust` / `stop`）、停止说明的正文、消息形态，
+ * 以及等待模式的停止动作。
  *
  * 两种消息是同一种**干预上下文**：带 `form: 'notice'` 与可读 `summary` 的 user 消息。客户端把
  * notice 渲染成默认折叠的「上下文注入」行，折叠行上只看得到 `summary`，所以触发步骤写在正文开头，
  * `summary` 取正文按上限的截断——正文与 summary 只在这里合成一次（机制见设计文档「注入与停止机制」）。
  *
- * 停止动作的原因文本是**参数**：本票传结论的 `reason`，09 传「复核失败」，11 传取消原因。
+ * 停止动作的原因文本是**参数**：等待模式的 `stop` 传结论的 `reason`，09 传「复核失败」，
+ * 11 传取消原因。并行 `stop` 不走这个动作——它只注入建议，正文用 `composeStopSuggestion`。
  *
  * @module
  */
@@ -27,6 +29,37 @@ export const name = 'dsh-navigator'
  */
 export function composeAdjustNotice(triggerStep: number, recommendation: string): string {
   return `第 ${triggerStep} 步的导航复核建议：${recommendation}`
+}
+
+/**
+ * 并行 `stop` 的建议正文：并行模式下这条结论只注入建议、不停止（规格「三种结论各自做什么」并行列），
+ * 所以写成「建议停止」并把原因与建议内容一并交出去，由主会话自己决定停不停；触发步骤写在开头。
+ * @param triggerStep - 这次复核的触发步骤。
+ * @param reason - 结论里的停止原因。
+ * @param recommendation - 结论里的建议内容。
+ * @returns 正文。
+ */
+export function composeStopSuggestion(
+  triggerStep: number,
+  reason: string,
+  recommendation: string,
+): string {
+  return `第 ${triggerStep} 步的导航复核建议停止：${reason}；建议：${recommendation}`
+}
+
+/**
+ * 并行建议的过期标注：投递时触发点已不属于当前执行区间时补进正文的那一句。规格逐字要求写出
+ * 「它来自上一段执行、可能已不适用」，措辞本身是判据的一部分。
+ */
+export const EXPIRY_NOTE = '它来自上一段执行、可能已不适用'
+
+/**
+ * 把过期标注补进建议正文。两个落点（产生时、待投递期间）共用它，只在这里合成一次。
+ * @param text - 建议正文，以触发步骤开头。
+ * @returns 带过期标注的正文。
+ */
+export function withExpiryNote(text: string): string {
+  return `${text}（${EXPIRY_NOTE}）`
 }
 
 /**

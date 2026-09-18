@@ -6,12 +6,19 @@
  * 路由发一次辅助请求，并把收场结算成一条记录（装配输出、严格解析取结论、收用量与耗时，按终止原因
  * 分完成 / 失败）。复核的结论交回调用点，由监听器按 `verdict` 分派：`adjust` 把复核建议追加进本步
  * 的 `decision.messages`，`stop` 先追加停止说明再取消当前 turn；失败 / 取消（没有结论）与 `continue`
- * 都不触碰会话。并行模式与失败表其余格由后续票据实现。
+ * 都不触碰会话。
+ *
+ * **并行模式**（08）：到点后复核脱离本步在续体里跑，主会话照常走下一步；收场时把结论用 `agent.inject`
+ * 排进待处理队列——`adjust` 与 `stop` 都只注入建议（`stop` 不取消 turn，由主会话自己决定停不停），
+ * `continue` 不注入。到点时若已有复核在跑就跳过这一次，节奏仍按「触发点 + 间隔」推进。并行复核不融合
+ * 本步的取消信号：步骤 / 轮次推进时 `phase.abort` 会被重建，融合会让复核被主会话的步结束掐断；复核
+ * 自己的超时仍由 `reviewOnce` 的 `deadline` 保证（任务结束 / 取消的察觉归 10）。过期标注两个落点见
+ * `settleParallelReview` 与 `annotatePendingSuggestions`。
  *
  * **等待期作废**（07）：等待复核期间到达的真实用户消息让本次复核作废——不注入、不追加停止说明、
  * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）；作废只落那条取消
  * 记录（原因 `invalidated`），完成态不落盘。两条判定信号与 verdict 过滤为何只加在其中一支，见设计
- * 文档「注入与停止机制」。
+ * 文档「注入与停止机制」。这条只适用等待模式：并行在途复核遇到真实用户消息不作废，处置是过期标注。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -23,7 +30,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
+import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, TokenUsage, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -34,7 +41,15 @@ import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import { navigatorStepsProjection } from './projection.ts'
 import { openReviewStore, readReviewRecords, type ReviewWriter } from './records.ts'
-import { composeAdjustNotice, name, noticeMessage, stopWithNotice } from './interventions.ts'
+import {
+  composeAdjustNotice,
+  composeStopSuggestion,
+  EXPIRY_NOTE,
+  name,
+  noticeMessage,
+  stopWithNotice,
+  withExpiryNote,
+} from './interventions.ts'
 import { composeReviewInstruction } from './review-prompt.ts'
 import { advanceTriggerStep, deriveNextTriggerStep, resetTriggerStepAtUserMessage } from './trigger.ts'
 import type { Config } from './types.ts'
@@ -58,7 +73,8 @@ export const inject = ['llm', 'sessions', 'sessionProjections', 'storageDomain']
 export const REVIEW_TIMEOUT_CODE = 'NAVIGATOR_REVIEW_TIMEOUT'
 
 /**
- * 注册计数投影、打开记录域、检查本版要调用的 API 形状，并在触发点发起等待模式复核。
+ * 注册计数投影、打开记录域、检查本版要调用的 API 形状，并在触发点发起复核（等待模式在 `pre-step`
+ * 里等它收场并应用结论，并行模式把它放到续体里、收场后注入建议）。
  * @param ctx - 插件的 context；`inject` 的四个服务此时都已就绪。
  * @param config - 解析后的配置（六个字段都已落值）。
  * @throws 当 `ctx.llm.stream` 或 `ctx.sessions.get` 不存在或不是函数时，错误信息点名缺的那个。
@@ -76,7 +92,11 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
 
   /** 每个主会话的下一次触发点（已完成步数）。按 `Session` 弱引用持有，重新观察时重新推导。 */
   const triggerSteps = new WeakMap<Session, number>()
-  /** 每个主会话当前在途的复核：值是这次复核的作废标记。每次复核新建一个单元格，逐次覆盖。 */
+  /**
+   * 每个主会话当前在途的复核：值是这次复核的作废标记。每次复核新建一个单元格，逐次覆盖。
+   * 它同时是在途守卫——到点时表里已有条目就跳过这一次（等待模式下 `await` 掩盖了这个需要，
+   * 并行模式下复核脱离本步，没有它「同时最多一个在途复核」不成立）。
+   */
   const inFlightReviews = new WeakMap<Session, InFlightReview>()
 
   // 唯一的 `agent/inbox/inserted` 监听器（08 的并行建议过期改写在这里追加，不另注册一份）。
@@ -87,6 +107,10 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     if (!isRealUserMessage(message)) return
     const review = inFlightReviews.get(agent.session)
     if (review !== undefined) review.invalidated = true
+    // 待投递期间的过期改写（只对并行建议有实际意义）：真实用户消息到达时，把已入队、还没带标注的
+    // 本插件建议补上标注。不能用步数比较代替这一落点——这一刻那条消息还没落盘，锚点还是旧值，
+    // 「锚点 ≥ 触发步骤」在那个窗口里恒为假（G9 实测）。
+    annotatePendingSuggestions(agent)
   })
 
   ctx.on('agent/pre-step', async ({ agent, messages, signal }, next): Promise<PreStepDecision> => {
@@ -122,10 +146,25 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     if ((observed?.steps ?? 0) < triggerStep) return next()
     // 到点。节奏只按「触发点 + 间隔」推进：不重新计时、不顺延、也不补打。
     triggerSteps.set(session, advanceTriggerStep(triggerStep, config.triggerEverySteps))
+    // 已有复核在跑：跳过这一次，不排队，节奏照旧。
+    if (inFlightReviews.has(session)) return next()
     // 在途登记要早于 `next()`：claim 早于 waterfall 派发，登记晚了这一段到达的消息就只剩应用点的
     // 队列那一半认领。收场之后注销。
     const review: InFlightReview = { invalidated: false }
     inFlightReviews.set(session, review)
+    if (config.mode === 'parallel') {
+      // 并行：复核脱离本步，先发起再取回决策，主会话照常走下一步。续体自己收异常，绝不打断主会话。
+      void settleParallelReview({
+        ctx,
+        config,
+        session,
+        agent,
+        triggerStep,
+        writeReviewRecord,
+        inFlightReviews,
+      })
+      return next()
+    }
     let decision: PreStepDecision
     let settlement: ReviewSettlement | null
     try {
@@ -174,9 +213,105 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
   })
 }
 
-/** 在途复核的作废标记：插入事件监听器置位，应用点在收场之后读它。 */
+/** 在途复核的作废标记：插入事件监听器置位，等待模式的应用点在收场之后读它。 */
 interface InFlightReview {
   invalidated: boolean
+}
+
+/** 并行复核续体的全部输入。 */
+interface ParallelAttempt {
+  readonly ctx: Context
+  readonly config: Required<Config>
+  readonly session: Session
+  /** 本步的 agent：建议用 `agent.inject` 排进待处理队列。 */
+  readonly agent: Agent
+  /** 这次复核的触发步骤。 */
+  readonly triggerStep: number
+  /** 落一条记录：本实例的 writer。 */
+  readonly writeReviewRecord: ReviewWriter
+  /** 在途登记表：复核一收场就注销，下一次到点才不再跳过。 */
+  readonly inFlightReviews: WeakMap<Session, InFlightReview>
+}
+
+/**
+ * 并行模式的复核续体：脱离本步跑完复核，收场后把结论作为建议注入待处理队列。
+ *
+ * 两处机制要点：
+ * - **不融合本步的取消信号**（`upstream: undefined`）：步骤 / 轮次推进时 `phase.abort` 会被重建，
+ *   融合会让复核被主会话的步结束掐断；复核自己的超时仍由 `reviewOnce` 里的 `deadline` 保证，
+ *   任务结束 / 取消的察觉归 10。
+ * - **复核一收场就注销在途登记**，不等建议注入与落记录跑完：守卫看的是「复核在跑」，否则这段收尾
+ *   时间会把下一个触发点顺延。
+ *
+ * 过期标注的两个落点在这里只做**产生时**那个：比较锚点与触发步骤。待投递期间那个（真实用户消息
+ * 在建议已入队之后才到达，这一步还没落盘、锚点未动）由 `annotatePendingSuggestions` 兜住。
+ * @param attempt - 本次并行复核的全部输入。
+ */
+async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
+  const { ctx, config, session, agent, triggerStep, writeReviewRecord, inFlightReviews } = attempt
+  let settlement: ReviewSettlement | null = null
+  try {
+    settlement = await reviewOnce({
+      ctx,
+      config,
+      session,
+      upstream: undefined,
+      triggerStep,
+      writeReviewRecord,
+    })
+  } catch {
+    settlement = null
+  }
+  inFlightReviews.delete(session)
+  if (settlement === null) return
+  try {
+    const { outcome } = settlement
+    // `continue` 不产生干预上下文，但仍要落完成态记录。
+    if (outcome.verdict !== 'continue') {
+      const anchorStep = ctx.sessionProjections.stateOf(session, 'navigatorSteps')?.anchorStep ?? null
+      const body = outcome.verdict === 'adjust'
+        ? composeAdjustNotice(triggerStep, outcome.recommendation)
+        : composeStopSuggestion(triggerStep, outcome.reason, outcome.recommendation)
+      agent.inject(noticeMessage(isExpired(anchorStep, triggerStep) ? withExpiryNote(body) : body))
+    }
+    await writeReviewRecord(session.id, {
+      ...settlement.base,
+      durationMs: settlement.durationMs,
+      status: 'completed',
+      verdict: outcome,
+      ...settlement.usage === undefined ? {} : { usage: settlement.usage },
+    })
+  } catch {
+    // 续体不打断主会话：失败 / 取消的落盘已由 `reviewOnce` 完成，这里只兜收尾路径上的异常。
+  }
+}
+
+/**
+ * 待投递期间的过期改写：真实用户消息到达时，把待处理队列里属于本插件、还没带标注的建议补上标注。
+ * 遍历 `nextStep` 与 `nextTurn` 两半（`steer` 落「下一步」、`followup` 落「下一轮」），用
+ * `agent.inbox.replace` 改写；必须在建议被 claim 之前完成，claim 之后正文已随消息进入请求。
+ * @param agent - 刚发生插入事件的 agent。
+ */
+function annotatePendingSuggestions(agent: Agent): void {
+  for (const message of [...agent.inbox.nextStep, ...agent.inbox.nextTurn]) {
+    if (message.source.kind !== 'plugin' || message.source.plugin !== name) continue
+    const text = textOf(message.content)
+    if (text.includes(EXPIRY_NOTE)) continue
+    agent.inbox.replace(message.id, noticeMessage(withExpiryNote(text)))
+  }
+}
+
+/**
+ * 并行建议的过期判据（产生时那一落点）：锚点已经走到触发点。
+ * 「从触发点算起、到建议送达为止，主会话收到过真实用户消息」在这一刻只能这样读——锚点 ≥ 触发步骤
+ * 就意味着那条消息落在触发点上或之后（相等是「正好落在触发点上」）。待投递期间到达的消息这一刻
+ * 还没落盘、锚点未动，那个窗口由 `annotatePendingSuggestions` 认领。
+ * @param anchorStep - 投影折叠出的锚点；还没有真实用户消息时为 null。
+ * @param triggerStep - 这次复核的触发步骤。
+ * @returns 产生时就该带过期标注时为 true。
+ */
+function isExpired(anchorStep: number | null | undefined, triggerStep: number): boolean {
+  return anchorStep !== null && anchorStep !== undefined && anchorStep >= triggerStep
 }
 
 /**
@@ -209,8 +344,11 @@ interface ReviewAttempt {
   readonly ctx: Context
   readonly config: Required<Config>
   readonly session: Session
-  /** 本步的取消信号，与复核超时融合。 */
-  readonly upstream: AbortSignal
+  /**
+   * 融合进复核超时的上游信号：等待模式传本步的取消信号；并行模式传 `undefined`——复核已脱离本步，
+   * 它不该被步骤 / 轮次的推进掐断（见 `settleParallelReview`）。
+   */
+  readonly upstream: AbortSignal | undefined
   /** 这次复核的触发步骤，记录里按它归位（也是键的判别值）。 */
   readonly triggerStep: number
   /** 落一条记录：本实例的 writer。 */
