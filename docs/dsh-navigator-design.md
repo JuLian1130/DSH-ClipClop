@@ -175,7 +175,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 | # | 待验证 | 验证方法 | 失败退路 |
 | --- | --- | --- | --- |
-| G3 | Desktop 本地联调路径（bundle 必须解析到 profile 内，且安装时不发 prepare） | 在 Desktop 上链接预构建产物实测一次 | 联调范围收窄到 CLI / Web / SDK |
+| G3 | Desktop 本地联调路径（bundle 必须解析到 profile 内，且安装时不发 prepare） | 在 Desktop 上链接预构建产物实测一次（可执行步骤见 [Desktop 联调手工清单](dsh-navigator-desktop-manual-check.md)） | 联调范围收窄到 CLI / Web / SDK |
 
 ### 仅源码核对（无探针）
 
