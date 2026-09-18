@@ -10,8 +10,8 @@
  *
  * **等待期作废**（07）：等待复核期间到达的真实用户消息让本次复核作废——不注入、不追加停止说明、
  * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）；作废只落那条取消
- * 记录（原因 `invalidated`），完成态不落盘。两条判定信号、四个到达窗口、以及 verdict 过滤为何只加
- * 在其中一支，见设计文档「注入与停止机制」。
+ * 记录（原因 `invalidated`），完成态不落盘。两条判定信号与 verdict 过滤为何只加在其中一支，见设计
+ * 文档「注入与停止机制」。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -81,7 +81,8 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
 
   // 唯一的 `agent/inbox/inserted` 监听器（08 的并行建议过期改写在这里追加，不另注册一份）。
   // 判别式只认真实用户消息，不放宽成「任何插入事件都作废」；只有**在途**复核会被置位——消息在
-  // 触发点那次复核发起之前入队时，这里没有可作废的对象，那一格由应用点检查 claim 批次认领。
+  // 触发点那次复核发起之前入队时，这里没有可作废的对象，那一格由应用点检查未处理的消息
+  // （本步被 claim 的批次 ∪ `nextStep` / `nextTurn` 队列）认领。
   ctx.on('agent/inbox/inserted', ({ agent, message }) => {
     if (!isRealUserMessage(message)) return
     const review = inFlightReviews.get(agent.session)
@@ -155,7 +156,7 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
       })
       return decision
     }
-    // 干预动作紧跟判定、中间不隔 await：留出间隙，消息就会被停止动作的 `cancel` 清掉。
+    // 干预动作紧跟判定、中间不隔 await：一旦留出间隙，落在间隙里的消息就会被停止动作的 `cancel` 清掉。
     // `reject` 决策意味着这一步不打开、不会有模型请求，通知无处落地，所以只在 `enter` 上追加。
     if (settlement.outcome.verdict === 'adjust' && decision.kind === 'enter') {
       decision.messages.push(noticeMessage(composeAdjustNotice(triggerStep, settlement.outcome.recommendation)))
