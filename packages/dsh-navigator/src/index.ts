@@ -3,10 +3,11 @@
  * `cordis.patch.yml` 按 DSH 原生插件写法装载，不实现自己的配置文件加载器。
  *
  * 等待模式的「到点发起一次复核」：监听 `agent/pre-step`，到触发点时取主会话快照、按主会话继承的
- * 路由发一次辅助请求，并把收场结算成一条记录（装配输出、严格解析取结论、收用量与耗时，按终止原因
- * 分完成 / 失败）。复核的结论交回调用点，由监听器按 `verdict` 分派：`adjust` 把复核建议追加进本步
- * 的 `decision.messages`，`stop` 先追加停止说明再取消当前 turn；失败 / 取消（没有结论）与 `continue`
- * 都不触碰会话。
+ * 路由发一次辅助请求，并把收场**只做分类**（装配输出、严格解析取结论、收用量与耗时，按终止原因分完成 /
+ * 失败），结算数据交回调用点。**写入落在应用点**：完成态与失败都在读完未处理的消息之后再落盘，只有
+ * 等待 × `failurePolicy: stop` 那一支才跑那道检查（落点、逐格分工与理由见设计文档「失败处理」的
+ * 「失败结算的落点」）。复核的结论由监听器按 `verdict` 分派：`adjust` 把复核建议追加进本步的
+ * `decision.messages`，`stop` 先追加停止说明再取消当前 turn；取消（没有结算）与 `continue` 都不触碰会话。
  *
  * **并行模式**（08）：到点后复核脱离本步在续体里跑，主会话照常走下一步；收场时把结论用 `agent.inject`
  * 排进待处理队列——`adjust` 与 `stop` 都只注入建议（`stop` 不取消 turn，由主会话自己决定停不停），
@@ -171,20 +172,22 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
       // 先取回内层决策，再按结论追加通知：waterfall 的内层默认返回「本步被 claim 的消息 +
       // runtime-context 消息」，自造 `{ kind: 'enter', messages }` 会静默丢掉后者。
       decision = await next()
-      settlement = await reviewOnce({ ctx, config, session, upstream: signal, triggerStep, writeReviewRecord })
+      settlement = await reviewOnce({ ctx, config, session, upstream: signal, triggerStep })
     } finally {
       inFlightReviews.delete(session)
     }
-    // 失败 / 取消（没有结论）不触碰会话。
+    // 取消（没有结算）不触碰会话：取消记录归 10、11。
     if (settlement === null) return decision
     // 应用点检查尚未被任何一步处理的消息（本步被 claim 的批次 ∪ `nextStep` / `nextTurn` 队列）：
-    // 判定到干预之间不隔 await，所以此刻队列里剩下的就是 `cancel` 会清掉的全部。两条信号与 verdict
-    // 过滤的取舍见设计文档「注入与停止机制」。
+    // 判定到干预之间不隔 await，所以此刻队列里剩下的就是 `cancel` 会清掉的全部。这道检查只挂在会产生
+    // 干预动作的那一支——完成态按 `verdict` 过滤，失败态只在 `failurePolicy: stop` 上跑；`review.invalidated`
+    // 两条路径都照读。取舍见设计文档「注入与停止机制」与「失败处理」的「失败结算的落点」。
     const unprocessed = [...messages, ...agent.inbox.nextStep, ...agent.inbox.nextTurn]
-    const invalidated = review.invalidated
-      || (settlement.outcome.verdict !== 'continue' && unprocessed.some(isRealUserMessage))
-    // 完成态写入挪到作废判定与干预之后：作废时只落那条取消记录，不落完成态——先落完成态再同键覆盖
-    // 正是 04 要避免的。
+    const intervenes = settlement.status === 'completed'
+      ? settlement.outcome.verdict !== 'continue'
+      : config.failurePolicy === 'stop'
+    const invalidated = review.invalidated || (intervenes && unprocessed.some(isRealUserMessage))
+    // 写入挪到作废判定之后：作废 / 取消时只落那条取消记录——先落完成态或失败态再同键覆盖正是 04 要避免的。
     if (invalidated) {
       // 也不调用 `agent.cancel`——它默认清空待处理队列，会把用户刚发的话一起丢掉。
       await writeReviewRecord(session.id, {
@@ -192,6 +195,18 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
         durationMs: settlement.durationMs,
         status: 'cancelled',
         cancelReason: 'invalidated',
+      })
+      return decision
+    }
+    if (settlement.status === 'failed') {
+      // 失败 × `stop`：干预动作紧跟判定、中间不隔 await——一旦留出间隙，落在间隙里的消息就会被停止动作的
+      // `cancel` 清掉。说明正文写「复核失败」（规格四格表）。
+      if (config.failurePolicy === 'stop') stopWithNotice(agent, triggerStep, REVIEW_FAILED)
+      await writeReviewRecord(session.id, {
+        ...settlement.base,
+        durationMs: settlement.durationMs,
+        status: 'failed',
+        failureReason: settlement.failureReason,
       })
       return decision
     }
@@ -243,6 +258,10 @@ interface ParallelAttempt {
  * - **复核一收场就注销在途登记**，不等建议注入与落记录跑完：守卫看的是「复核在跑」，否则这段收尾
  *   时间会把下一个触发点顺延。
  *
+ * **并行模式没有可以回去的应用点**（那一步的 pre-step 早已返回，续体是脱离本步跑的），所以失败记录由
+ * 续体自己落、一条，也不读 `review.invalidated`（并行模式不把在途到达的真实用户消息读成作废，见设计
+ * 文档「失败处理」的「失败结算的落点」）。
+ *
  * 过期标注的两个落点在这里只做**产生时**那个：比较锚点与触发步骤。待投递期间那个（真实用户消息
  * 在建议已入队之后才到达，这一步还没落盘、锚点未动）由 `annotatePendingSuggestions` 兜住。
  * @param attempt - 本次并行复核的全部输入。
@@ -251,20 +270,23 @@ async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
   const { ctx, config, session, agent, triggerStep, writeReviewRecord, inFlightReviews } = attempt
   let settlement: ReviewSettlement | null = null
   try {
-    settlement = await reviewOnce({
-      ctx,
-      config,
-      session,
-      upstream: undefined,
-      triggerStep,
-      writeReviewRecord,
-    })
+    settlement = await reviewOnce({ ctx, config, session, upstream: undefined, triggerStep })
   } catch {
     settlement = null
   }
   inFlightReviews.delete(session)
   if (settlement === null) return
   try {
+    if (settlement.status === 'failed') {
+      // 并行两格的失败记录由续体自己落；`failurePolicy` 在并行模式下不生效，也不注入任何消息。
+      await writeReviewRecord(session.id, {
+        ...settlement.base,
+        durationMs: settlement.durationMs,
+        status: 'failed',
+        failureReason: settlement.failureReason,
+      })
+      return
+    }
     const { outcome } = settlement
     // `continue` 不产生干预上下文，但仍要落完成态记录。
     if (outcome.verdict !== 'continue') {
@@ -355,11 +377,9 @@ interface ReviewAttempt {
   readonly upstream: AbortSignal | undefined
   /** 这次复核的触发步骤，记录里按它归位（也是键的判别值）。 */
   readonly triggerStep: number
-  /** 落一条记录：本实例的 writer。 */
-  readonly writeReviewRecord: ReviewWriter
 }
 
-/** 一条记录里与收场状态无关的部分（完成态与取消态共用）。 */
+/** 一条记录里与收场状态无关的部分（完成态与失败、取消态共用）。 */
 interface ReviewRecordBase {
   readonly triggerStep: number
   readonly config: Required<Config>
@@ -367,17 +387,34 @@ interface ReviewRecordBase {
   readonly messageIds: readonly string[]
 }
 
-/** 一次可解析收场的结算：结论与落完成态所需的记录字段，由调用点在作废判定之后落盘。 */
-interface ReviewSettlement {
-  /** 解析成功的结论。 */
-  readonly outcome: ReviewOutcome
-  /** 记录里与结论无关的部分。 */
-  readonly base: ReviewRecordBase
-  /** 复核耗时。 */
-  readonly durationMs: number
-  /** 流里出现 usage 块时的用量；没有该块时整个字段缺省。 */
-  readonly usage?: TokenUsage
-}
+/**
+ * 一次复核的结算：只做分类，落盘由调用点决定（设计文档「失败处理」的「失败结算的落点」）。
+ *
+ * 取消（任务结束 / 任务取消 / 插件释放）没有结算——`reviewOnce` 返回 null，那些记录归 10、11。
+ */
+type ReviewSettlement =
+  | {
+    /** 解析成功的收场。 */
+    readonly status: 'completed'
+    /** 解析成功的结论。 */
+    readonly outcome: ReviewOutcome
+    /** 记录里与结论无关的部分。 */
+    readonly base: ReviewRecordBase
+    /** 复核耗时。 */
+    readonly durationMs: number
+    /** 流里出现 usage 块时的用量；没有该块时整个字段缺省。 */
+    readonly usage?: TokenUsage
+  }
+  | {
+    /** 超时 / 输出无法解析 / 拿不到路由 / 传输层抛错。 */
+    readonly status: 'failed'
+    /** 记进记录 `failureReason` 的那一条。 */
+    readonly failureReason: string
+    /** 记录里与失败原因无关的部分。 */
+    readonly base: ReviewRecordBase
+    /** 复核耗时。 */
+    readonly durationMs: number
+  }
 
 /** 输出过不了严格解析时记进失败原因的那一条。 */
 const OUTPUT_UNPARSEABLE = '复核输出无法解析'
@@ -385,35 +422,33 @@ const OUTPUT_UNPARSEABLE = '复核输出无法解析'
 /** 「拿不到路由」的防御分支记进失败原因的那一条。 */
 const NO_ROUTE = '拿不到会话路由'
 
+/** 等待模式 `failurePolicy: stop` 追加的停止说明里写的失败原因（规格四格表）。 */
+const REVIEW_FAILED = '复核失败'
+
 /**
- * 发起一次复核请求，并把这次复核的收场结算成一条记录。请求形态、模型配置继承与失败分类的机制见
+ * 发起一次复核请求，并把这次复核的收场**分类**成结算数据。请求形态、模型配置继承与失败分类的机制见
  * 设计文档「辅助请求的消息构成」「模型配置继承粒度」「失败处理」。
  *
- * 失败 / 取消在这里落盘（一次复核最多落一条记录）；可解析的收场**不在这里落完成态**——结论与记录
- * 字段交回调用点，由它在作废判定与干预之后落完成态或取消记录，见 `apply`。
+ * **这里不落盘**：完成 / 失败都只交回结算数据，由调用点在读完未处理的消息、判完作废之后再落一条记录
+ * （见设计文档「失败处理」的「失败结算的落点」）。取消（非超时的中止）返回 null，不为它落记录。
  * @param attempt - 本次复核的全部输入。
- * @returns 完成态的结算；失败 / 取消时为 null。
+ * @returns 完成 / 失败的结算；取消时为 null。
  */
 async function reviewOnce(attempt: ReviewAttempt): Promise<ReviewSettlement | null> {
-  const { ctx, config, session, upstream, triggerStep, writeReviewRecord } = attempt
+  const { ctx, config, session, upstream, triggerStep } = attempt
   const startedAt = Date.now()
   const snapshot = session.deriveMessages()
   const base: ReviewRecordBase = { triggerStep, config, messageIds: snapshot.map(message => message.id) }
-  const fail = async (failureReason: string): Promise<void> => {
-    await writeReviewRecord(session.id, {
-      ...base,
-      durationMs: Date.now() - startedAt,
-      status: 'failed',
-      failureReason,
-    })
-  }
+  const failed = (failureReason: string): ReviewSettlement => ({
+    status: 'failed',
+    failureReason,
+    base,
+    durationMs: Date.now() - startedAt,
+  })
 
   // 「拿不到路由」（会话还没有路由信息）是防御分支：等待模式的触发点必然已写入 request/header。
   const route = session.requestHeader()?.config
-  if (route === undefined) {
-    await fail(NO_ROUTE)
-    return null
-  }
+  if (route === undefined) return failed(NO_ROUTE)
 
   const instruction = createUserMessage({
     content: [{ type: 'text', text: composeReviewInstruction(config.prompt) }],
@@ -442,28 +477,20 @@ async function reviewOnce(attempt: ReviewAttempt): Promise<ReviewSettlement | nu
     timeout[Symbol.dispose]()
   }
 
-  if (thrown !== undefined) {
-    await fail(thrown instanceof Error ? thrown.message : String(thrown))
-    return null
-  }
+  if (thrown !== undefined) return failed(thrown instanceof Error ? thrown.message : String(thrown))
   const finish = assembler.finish
   if (finish.kind === 'aborted') {
     // 超时才算失败；其余中止（任务结束 / 任务取消 / 插件释放）的记录归 10、11，本票不为它落失败记录，
     // 否则它们写下的取消记录会被同键的迟到失败写入覆盖。
-    if (timeoutOf(timeout.signal, REVIEW_TIMEOUT_CODE) !== undefined) await fail(finish.failure.message)
+    if (timeoutOf(timeout.signal, REVIEW_TIMEOUT_CODE) !== undefined) return failed(finish.failure.message)
     return null
   }
-  if (finish.kind === 'error') {
-    await fail(finish.failure.message)
-    return null
-  }
+  if (finish.kind === 'error') return failed(finish.failure.message)
   const outcome = parseReviewOutcome(textOf(assembler.blocks()))
-  if (outcome === null) {
-    await fail(OUTPUT_UNPARSEABLE)
-    return null
-  }
+  if (outcome === null) return failed(OUTPUT_UNPARSEABLE)
   // 完成态不保证有 usage：流里没有 usage 块时整个字段缺省（口径见设计文档「复核记录的存放位置」）。
   return {
+    status: 'completed',
     outcome,
     base,
     durationMs: Date.now() - startedAt,
