@@ -278,7 +278,8 @@ describe('并行建议的过期标注', () => {
 
     // 建议已入队、尚未被 claim 时真实用户消息到达：同一次同步调用里改写正文。
     rig.fixture.main.agent.steer(userMessage('换个方向'))
-    const [rewritten] = pendingSuggestions(rig.fixture)
+    // 改写是「同一条建议换正文」：id 不变，送达面才认得出「该条建议」。
+    const rewritten = pendingSuggestions(rig.fixture).find(message => message.id === suggestion.id)
     expect(rewritten).toBeDefined()
     expect(textOf(rewritten)).toContain(EXPIRY_PHRASE)
   })

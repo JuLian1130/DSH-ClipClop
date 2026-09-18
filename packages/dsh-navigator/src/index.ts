@@ -31,7 +31,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
-import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { BlockAssembler, createUserMessage, freezeMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, TokenUsage, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { deadline, timeoutOf } from '@deepseek-ai/dsh-timeout'
@@ -290,6 +290,9 @@ async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
  * 待投递期间的过期改写：真实用户消息到达时，把待处理队列里属于本插件、还没带标注的建议补上标注。
  * 遍历 `nextStep` 与 `nextTurn` 两半（`steer` 落「下一步」、`followup` 落「下一轮」），用
  * `agent.inbox.replace` 改写；必须在建议被 claim 之前完成，claim 之后正文已随消息进入请求。
+ *
+ * 改写**保留消息 id**：这是「同一条建议换正文」，不是换一条消息——记录与送达面按 id 认「该条建议」，
+ * 换 id 会让「SDK 读到的那条消息的 id 等于我们追加时使用的 id」这条判据落空。
  * @param agent - 刚发生插入事件的 agent。
  */
 function annotatePendingSuggestions(agent: Agent): void {
@@ -297,7 +300,8 @@ function annotatePendingSuggestions(agent: Agent): void {
     if (message.source.kind !== 'plugin' || message.source.plugin !== name) continue
     const text = textOf(message.content)
     if (text.includes(EXPIRY_NOTE)) continue
-    agent.inbox.replace(message.id, noticeMessage(withExpiryNote(text)))
+    const rewritten = noticeMessage(withExpiryNote(text))
+    agent.inbox.replace(message.id, freezeMessage({ ...rewritten, id: message.id }))
   }
 }
 
