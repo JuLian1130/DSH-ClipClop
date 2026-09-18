@@ -1,9 +1,10 @@
 /**
  * 真实入口腿（票据 12）的装配：临时 DSH home、navigator 覆盖补丁、CLI 入口解析、资源收尾与观察者读回。
  *
- * 两条腿都走**发布态 CLI 的真实 profile**（`--profile sdk` / `--profile acp`），用 `--patch` 覆盖把本包
- * 的构建产物按**绝对路径**插进 profile。这不走「按包名从安装副本装载」那条路线，所以 02b 的装载组合
- * 不参与本票（结论见票据备注）。
+ * 三条腿都走**发布态 CLI 的真实 profile**（SDK 腿与 Web 腿用 `--profile sdk`、ACP 腿用 `--profile acp`；
+ * Web 腿只用它跑出真实事件流，渲染另走 `client-conversation.ts`），用 `--patch` 覆盖把本包的构建产物按
+ * **绝对路径**插进 profile。这不走「按包名从安装副本装载」那条路线，所以 02b 的装载组合不参与本票
+ * （结论见票据备注）。
  *
  * 覆盖补丁装载的是构建产物：门禁先跑 `tsc -p tsconfig.json`，`lib/index.js` 缺失时硬失败——与 02b 的
  * 产物验收同一个前提。

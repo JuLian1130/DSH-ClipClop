@@ -3,7 +3,7 @@
  * 决定每条请求答复什么，并留下全部请求体供用例读「模型可见上下文」。
  *
  * 不引 `@deepseek-ai/dsh-llm-mock-server`：那个设施的 `successText` 对每条 success 请求是同一个值，
- * 而这两条腿要按请求区分「主会话答复」「带工具调用的多步答复」与「复核结论」。SSE 帧形状取自该发布包
+ * 而这三条腿要按请求区分「主会话答复」「带工具调用的多步答复」与「复核结论」。SSE 帧形状取自该发布包
  * 的 success / tool_call 两个分支（`data: {...}\n\n`、终止块带 usage、`data: [DONE]`）。
  *
  * @module
@@ -113,7 +113,7 @@ export function startMockModel(
  * @param attempt - 一基请求序号，用作 `id` 的一部分（不要求唯一，只是可读）。
  * @returns 工具调用答复。
  */
-export function keepTurnAlive(attempt: number): MockModelReply {
+function keepTurnAlive(attempt: number): MockModelReply {
   return {
     toolCall: {
       name: 'bash',
@@ -132,7 +132,7 @@ function isReviewRequest(request: Record<string, unknown>): boolean {
 }
 
 /**
- * 两条腿共用的模型脚本：第 1 步用工具调用把 turn 撑过一步（否则第 1 步就收尾，复核没有到点的机会），
+ * 三条腿共用的模型脚本：第 1 步用工具调用把 turn 撑过一步（否则第 1 步就收尾，复核没有到点的机会），
  * 复核请求回给定结论，其余主会话请求回一句纯文本。
  * @param review - 复核请求的答复结论（`verdict` / `reason` / `recommendation`）。
  * @returns `startMockModel` 的 `respond`。
