@@ -13,6 +13,9 @@
  * 消息在复核在途时到达，由唯一的 `agent/inbox/inserted` 监听器在送消息那一次同步调用里置位；
  * 消息在触发点那次 pre-step 的 claim 之前就已入队，则由应用点检查本步被 claim 的消息逮住。作废时
  * 只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废判定之后。
+ * 两处信号的规格前提不同，所以 verdict 过滤只加在 claim 检查那一支：在途到达按规格「一律作废」，
+ * 不看结论；claim 检查那一支的规格前提是「注入建议、追加停止说明或停止 turn 之前」，只在 `adjust` /
+ * `stop` 上作废，`continue` 照旧落完成态（触发点那次 pre-step 正常会 claim 到用户自己那条消息）。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -135,15 +138,18 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     } finally {
       inFlightReviews.delete(session)
     }
-    // 作废只有一条判定语义，两处信号合成它：在途置位，或本步被 claim 的消息里有真实用户消息。
-    // 判定落在收场之后；09 的失败策略停止与它共用这一条（作废优先、不停止）。
-    const invalidated = review.invalidated || messages.some(isRealUserMessage)
     // 失败 / 取消（没有结论）不触碰会话。
     if (settlement === null) return decision
+    // 作废只有一条判定语义，两处信号合成它：在途置位，或本步被 claim 的消息里有真实用户消息。
+    // 判定落在收场之后；09 的失败策略停止与它共用这一条（作废优先、不停止）。verdict 过滤只加在
+    // claim 检查那一支——在途到达按规格「一律作废」，而 claim 检查的规格前提是「注入建议、追加
+    // 停止说明或停止 turn 之前」，`continue` 什么也不做，照旧落完成态（04 的完成态三态格建在这条上：
+    // 触发点那次 pre-step 正常会 claim 到用户自己那条消息，不过滤则 04 的完成态用例必红）。
+    const invalidated = review.invalidated
+      || (settlement.outcome.verdict !== 'continue' && messages.some(isRealUserMessage))
     // 完成态写入挪到作废判定之后：作废时只落那条取消记录，不落完成态——先落完成态再同键覆盖正是
-    // 04 要避免的。只有会产生干预的结论才因作废而改写记录：`continue` 什么也不做，照旧落完成态
-    // （04 的完成态三态格与 06 的用例建在这条上）。
-    if (invalidated && settlement.outcome.verdict !== 'continue') {
+    // 04 要避免的。
+    if (invalidated) {
       // 也不调用 `agent.cancel`——它默认清空待处理队列，会把用户刚发的话一起丢掉。
       await writeReviewRecord(session.id, {
         ...settlement.base,

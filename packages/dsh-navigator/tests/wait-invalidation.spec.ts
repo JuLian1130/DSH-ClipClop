@@ -75,6 +75,11 @@ const STOP_VERDICT: ScriptedResponse = {
   text: JSON.stringify({ verdict: 'stop', reason: STOP_REASON, recommendation: '停下来重新对齐' }),
 }
 
+/** 一条 `continue` 结论：在途到达那一支不看结论，照作废；claim 检查那一支才过滤它。 */
+const CONTINUE_VERDICT: ScriptedResponse = {
+  text: JSON.stringify({ verdict: 'continue', reason: '看起来正常', recommendation: '无' }),
+}
+
 /** 本插件写入的 user 消息（`source.kind === 'plugin'` 且插件名是本插件），按 `deriveMessages()` 顺序。 */
 function pluginUserMessages(fixture: NavigatorLoop) {
   return fixture.agent.session.deriveMessages().filter(
@@ -249,6 +254,37 @@ describe('窗口一 · 在途到达：复核请求已到达、结论尚未落盘
     await fixture.main.drive(2, '出发')
     await fixture.main.drive(1)
 
+    expect(fixture.main.reviews()).toHaveLength(1)
+    expectNoPluginIntervention(fixture)
+    expectNoHookAbort(fixture)
+    expectProcessed(fixture, interjectionId)
+    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
+  })
+
+  it('continue 结论也照作废：在途到达那一支不看结论，落取消记录', async () => {
+    const root = await tempRoot()
+    let fixture: NavigatorLoop
+    let interjectionId = ''
+    fixture = await mountNavigatorLoop({
+      config: { triggerEverySteps: EVERY_STEPS },
+      storageRoot: root,
+      script: [STEP, STEP, CONTINUE_VERDICT, DONE, DONE],
+      reviewGate(release) {
+        if (interjectionId !== '') {
+          release()
+          return
+        }
+        const interjection = userMessage('换个方向')
+        interjectionId = interjection.id
+        fixture.main.agent.steer(interjection)
+        release()
+      },
+    })
+
+    await fixture.main.drive(2, '出发')
+    await fixture.main.drive(1)
+
+    // (a)(b) 对 `continue` 恒真，这条用例的读数在 (c)(d)：消息照常处理，记录仍取取消态。
     expect(fixture.main.reviews()).toHaveLength(1)
     expectNoPluginIntervention(fixture)
     expectNoHookAbort(fixture)
