@@ -12,10 +12,11 @@
  * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）。作废只有一条判定：
  * 消息在复核在途时到达，由唯一的 `agent/inbox/inserted` 监听器在送消息那一次同步调用里置位；
  * 消息在触发点那次 pre-step 的 claim 之前就已入队，则由应用点检查本步被 claim 的消息逮住。作废时
- * 只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废判定之后。
- * 两处信号的规格前提不同，所以 verdict 过滤只加在 claim 检查那一支：在途到达按规格「一律作废」，
- * 不看结论；claim 检查那一支的规格前提是「注入建议、追加停止说明或停止 turn 之前」，只在 `adjust` /
- * `stop` 上作废，`continue` 照旧落完成态（触发点那次 pre-step 正常会 claim 到用户自己那条消息）。
+ * 只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废判定与
+ * 干预动作之后（判定到干预之间不隔 await，否则此间到达的真实用户消息会被停止动作的 `cancel` 清掉）。
+ * verdict 过滤只加在 claim 检查那一支（本实现的取舍，理由见设计文档该节）：在途到达不看结论、一律
+ * 作废；claim 检查那一支只在 `adjust` / `stop` 上作废，`continue` 照旧落完成态（触发点那次 pre-step
+ * 正常会 claim 到用户自己那条消息，04 的完成态用例建在这条上）。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -159,6 +160,14 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
       })
       return decision
     }
+    // 干预动作紧跟判定、中间不隔 await：`stopWithNotice` 是同步的，判定与 cancel 之间因此没有可插入
+    // 真实用户消息的间隙——留出间隙时，那条消息会被 cancel 清掉。完成态写入落在干预之后。
+    // `reject` 决策意味着这一步不打开、不会有模型请求，通知无处落地，所以只在 `enter` 上追加。
+    if (settlement.outcome.verdict === 'adjust' && decision.kind === 'enter') {
+      decision.messages.push(noticeMessage(composeAdjustNotice(triggerStep, settlement.outcome.recommendation)))
+    } else if (settlement.outcome.verdict === 'stop') {
+      stopWithNotice(agent, triggerStep, settlement.outcome.reason)
+    }
     await writeReviewRecord(session.id, {
       ...settlement.base,
       durationMs: settlement.durationMs,
@@ -166,12 +175,6 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
       verdict: settlement.outcome,
       ...settlement.usage === undefined ? {} : { usage: settlement.usage },
     })
-    // `reject` 决策意味着这一步不打开、不会有模型请求，通知无处落地，所以只在 `enter` 上追加。
-    if (settlement.outcome.verdict === 'adjust' && decision.kind === 'enter') {
-      decision.messages.push(noticeMessage(composeAdjustNotice(triggerStep, settlement.outcome.recommendation)))
-    } else if (settlement.outcome.verdict === 'stop') {
-      stopWithNotice(agent, triggerStep, settlement.outcome.reason)
-    }
     return decision
   })
 }
