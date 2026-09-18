@@ -12,8 +12,10 @@
  * 本票第 4 项另按**原始存储文档**复验取消态的 `verdict` / `failureReason` 是 `undefined`（读回入口经
  * 声明 schema 解析、会剥掉未声明的键，只按它断等于空转）。
  *
- * 三个用例：窗口一（复核在途到达）× `followup` / `steer` 各一条、窗口二（消息在触发点之前入队、被那次
- * pre-step 的 claim 取走）× `steer` 一条。三条都挂真实存储栈，否则 (d) 读不回取消记录。
+ * 五个用例：窗口一（复核在途到达）× `followup` / `steer` 各一条，另加一条 `continue` 结论——在途那一支
+ * 不看结论，任何结论都作废；窗口二（消息在触发点之前入队、被那次 pre-step 的 claim 取走）× `steer`
+ * 一条；窗口三（消息在触发点那次 claim 之后、复核发起之前到达，由插入监听器置位）× `steer` 一条。
+ * 五条都挂真实存储栈，否则 (d) 读不回取消记录。
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -285,6 +287,41 @@ describe('窗口一 · 在途到达：复核请求已到达、结论尚未落盘
     await fixture.main.drive(1)
 
     // (a)(b) 对 `continue` 恒真，这条用例的读数在 (c)(d)：消息照常处理，记录仍取取消态。
+    expect(fixture.main.reviews()).toHaveLength(1)
+    expectNoPluginIntervention(fixture)
+    expectNoHookAbort(fixture)
+    expectProcessed(fixture, interjectionId)
+    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
+  })
+})
+
+describe('窗口三 · `next()` 期间：消息在触发点那次 claim 之后、复核发起之前到达', () => {
+  it('steer 送出的消息一样作废，不被 stop 的 cancel 清掉，只落一条取消记录', async () => {
+    const root = await tempRoot()
+    const fixture = await mountNavigatorLoop({
+      config: { triggerEverySteps: EVERY_STEPS },
+      storageRoot: root,
+      script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
+    })
+    // 测试侧脚手架：注册一条下游 pre-step handler，它在插件的 `await next()` 内部送消息。那一刻 claim
+    // 已经发生（消息进不了本步批次），只有在途登记早于 `next()`，插入监听器才有对象可置位——否则这条
+    // 消息会被随后的 stop 的 `cancel` 清掉。不新增夹具能力，只多一条测试侧 handler。
+    let preSteps = 0
+    let interjectionId = ''
+    fixture.ctx.on('agent/pre-step', async (_payload, next) => {
+      preSteps += 1
+      const decision = await next()
+      if (preSteps === 3) {
+        const interjection = userMessage('换个方向')
+        interjectionId = interjection.id
+        fixture.main.agent.steer(interjection)
+      }
+      return decision
+    })
+
+    await fixture.main.drive(2, '出发')
+    await fixture.main.drive(1)
+
     expect(fixture.main.reviews()).toHaveLength(1)
     expectNoPluginIntervention(fixture)
     expectNoHookAbort(fixture)

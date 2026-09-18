@@ -10,7 +10,8 @@
  *
  * **等待期作废**（07）：等待复核期间到达的真实用户消息让本次复核作废——不注入、不追加停止说明、
  * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）。作废只有一条判定：
- * 消息在复核在途时到达，由唯一的 `agent/inbox/inserted` 监听器在送消息那一次同步调用里置位；
+ * 消息在等待期到达，由唯一的 `agent/inbox/inserted` 监听器在送消息那一次同步调用里置位（在途登记
+ * 从触发点决定起，覆盖 `next()` 与复核请求，收场后注销）；
  * 消息在触发点那次 pre-step 的 claim 之前就已入队，则由应用点检查本步被 claim 的消息逮住。作废时
  * 只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废判定与
  * 干预动作之后（判定到干预之间不隔 await，否则此间到达的真实用户消息会被停止动作的 `cancel` 清掉）。
@@ -126,15 +127,17 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     if ((observed?.steps ?? 0) < triggerStep) return next()
     // 到点。节奏只按「触发点 + 间隔」推进：不重新计时、不顺延、也不补打。
     triggerSteps.set(session, advanceTriggerStep(triggerStep, config.triggerEverySteps))
-    // 先取回内层决策，再按结论追加通知：waterfall 的内层默认返回「本步被 claim 的消息 +
-    // runtime-context 消息」，自造 `{ kind: 'enter', messages }` 会静默丢掉后者。
-    const decision = await next()
-    // 复核在途期间到达的真实用户消息由插入事件监听器在那一次同步调用里置位。先登记在途对象，
-    // 让监听器找得到它；收场之后注销。
+    // 在途登记要早于 `next()`：claim 早于 waterfall 派发，而 `next()` 跑的是整条 pre-step 瀑布（别的
+    // 插件的 handler 可能 await 很久）。此间到达的真实用户消息既不在 claim 批次里、也没有在途对象
+    // 可置位，随后会被停止动作的 `cancel` 清掉。收场之后注销。
     const review: InFlightReview = { invalidated: false }
     inFlightReviews.set(session, review)
+    let decision: PreStepDecision
     let settlement: ReviewSettlement | null
     try {
+      // 先取回内层决策，再按结论追加通知：waterfall 的内层默认返回「本步被 claim 的消息 +
+      // runtime-context 消息」，自造 `{ kind: 'enter', messages }` 会静默丢掉后者。
+      decision = await next()
       settlement = await reviewOnce({ ctx, config, session, upstream: signal, triggerStep, writeReviewRecord })
     } finally {
       inFlightReviews.delete(session)
