@@ -39,8 +39,8 @@ afterEach(() => scope.dispose())
 /**
  * 从持久化条目装配一次并断三件事：折叠行在、展开后含正文、展开前不显示正文。
  *
- * `[data-disclosure-row="true"]` 不止这一行（系统提示词、推理行等都是折叠行），所以要按「这一行里带着
- * 那条 notice 的 `data-context-summary`」定位，不能取第一个。
+ * `[data-disclosure-row="true"]` 不止这一行（系统提示词、推理行等都是折叠行），所以按「这一行里那条
+ * notice 的 `data-context-summary` 就是它的正文」定位；定位不到就硬失败，不取任意一行。
  * @param sessionId - 会话 id。
  * @param entries - 这次装配读入的历史条目。
  */
@@ -48,13 +48,13 @@ async function assertNoticeRow(sessionId: string, entries: readonly ClientSessio
   const booted = await bootConversation(sessionId, entries)
   try {
     const row = [...booted.container.querySelectorAll<HTMLElement>('[data-disclosure-row="true"]')]
-      .find(candidate => candidate.querySelector('[data-context-summary]') !== null)
-    expect(row).toBeDefined()
-    expect(row?.getAttribute('aria-expanded')).toBe('false')
-    expect(row?.querySelector('[data-context-summary]')?.textContent).toBe(NOTICE_TEXT)
+      .find(candidate => candidate.querySelector('[data-context-summary]')?.textContent === NOTICE_TEXT)
+    if (row === undefined) throw new Error(`web leg: no notice row carrying summary ${JSON.stringify(NOTICE_TEXT)}`)
+    expect(row.getAttribute('aria-expanded')).toBe('false')
     expect(booted.container.querySelector('[data-context-injection-body]')).toBeNull()
 
-    fireEvent.click(row as HTMLElement)
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('true')
     const body = booted.container.querySelector('[data-context-injection-body]')
     expect(body?.getAttribute('data-context-form')).toBe('notice')
     expect(body?.textContent).toContain(NOTICE_TEXT)

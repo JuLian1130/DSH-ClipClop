@@ -7,5 +7,6 @@
     // 两套夹具共用的桩是 .mjs（要能被 Node 内部 ESM loader 直接 import），TS 侧也要 import 它。
     "allowJs": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  // `vitest.config.ts` 也放进来：票面要求「新增的 .ts 不落在类型检查之外」，配置文件同样按这条走。
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }

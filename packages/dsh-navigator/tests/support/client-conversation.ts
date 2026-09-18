@@ -25,6 +25,7 @@ import { act, render } from '@testing-library/react'
 import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
 import * as ReactDOM from 'react-dom'
+import * as ReactDOMClient from 'react-dom/client'
 import * as cordis from '@deepseek-ai/cordis'
 import * as store from '@deepseek-ai/dsh-client-store'
 import * as slots from '@deepseek-ai/dsh-client-ui-slots'
@@ -64,7 +65,7 @@ function platformExternals(): Record<string, unknown> {
     react: React,
     'react/jsx-runtime': jsxRuntime,
     'react-dom': ReactDOM,
-    'react-dom/client': ReactDOM,
+    'react-dom/client': ReactDOMClient,
     '@deepseek-ai/cordis': cordis,
     '@deepseek-ai/dsh-client-store': store,
     '@deepseek-ai/dsh-client-ui-slots': slots,
@@ -92,7 +93,6 @@ function loadClientModules(): (spec: string) => unknown {
   }
   for (const spec of CLIENT_BUNDLES) {
     const source = readFileSync(nodeRequire.resolve(spec), 'utf8')
-    // eslint-disable-next-line no-new-func -- 发布态的 bundle 就是这个形态，没有别的入口
     new Function('window', 'document', source)(globals.window, globalThis.document)
   }
   const externals = platformExternals()
@@ -110,15 +110,24 @@ function loadClientModules(): (spec: string) => unknown {
   return load
 }
 
-/** 插件模块只用到 `apply` 与 `inject`；两个字段都取真值，写错时这里就报错。 */
+/** 客户端插件模块只用到 `apply` 与 `inject`；缺任一项说明装错了 bundle，直接报错而不是把 undefined 传下去。 */
 interface ClientPlugin {
   readonly inject: readonly string[]
   readonly apply: (ctx: never, config: never) => void
 }
 
-/** 取一个客户端插件模块的形状。 */
+/**
+ * 取一个客户端插件模块，并核对它的两个具名导出。
+ * @param load - 本次装配的模块加载器。
+ * @param id - bundle id。
+ * @returns 插件模块。
+ */
 function clientPlugin(load: (spec: string) => unknown, id: string): ClientPlugin {
-  return load(id) as ClientPlugin
+  const module = load(id) as Partial<ClientPlugin>
+  if (typeof module.apply !== 'function' || !Array.isArray(module.inject)) {
+    throw new Error(`client bundle ${JSON.stringify(id)} exports no apply/inject`)
+  }
+  return module as ClientPlugin
 }
 
 /** 固定的可观察读数：夹具的服务替身只被读一次快照，不需要推送。 */
@@ -177,8 +186,7 @@ export async function bootConversation(
   }
   const sessionFace = {
     sessionId,
-    getSnapshot: () => sessionSnapshot,
-    subscribe: () => () => {},
+    ...observable(() => sessionSnapshot),
     loadOlder: async () => {},
     loadThrough: async () => {},
     projections: { faceOf: () => observable(() => undefined), set: () => {} },
@@ -194,7 +202,6 @@ export async function bootConversation(
     sessions: {
       list: observable(() => listState),
       binding: (id: unknown) => (id === sessionId ? binding : undefined),
-      retainInfo: () => observable(() => ({ retainedBy: { mainView: 0 } })),
       scope: () => undefined,
     },
     remote: { $on: () => () => {}, call: async () => undefined },
@@ -204,7 +211,7 @@ export async function bootConversation(
     settingsScope: { bind: () => observable(() => ({ value: { preference: 'zh' }, set: () => {} })) },
     fileUpload: { upload: async () => { throw new Error('web leg fixture: file upload is not stubbed') } },
     uiWorkspace: { openSession: () => {}, openWorkspace: async () => {} },
-    sidebarRight: { openResource: () => {}, openTab: () => {} },
+    sidebarRight: { openResource: () => {} },
     connection: {},
     typert: {},
   }
