@@ -9,16 +9,9 @@
  * 都不触碰会话。并行模式与失败表其余格由后续票据实现。
  *
  * **等待期作废**（07）：等待复核期间到达的真实用户消息让本次复核作废——不注入、不追加停止说明、
- * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）。作废只有一条判定：
- * 消息在等待期到达，由唯一的 `agent/inbox/inserted` 监听器在送消息那一次同步调用里置位（在途登记
- * 从触发点决定起，覆盖 `next()` 与复核请求，收场后注销）；落在登记之前的（本步 claim 已过、插件
- * handler 入口未到，中间隔着 `systemPrompt.assemble` 与先前注册的 handler）由应用点检查「本步被
- * claim 的消息 ∪ `nextStep` / `nextTurn` 待处理队列」逮住——这一段里到达的消息只能从队列上看见。
- * 作废时只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废
- * 判定与干预动作之后（判定到干预之间不隔 await，否则此间到达的真实用户消息会被停止动作的 `cancel`
- * 清掉）。verdict 过滤只加在应用点检查那一支（本实现的取舍，理由见设计文档该节）：在途到达不看结论、
- * 一律作废；应用点检查那一支只在 `adjust` / `stop` 上作废，`continue` 照旧落完成态（触发点那次
- * pre-step 正常会 claim 到用户自己那条消息，04 的完成态用例建在这条上）。
+ * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）；作废只落那条取消
+ * 记录（原因 `invalidated`），完成态不落盘。两条判定信号、四个到达窗口、以及 verdict 过滤为何只加
+ * 在其中一支，见设计文档「注入与停止机制」。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -128,9 +121,8 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     if ((observed?.steps ?? 0) < triggerStep) return next()
     // 到点。节奏只按「触发点 + 间隔」推进：不重新计时、不顺延、也不补打。
     triggerSteps.set(session, advanceTriggerStep(triggerStep, config.triggerEverySteps))
-    // 在途登记要早于 `next()`：claim 早于 waterfall 派发，而 `next()` 跑的是整条 pre-step 瀑布（别的
-    // 插件的 handler 可能 await 很久）。此间到达的真实用户消息既不在 claim 批次里、也没有在途对象
-    // 可置位，随后会被停止动作的 `cancel` 清掉。收场之后注销。
+    // 在途登记要早于 `next()`：claim 早于 waterfall 派发，登记晚了这一段到达的消息就只剩应用点的
+    // 队列那一半认领。收场之后注销。
     const review: InFlightReview = { invalidated: false }
     inFlightReviews.set(session, review)
     let decision: PreStepDecision
@@ -145,19 +137,14 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     }
     // 失败 / 取消（没有结论）不触碰会话。
     if (settlement === null) return decision
-    // 作废只有一条判定语义，两处信号合成它：在途置位，或应用点检查「本步被 claim 的消息 ∪ 待处理
-    // 队列」。后者必须带上队列：claim 早于 waterfall 派发（中间还隔着 `systemPrompt.assemble` 与排在
-    // 本插件之前的 handler），落在在途登记之前的真实用户消息进不了 claim 批次、也没有在途对象可置位，
-    // 但它一定还留在 `nextStep` / `nextTurn` 里——停止动作的 `cancel` 会把它一起清掉。
-    // 判定落在收场之后；09 的失败策略停止与它共用这一条（作废优先、不停止）。verdict 过滤只加在
-    // 应用点检查那一支——在途到达按规格「一律作废」，而应用点检查的规格前提是「注入建议、追加停止
-    // 说明或停止 turn 之前」，`continue` 什么也不做，照旧落完成态（04 的完成态三态格建在这条上：
-    // 触发点那次 pre-step 正常会 claim 到用户自己那条消息，不过滤则 04 的完成态用例必红）。
+    // 应用点检查尚未被任何一步处理的消息（本步被 claim 的批次 ∪ `nextStep` / `nextTurn` 队列）：
+    // 判定到干预之间不隔 await，所以此刻队列里剩下的就是 `cancel` 会清掉的全部。两条信号与 verdict
+    // 过滤的取舍见设计文档「注入与停止机制」。
     const unprocessed = [...messages, ...agent.inbox.nextStep, ...agent.inbox.nextTurn]
     const invalidated = review.invalidated
       || (settlement.outcome.verdict !== 'continue' && unprocessed.some(isRealUserMessage))
-    // 完成态写入挪到作废判定之后：作废时只落那条取消记录，不落完成态——先落完成态再同键覆盖正是
-    // 04 要避免的。
+    // 完成态写入挪到作废判定与干预之后：作废时只落那条取消记录，不落完成态——先落完成态再同键覆盖
+    // 正是 04 要避免的。
     if (invalidated) {
       // 也不调用 `agent.cancel`——它默认清空待处理队列，会把用户刚发的话一起丢掉。
       await writeReviewRecord(session.id, {
@@ -168,8 +155,7 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
       })
       return decision
     }
-    // 干预动作紧跟判定、中间不隔 await：`stopWithNotice` 是同步的，判定与 cancel 之间因此没有可插入
-    // 真实用户消息的间隙——留出间隙时，那条消息会被 cancel 清掉。完成态写入落在干预之后。
+    // 干预动作紧跟判定、中间不隔 await：留出间隙，消息就会被停止动作的 `cancel` 清掉。
     // `reject` 决策意味着这一步不打开、不会有模型请求，通知无处落地，所以只在 `enter` 上追加。
     if (settlement.outcome.verdict === 'adjust' && decision.kind === 'enter') {
       decision.messages.push(noticeMessage(composeAdjustNotice(triggerStep, settlement.outcome.recommendation)))
@@ -257,17 +243,11 @@ const OUTPUT_UNPARSEABLE = '复核输出无法解析'
 const NO_ROUTE = '拿不到会话路由'
 
 /**
- * 发起一次复核请求，并把这次复核的收场结算成一条记录。请求形态按设计文档「辅助请求的消息构成」
- * 「模型配置继承粒度」，超时按「技术路线」。
+ * 发起一次复核请求，并把这次复核的收场结算成一条记录。请求形态、模型配置继承与失败分类的机制见
+ * 设计文档「辅助请求的消息构成」「模型配置继承粒度」「失败处理」。
  *
- * **失败分类的输入有两条来源，读法不同**（机制见设计文档 `失败处理`）：适配器侧的抛错与「挂住到
- * 超时」都被 `adapterFailureChunk` 归一成终态块，`for await` 不会抛；中间件 / 下游的抛错落在
- * `ctx.llm.stream(...)` 这个调用表达式上、根本到不了迭代，只有它走异常这一支。两类都要收，
- * 且超时按 `timeoutOf` 判在**复核自己的 signal** 上：只看异常收场，超时格会落进「不是失败」；
- * 只按 `signal.aborted` 收场，任务结束 / 任务取消的迟到失败又会盖掉 10、11 的取消记录。
- *
- * 失败 / 取消在这里落盘（一次复核最多落一条记录）；可解析的收场**不在这里落完成态**——结论与
- * 记录字段交回调用点，由它在作废判定之后落完成态或取消记录，见 `apply`。
+ * 失败 / 取消在这里落盘（一次复核最多落一条记录）；可解析的收场**不在这里落完成态**——结论与记录
+ * 字段交回调用点，由它在作废判定与干预之后落完成态或取消记录，见 `apply`。
  * @param attempt - 本次复核的全部输入。
  * @returns 完成态的结算；失败 / 取消时为 null。
  */

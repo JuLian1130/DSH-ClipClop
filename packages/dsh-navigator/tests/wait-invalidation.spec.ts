@@ -4,7 +4,7 @@
  * 「作废」= 中止在途复核（本次结论不被应用）+ 经 04 的写入入口落一条状态为「取消」、原因为
  * 「作废」的记录；**不调用 `agent.cancel`**（默认清空待处理队列，会把用户刚发的话丢掉）。
  *
- * 观察面按票面第 1 条写死为四条，两个窗口、两条送法共用、同形断言不重写：
+ * 观察面按票面第 1 条写死为四条，各窗口共用、同形断言不重写：
  *  (a) 没有新的插件来源 `user/message` 落盘，`deriveMessages()` 里也没有新 notice —— 不注入、不追加停止说明；
  *  (b) `turnEndReasons()` 全表里不出现 hook 触发的 `aborted` —— 不停止；
  *  (c) 这条真实用户消息随后进入会话历史并被正常处理；
@@ -12,10 +12,10 @@
  * 本票第 4 项另按**原始存储文档**复验取消态的 `verdict` / `failureReason` 是 `undefined`（读回入口经
  * 声明 schema 解析、会剥掉未声明的键，只按它断等于空转）。
  *
- * 六个用例，按消息到达的时点分四个窗口：窗口一（复核在途到达）× `followup` / `steer` 各一条，另加一条
- * `continue` 结论——在途那一支不看结论，任何结论都作废；窗口二（消息在触发点之前入队、被那次 pre-step
- * 的 claim 取走）× `steer` 一条；窗口三（本步 claim 之后、复核发起之前到达，由插入监听器置位）× `steer`
- * 一条；窗口四（本步 claim 之后、插件 handler 入口之前到达，只能从待处理队列上看见）× `steer` 一条。
+ * 六个用例按消息到达的时点分四个窗口，表驱动（`WINDOWS`）：窗口一（复核在途到达）× `followup` /
+ * `steer` 各一条，另加一条 `continue` 结论——在途那一支不看结论，任何结论都作废；窗口二（本步被 claim
+ * 的批次取走）× `steer` 一条；窗口三（本步 claim 之后、复核发起之前到达，由插入监听器置位）× `steer`
+ * 一条；窗口四（本步 claim 之后、插件 handler 入口之前到达，只剩待处理队列看得见）× `steer` 一条。
  * 六条都挂真实存储栈，否则 (d) 读不回取消记录。
  */
 
@@ -59,7 +59,7 @@ async function tempRoot(): Promise<string> {
 const EVERY_STEPS = 2
 
 /**
- * 被作废那次复核的触发点值。触发点值是触发点那一刻的**已完成步数**，不指步号；两条送法都取 2
+ * 被作废那次复核的触发点值。触发点值是触发点那一刻的**已完成步数**，不指步号；六个窗口都取 2
  * （复核在步骤数走到 2 那一刻的 pre-step、也就是第 3 步的 pre-step 发出）。
  */
 const TRIGGER_STEP = 2
@@ -82,6 +82,62 @@ const STOP_VERDICT: ScriptedResponse = {
 const CONTINUE_VERDICT: ScriptedResponse = {
   text: JSON.stringify({ verdict: 'continue', reason: '看起来正常', recommendation: '无' }),
 }
+
+/**
+ * 消息落在哪一刻——四个窗口的差别只有这一个。
+ *  - `gate`：复核闸门回调里同步送出。闸门通知是「复核在途」的唯一同步点，不许靠轮询 `reviews()`
+ *    的长度或时间窗去猜；`followup` 直接调 agent、不 await（夹具的 `send` 会 await `whenIdle()`，
+ *    在途期间 turn 不会收尾）。
+ *  - `step-boundary`：第一条驱动之后、触发点那次 pre-step 之前送出，落进下一次 claim 批次。
+ *  - `in-next`：测试侧 handler 在插件的 `await next()` 之后送出（本步 claim 已过、在途登记已立）。
+ *  - `before-handler`：测试侧 handler 排在插件之前，在它的序言里送出（本步 claim 已过、在途登记未立，
+ *    中间隔着 `systemPrompt.assemble` 与先前注册的 handler）——只剩待处理队列看得见。
+ */
+type Arrival =
+  | { readonly at: 'gate'; readonly via: 'steer' | 'followup' }
+  | { readonly at: 'step-boundary' }
+  | { readonly at: 'in-next' }
+  | { readonly at: 'before-handler' }
+
+/** 一个用例：脚本 + 消息到达的时点。 */
+interface Window {
+  readonly title: string
+  readonly script: readonly ScriptedResponse[]
+  readonly arrival: Arrival
+}
+
+const WINDOWS: readonly Window[] = [
+  {
+    title: '窗口一 · 在途到达：steer 让复核作废',
+    script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
+    arrival: { at: 'gate', via: 'steer' },
+  },
+  {
+    title: '窗口一 · 在途到达：followup 让复核作废',
+    script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
+    arrival: { at: 'gate', via: 'followup' },
+  },
+  {
+    title: '窗口一 · 在途到达：continue 结论也照作废',
+    script: [STEP, STEP, CONTINUE_VERDICT, DONE, DONE],
+    arrival: { at: 'gate', via: 'steer' },
+  },
+  {
+    title: '窗口二 · 已取走：触发点那次 pre-step 的 claim 取走它',
+    script: [STEP, STEP, STOP_VERDICT, DONE],
+    arrival: { at: 'step-boundary' },
+  },
+  {
+    title: '窗口三 · 复核发起之前：`next()` 期间到达',
+    script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
+    arrival: { at: 'in-next' },
+  },
+  {
+    title: '窗口四 · 在途登记之前：插件 handler 入口之前到达',
+    script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
+    arrival: { at: 'before-handler' },
+  },
+]
 
 /** 本插件写入的 user 消息（`source.kind === 'plugin'` 且插件名是本插件），按 `deriveMessages()` 顺序。 */
 function pluginUserMessages(fixture: NavigatorLoop) {
@@ -169,195 +225,64 @@ async function expectCancelledRecord(
   expect(record['failureReason']).toBeUndefined()
 }
 
-describe('窗口二 · 已取走：消息在触发点那次 pre-step 的 claim 之前就已入队', () => {
-  it('steer 送出的消息被同一次 claim 取走时作废，结论不应用、消息照常处理，只落一条取消记录', async () => {
+describe('等待期作废：真实用户消息到达的四个窗口', () => {
+  it.each(WINDOWS.map(window => [window.title, window] as const))('%s', async (_title, { script, arrival }) => {
     const root = await tempRoot()
-    const fixture = await mountNavigatorLoop({
-      config: { triggerEverySteps: EVERY_STEPS },
-      storageRoot: root,
-      script: [STEP, STEP, STOP_VERDICT, DONE],
-    })
-
-    // 停在「已完成 2 步、reviews() 仍为 0、正要进第 3 步」的步边界：触发点那次复核还没发起。
-    await fixture.main.drive(2, '出发')
-    expect(fixture.main.steps()).toBe(2)
-    expect(fixture.main.reviews()).toHaveLength(0)
-
-    // 在这条边界上同步送出真实用户消息：它进 nextStep，被第 3 步的 pre-step 与复核同批 claim。
-    const interjection = userMessage('换个方向')
-    fixture.main.agent.steer(interjection)
-
-    // 放行：触发点的复核发起、收场；作废只能由应用点的 claim 检查逮住——消息入队时监听器没有
-    // 可作废的对象（那一刻 reviews() 仍为 0）。
-    await fixture.main.drive(1)
-
-    expect(fixture.main.reviews()).toHaveLength(1)
-    expectNoPluginIntervention(fixture)
-    expectNoHookAbort(fixture)
-    expectProcessed(fixture, interjection.id)
-    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
-  })
-})
-
-describe('窗口一 · 在途到达：复核请求已到达、结论尚未落盘', () => {
-  it('steer 送出的消息让在途复核作废，结论不应用、消息由下一步取走，只落一条取消记录', async () => {
-    const root = await tempRoot()
+    // 闸门要在挂载时交进去，那时句柄还没返回；闭包里的 `fixture` 到送消息时已赋值。
     let fixture: NavigatorLoop
     let interjectionId = ''
+    const send = (via: 'steer' | 'followup'): void => {
+      const interjection = userMessage('换个方向')
+      interjectionId = interjection.id
+      if (via === 'followup') fixture.main.agent.followup(interjection)
+      else fixture.main.agent.steer(interjection)
+    }
+
     fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: EVERY_STEPS },
       storageRoot: root,
-      script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
-      reviewGate(release) {
-        // 复核在途的唯一同步点：先同步送出消息、再放行。本构造只有一次复核，重复通知只放行。
-        if (interjectionId !== '') {
-          release()
-          return
+      script,
+      ...arrival.at === 'before-handler' ? { mountEagerly: false } : {},
+      ...arrival.at === 'gate'
+        ? {
+            reviewGate: (release: () => void): void => {
+              // 本构造只有一次复核；重复通知只放行。
+              if (interjectionId !== '') {
+                release()
+                return
+              }
+              send(arrival.via)
+              release()
+            },
+          }
+        : {},
+    })
+
+    if (arrival.at === 'in-next' || arrival.at === 'before-handler') {
+      // 测试侧脚手架：把消息接在触发点那次 pre-step 里。两条都不用新增夹具能力，只多一条 handler。
+      // `before-handler` 还要先注册、后挂插件，本 handler 才排在插件之前。
+      const beforeHandler = arrival.at === 'before-handler'
+      let preSteps = 0
+      fixture.ctx.on('agent/pre-step', async (_payload, next) => {
+        preSteps += 1
+        if (!beforeHandler) {
+          const decision = await next()
+          if (preSteps === 3) send('steer')
+          return decision
         }
-        const interjection = userMessage('换个方向')
-        interjectionId = interjection.id
-        fixture.main.agent.steer(interjection)
-        release()
-      },
-    })
+        if (preSteps === 3) send('steer')
+        return next()
+      })
+    }
+    if (arrival.at === 'before-handler') await fixture.mountPlugin()
 
-    // 停在「已完成 2 步」的边界，再放行第 3 步：触发点的复核在途，闸门在这里送出消息。
+    // 停在「已完成 2 步、正要进第 3 步」的边界；窗口二在这里送消息，其余窗口的脚手架已就位。
     await fixture.main.drive(2, '出发')
-    await fixture.main.drive(1)
-
-    expect(fixture.main.reviews()).toHaveLength(1)
-    expectNoPluginIntervention(fixture)
-    expectNoHookAbort(fixture)
-    expectProcessed(fixture, interjectionId)
-    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
-  })
-
-  it('followup 送出的消息让在途复核作废，结论不应用、下一轮照常处理，只落一条取消记录', async () => {
-    const root = await tempRoot()
-    let fixture: NavigatorLoop
-    let interjectionId = ''
-    fixture = await mountNavigatorLoop({
-      config: { triggerEverySteps: EVERY_STEPS },
-      storageRoot: root,
-      script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
-      reviewGate(release) {
-        if (interjectionId !== '') {
-          release()
-          return
-        }
-        const interjection = userMessage('换个方向')
-        interjectionId = interjection.id
-        // 直接调 agent 的 `followup`、不 await：夹具的 `send` 会 await `whenIdle()`，而复核在途时
-        // turn 不会收尾，用例只会等到超时。这条消息落进「下一轮」，由新 turn 的第一次 pre-step 取走。
-        fixture.main.agent.followup(interjection)
-        release()
-      },
-    })
-
-    await fixture.main.drive(2, '出发')
-    await fixture.main.drive(1)
-
-    expect(fixture.main.reviews()).toHaveLength(1)
-    expectNoPluginIntervention(fixture)
-    expectNoHookAbort(fixture)
-    expectProcessed(fixture, interjectionId)
-    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
-  })
-
-  it('continue 结论也照作废：在途到达那一支不看结论，落取消记录', async () => {
-    const root = await tempRoot()
-    let fixture: NavigatorLoop
-    let interjectionId = ''
-    fixture = await mountNavigatorLoop({
-      config: { triggerEverySteps: EVERY_STEPS },
-      storageRoot: root,
-      script: [STEP, STEP, CONTINUE_VERDICT, DONE, DONE],
-      reviewGate(release) {
-        if (interjectionId !== '') {
-          release()
-          return
-        }
-        const interjection = userMessage('换个方向')
-        interjectionId = interjection.id
-        fixture.main.agent.steer(interjection)
-        release()
-      },
-    })
-
-    await fixture.main.drive(2, '出发')
-    await fixture.main.drive(1)
-
-    // (a)(b) 对 `continue` 恒真，这条用例的读数在 (c)(d)：消息照常处理，记录仍取取消态。
-    expect(fixture.main.reviews()).toHaveLength(1)
-    expectNoPluginIntervention(fixture)
-    expectNoHookAbort(fixture)
-    expectProcessed(fixture, interjectionId)
-    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
-  })
-})
-
-describe('窗口三 · `next()` 期间：消息在触发点那次 claim 之后、复核发起之前到达', () => {
-  it('steer 送出的消息一样作废，不被 stop 的 cancel 清掉，只落一条取消记录', async () => {
-    const root = await tempRoot()
-    const fixture = await mountNavigatorLoop({
-      config: { triggerEverySteps: EVERY_STEPS },
-      storageRoot: root,
-      script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
-    })
-    // 测试侧脚手架：注册一条下游 pre-step handler，它在插件的 `await next()` 内部送消息。那一刻 claim
-    // 已经发生（消息进不了本步批次），只有在途登记早于 `next()`，插入监听器才有对象可置位——否则这条
-    // 消息会被随后的 stop 的 `cancel` 清掉。不新增夹具能力，只多一条测试侧 handler。
-    let preSteps = 0
-    let interjectionId = ''
-    fixture.ctx.on('agent/pre-step', async (_payload, next) => {
-      preSteps += 1
-      const decision = await next()
-      if (preSteps === 3) {
-        const interjection = userMessage('换个方向')
-        interjectionId = interjection.id
-        fixture.main.agent.steer(interjection)
-      }
-      return decision
-    })
-
-    await fixture.main.drive(2, '出发')
-    await fixture.main.drive(1)
-
-    expect(fixture.main.reviews()).toHaveLength(1)
-    expectNoPluginIntervention(fixture)
-    expectNoHookAbort(fixture)
-    expectProcessed(fixture, interjectionId)
-    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
-  })
-})
-
-describe('窗口四 · 在途登记之前：消息在本步 claim 之后、插件 handler 入口之前到达', () => {
-  it('steer 送出的消息一样作废，不被 stop 的 cancel 清掉，只落一条取消记录', async () => {
-    const root = await tempRoot()
-    const fixture = await mountNavigatorLoop({
-      config: { triggerEverySteps: EVERY_STEPS },
-      storageRoot: root,
-      mountEagerly: false,
-      script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
-    })
-    // 测试侧脚手架：先注册、后挂插件，这条 handler 因此在瀑布里排在插件之前，它的序言在插件 handler
-    // 之前跑——正是「本步 claim 已过、在途登记未到」那一段（中间还隔着 `systemPrompt.assemble`）。
-    // 这一段到达的消息进不了 claim 批次、也没有在途对象可置位，只能从待处理队列上看见。不新增夹具
-    // 能力（`mountEagerly` 是既有选项）。
-    let preSteps = 0
-    let interjectionId = ''
-    fixture.ctx.on('agent/pre-step', async (_payload, next) => {
-      preSteps += 1
-      if (preSteps === 3) {
-        const interjection = userMessage('换个方向')
-        interjectionId = interjection.id
-        fixture.main.agent.steer(interjection)
-      }
-      return next()
-    })
-    await fixture.mountPlugin()
-
-    await fixture.main.drive(2, '出发')
+    if (arrival.at === 'step-boundary') {
+      expect(fixture.main.steps()).toBe(2)
+      expect(fixture.main.reviews()).toHaveLength(0)
+      send('steer')
+    }
     await fixture.main.drive(1)
 
     expect(fixture.main.reviews()).toHaveLength(1)
