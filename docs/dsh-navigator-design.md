@@ -84,7 +84,17 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 
 失败、超时或输出无法解析时只写诊断记录，不注入建议，也不追加用户可见说明。`failurePolicy: stop` 仅对等待模式生效，且复用与 `stop` 结论相同的停止机制，说明为复核失败。并行模式一律 `continue`，不做降级注入。
 
-**失败与取消的判别式**：两者都要写记录，靠两个信号分开。超时由 `deadline` 用带 `REVIEW_TIMEOUT_CODE` 的 `TimeoutReason` 中止融合信号，判别式是 `timeoutOf(signal, REVIEW_TIMEOUT_CODE)` 命中——命中算超时（失败）；未命中的 `aborted` 是任务结束 / 任务取消 / 插件释放（取消），结算不为它落失败记录，否则取消记录会被同键的迟到失败写入覆盖。输出无法解析走正常收场（`finish { kind: 'stop' }` + 文本过不了 `parseReviewOutcome`），算失败。**失败分类的输入有两条来源**：流的终止 `finish`（适配器抛错 / 输出无法解析 / 超时）与 `ctx.llm.stream(...)` 调用或消费循环抛出的异常（中间件 / 下游抛错）——后者的机制见「测试决策」的「中间件失败保持抛出」：`llm/stream` 是 waterfall，监听器在调用点同步跑，而回退返回的是尚未迭代的异步生成器，所以中间件的抛错落在 `ctx.llm.stream(...)` 这个调用表达式上（`next()` 之前），根本到不了迭代，必须由结算自己 catch 并落一条失败记录；适配器侧抛错则由 `adapterFailureChunk` 归一成终态块，插件侧 catch 不到。拿不到路由（会话还没有路由信息）也是失败之一，按同一张表落记录，但触发点必然已写入 `request/header`，构造不出可证伪的用例。
+**失败与取消的判别式**：两者都要写记录，靠两个信号分开。超时由 `deadline` 用带 `REVIEW_TIMEOUT_CODE` 的 `TimeoutReason` 中止融合信号，判别式是 `timeoutOf(signal, REVIEW_TIMEOUT_CODE)` 命中——命中算超时（失败）；未命中的 `aborted` 是任务结束 / 任务取消 / 插件释放（取消），结算不为它落失败记录，否则取消记录会被同键的迟到失败写入覆盖。输出无法解析走正常收场（`finish { kind: 'stop' }` + 文本过不了 `parseReviewOutcome`），算失败。**失败分类的输入有两条来源**：流的终止 `finish`（适配器抛错 / 输出无法解析 / 超时）与 `ctx.llm.stream(...)` 调用或消费循环抛出的异常（中间件 / 下游抛错）——后者的机制见「测试决策」的「中间件失败保持抛出」：`llm/stream` 是 waterfall，监听器在调用点同步跑，而回退返回的是尚未迭代的异步生成器，所以中间件的抛错落在 `ctx.llm.stream(...)` 这个调用表达式上（`next()` 之前），根本到不了迭代，必须由结算自己 catch 并把它归成这次复核的失败（**写入落点见下一段**，不在结算里落盘）；适配器侧抛错则由 `adapterFailureChunk` 归一成终态块，插件侧 catch 不到。拿不到路由（会话还没有路由信息）也是失败之一，按同一张表落记录，但触发点必然已写入 `request/header`，构造不出可证伪的用例。
+
+**失败结算的落点**：失败与完成态走**同一个落点**——结算只做分类（超时 / 输出无法解析 / 拿不到路由）并把结算数据交回调用点，**不在结算里落盘**。写入落在应用点，因为只有应用点看得到本次复核收场那一刻「尚未被任何一步处理的消息」（定义见「注入与停止机制」）；失败路径还必须照读在途作废信号 `review.invalidated`（同上那唯一的 `agent/inbox/inserted` 监听器置位），为真时落取消记录、取「取消」优先（规格 `实现决策 · 记录与诊断`「同一次复核既满足失败又满足取消时，取「取消」」）。结算内落盘会让失败记录早于这次读取落下，随后被同键的取消写入覆盖——正是 04 禁止的「先落后覆盖」。**并行模式没有可以回去的应用点**（那一步的 pre-step 早已返回，续体是脱离本步跑的），所以并行两格的失败记录由续体自己落、一条；并行不注入任何消息，也**不读** `review.invalidated`——在途到达的真实用户消息在并行模式下的处置是给已入队建议补过期标注（见「注入与停止机制」），不是作废，「等待期到达的真实用户消息一律让本次复核作废」只覆盖等待模式。逐格分工：
+
+| 格 | 谁落盘 | 落盘前读什么 | 「未处理的消息」那道检查 |
+| --- | --- | --- | --- |
+| 等待 × `continue` | 应用点 | `review.invalidated` | 不跑 |
+| 等待 × `failurePolicy: stop` | 应用点 | `review.invalidated`，外加未处理的消息 | 跑：命中就落取消记录，不加说明、不停止 |
+| 并行 × `continue` / `stop` | 复核续体 | 无 | 不跑 |
+
+**那道检查只挂在会产生干预动作的那一支**（等待 × `failurePolicy: stop`，即追加停止说明、停止 turn 之前），与「注入与停止机制」里「`verdict` 过滤只加在应用点检查那一支」同源：它是干预动作的前置检查，不产生干预动作的格不做。做成「所有失败路径都跑」会让 04 的失败列（同样是失败输入，触发点那次 pre-step 照旧 claim 到真实用户消息）被读成取消态、整列变红。落点改动不改变 04 失败列的读数——那一列按真实收场读记录，等待 × 默认策略仍恰一条。
 
 ### 注入与停止机制
 
@@ -195,6 +205,7 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - testkit 提供 `mountAgentLoopTestDependencies` 与 `mountAgentLoopTestHarness`（另有 `createInboxStub`、`unsupportedInbox`，`packages/test-support/agent-loop-testkit/src/index.ts:21,67,87`），但不提供 pre-step 驱动，也不导出 mock adapter，所以脚本化 adapter 必须在本仓库自备。
 - **中间件失败保持抛出、不会变成终态 chunk**：`adapterStream` 只把适配器选择、调度、迭代器构造与迭代的失败收成一个终态 chunk，**中间件与下游消费者的失败照原样抛出**（`packages/llm/llm/src/index.ts:1009-1014`）。`streamWithRegistration` 是 `waterfall(this, 'llm/stream', options, () => this.adapterStream(...))`（同文件 `:1113-1122`），而回退返回的是尚未迭代的异步生成器——适配器要到迭代时才被调用。03 的用例在 `next()` 之前抛错，生成器从未被迭代，所以那条请求到不了适配器，只能挂在 `llm/stream` 钩子上数次数。
 - **多步驱动的机制**（02c 的集成夹具建在这上面；三处「形状即决定」的形状留在票面 02c 第 1 条，本节只写机制与出处，不重复形状）：turn 有三个退出口——assistant 消息不含 `tool-call`（`packages/core/agent-loop/src/agent.ts:488`）、某个工具的成功结果带 `concludesTurn`（同文件 `:489` 取回、`:493` 据此以 `completed` 收尾；置位入口 `ToolRunContext.concludeTurn()` 在 `packages/core/tools/src/index.ts:417,1401`）、该步以 max-tokens 收尾（同文件 `:485`）。夹具注册的工具**不调** `concludeTurn()`，因此那一步成功收尾而 turn 继续——多步驱动靠的就是这一条。工具定义为什么必须手写（本包解析不到 `@deepseek-ai/dsh-tools`，只在 `.pnpm` 里经 testkit 传递）与 `output.schema` 的把关者（`packages/core/tools/src/json-schema.ts` 的 `assertSupportedJsonSchema`）是这条机制的两处出处。**步边界闸门的落位与理由写在夹具 `ctx.tools.register(...)` 处**，本节与票面都不复述。
+- **复核收场的公开回执**（夹具能力，09 的并行各格、10 的终态各格与 08 交下来的「并行 × 成功 `continue` 不注入」那一格用它当唯一的收场同步点）：并行复核脱离本步，失败与成功都不注入消息，`drive` 的步边界与 `whenIdle()` 都不覆盖它（G8 的 `detached_review_outcome: still-pending-after-turn-end`），夹具里原本没有可等的收场信号。**收场的定义是「这次复核写下了它那唯一一条记录」**：完成 / 失败 / 取消三条路径都恰好写一条，且都经过插件从 `ctx.storageDomain.open(...)` 拿到的表句柄上的 `put`（`src/records.ts` 的 `writeReviewRecord` 是唯一写入入口）。所以回执只能兑现于那一次写入：**不能**兑现在复核请求的流结束时（失败记录在流结束之后才写，按流结束放行会读到空记录），也**不能**靠轮询或时间窗（同上面「只验证外部行为」；回执只声明收场，不携带结论）。插件侧不为测试新增事件或记账型 API。缺省桩与 `storageRoot` 真实存储栈两档的 `storageDomain` 来路都由夹具决定，拦这一次写入的写法写在夹具的兑现处，本节与票面不复述（同 02c 的步边界闸门）。
 - **请求归属到会话的机制**（02c 第 3 条）：loop 自己建的请求带 `sessionId`，插件自建的复核请求**不带**（`packages/dsh-navigator/src/index.ts` 那次 `ctx.llm.stream({ … })` 没有这个字段），所以夹具按 agent 的 initiator 归属——loop 用 `withInitiator(this, () => this.kick())`（`packages/core/agent-loop/src/agent.ts:208`）把整段 driver 链标上发起者，`currentInitiator()` 读这条异步链上的 agent（`packages/core/agent/src/index.ts:292`，ALS 实现；`packages/core/agent-loop/src/tool-calls.ts:68,131` 也用它取当前 agent）。它按异步链继承、**没有时间上界**：链上后到的请求仍归这条会话。夹具**不**自己开「当前那一个窗口」：两条会话的 pre-step 交叠时窗口互相覆盖，主会话的复核请求会整批记到子会话名下（G15 的反证）。
 - 参考 DSH 现有的 pre-step、辅助 LLM 与 guard 插件测试，但不修改 DSH 的测试与快照。
 
