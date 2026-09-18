@@ -21,10 +21,10 @@ import { stringify } from 'yaml'
 const packageDir = fileURLToPath(new URL('../..', import.meta.url))
 
 /** 被测插件的构建产物入口；由覆盖补丁按绝对路径装载。 */
-export const pluginEntry = join(packageDir, 'lib/index.js')
+const pluginEntry = join(packageDir, 'lib/index.js')
 
 /** 观察者条目；同样按绝对路径装载，所以是 `.mjs`。 */
-export const observerEntry = fileURLToPath(new URL('./notice-observer.mjs', import.meta.url))
+const observerEntry = fileURLToPath(new URL('./notice-observer.mjs', import.meta.url))
 
 /** 与 02b 同口径：产物缺失时硬失败，不隐式跳过。 */
 export function assertBuiltEntry(): void {
