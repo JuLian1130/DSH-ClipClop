@@ -85,8 +85,8 @@ ls -d node_modules/@dsh-clipclop/dsh-navigator      # 本包的副本，应当�
 ls -A node_modules/@deepseek-ai 2>/dev/null || echo '（该目录已不存在，正常）'   # 空输出＝里面的包已被回收
 ```
 
-- [ ] `node_modules/@dsh-clipclop/dsh-navigator` 还在——本次装载就是从这里取的（G3「bundle 解析到 profile 内」在本步的读数）。
-- [ ] 启动过 Desktop 之后，`ls -A node_modules/@deepseek-ai` 没有输出（该目录本身可能还在、也可能不在），或 `pnpm-lock.yaml` 消失——都属**预期现象**：Desktop 在每次生产启动时回收自己的核心包，并在它改动了 profile 清单/`overrides`、或树里还有核心包残留时删掉那份 lock。不要据此改配置或重装。
+- [ ] `node_modules/@dsh-clipclop/dsh-navigator` 还在——本包是按包名装进 profile 的。这一步只证「装上了」；它是否真的被装载解析到，见第 6 步的激活与复核记录。
+- [ ] 启动过 Desktop 之后，`ls -A node_modules/@deepseek-ai` 没有输出（目录还在但空了；目录整个不在时命令行会打印上面那行提示，同样算预期），或 `pnpm-lock.yaml` 消失——都属**预期现象**：Desktop 在每次生产启动时回收自己的核心包，并在它改动了 profile 清单/`overrides`、或树里还有核心包残留时删掉那份 lock。不要据此改配置或重装。
 
 > 本包的 peer 绑到哪一份 DSH，不要在磁盘上推——以第 6 步「插件真的激活 + 有复核记录」为准。
 
@@ -135,7 +135,7 @@ ls -A node_modules/@deepseek-ai 2>/dev/null || echo '（该目录已不存在，
 
 ## 6. Part A：启动 Desktop，验证「激活 + 真复核」
 
-- [ ] 完全退出 Desktop 再启动（让它重新读 profile）。
+- [ ] 完全退出 Desktop 再启动（让它重新读 profile）。启动后回到第 4b 步看一眼那两条预期（核心包被回收、本包副本还在）。
 - [ ] 新建一个会话，给一个**会产生至少两步**的任务，例如：
       `先用 bash 跑 echo one，再用 bash 跑 echo two，然后一句话总结。`
       （第 1 步会 claim 你这条消息且步数还没到触发点；第 2 步到点触发复核。）
@@ -184,7 +184,7 @@ rm -rf /tmp/dsh-nav-g3
 | 插件装了、配置也改了，但行为没变化 | profile 的 `cordis.patch.yml` 没被读到（文件名/层级不对） | 对照 `$DSH_HOME/profiles/desktop/cordis.yml`（根配置，应为空数组）与 `cordis.patch.yml`；注意本插件条目 id 必须是 `dsh-navigator` |
 | 之前还能用，某次启动后设置被重置 | Desktop 的**原生恢复**会 `sanitizeProfile`：把 profile 的 `cordis.patch.yml` 备份成 `.bak-<时间戳>`，并把 `bundles` 重置回 web 模板（第三方 bundle 被关掉） | 从 `.bak-<时间戳>` 恢复 patch，重新把包名加回 `bundles`；这在记录里注明一次即可 |
 | 装的时候报 prepare / 构建脚本被拦 | 装的是源码包或 `file:` 目录，而不是第 2 步的 tarball | 只用 tarball 装，且带 `--ignore-scripts` |
-| profile 里 `node_modules/@deepseek-ai` 空了或 `pnpm-lock.yaml` 不见了 | Desktop 每次生产启动都在回收自己的核心包——见 4b | 预期现象，不要重装或改配置 |
+| profile 里 `node_modules/@deepseek-ai` 空了（或整个不在）、或 `pnpm-lock.yaml` 不见了 | Desktop 每次生产启动都在回收自己的核心包——见 4b | 预期现象，不要重装或改配置 |
 | Desktop 自带的 dsh 不是 `0.1.6-alpha.1` | 本包只对 alpha.1 承诺行为；peer 范围会接受 alpha.2，Node 的解析又不校验范围（见第 0 步） | 按第 0 步停止并记「Desktop 版本不符，未验」 |
 | 插件激活了，但注入的消息形状不对（那一行的摘要/正文与规格不符） | 真实失败信号，不是环境问题 | 记下那条消息的形状与会话事件，按第 10 步把失败写进设计文档 G3 行（不属于收窄那一档） |
 | 记录文件没有、复核也没发 | 插件没激活（多半是 bundle 未启用），或该会话不是顶层会话（子 agent 会话不触发） | 核对第 5 步；确认用的是自己新建的普通会话 |
@@ -195,6 +195,6 @@ rm -rf /tmp/dsh-nav-g3
 
 跑完（无论通过与否）记两处：
 
-- [ ] 设计文档 `docs/dsh-navigator-design.md` 的「验证状态」：把 G3 从「仍未验证」移到「已实测通过」，或在原行写明失败与收窄结论（含日期、Desktop 版本、dsh 版本）。本清单已在该行挂上链接。
+- [ ] 设计文档 `docs/dsh-navigator-design.md` 的「验证状态」：把 G3 从「仍未验证」移到「已实测通过」，或在原行写明失败结论（含日期、Desktop 版本、dsh 版本）；若走的是收窄那一档（第 9 步末尾），再写明收窄到哪一档与原因。本清单已在该行挂上链接。
 - [ ] 结论一句话模板：
       `G3：Desktop <版本>（dsh <版本>，pnpm <版本>）上按本清单链接 tarball 产物并启用 bundle，<通过 | 失败>；证据：profile 里的安装副本 <路径>、复核记录 <路径>、对话里的折叠行 <截图/描述>；<未收窄 | 已收窄到 CLI/Web/SDK，原因 …>。`
