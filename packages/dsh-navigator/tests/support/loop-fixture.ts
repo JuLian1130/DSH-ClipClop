@@ -33,6 +33,13 @@
  * 复核或送一条真实用户消息，复核因此停在「已发起、未收场」那一刻。`followup` / `steer` 两条送法
  * 不需要新能力：会话句柄已暴露 `agent`，用例直接调。
  *
+ * 09 追加一项（本票的**前置**，单独一个提交）：**复核收场的公开回执**（`settled(triggerStep)`）——
+ * 与「这次复核那唯一一条记录已落盘」对齐的同步点。并行续体脱离本步，失败与成功又都不注入消息，
+ * `drive` 的步边界与 `whenIdle()` 都不覆盖它，所以只有它当得了「等这次复核收场」的同步点（不轮询、
+ * 不读时间窗）。兑现点是存储域自己的落盘事件 `domain/changed`（`put` 在后端确认持久化之后发一次，
+ * 载荷带 domain / table / key），因此只在给了 `storageRoot` 的真实存储栈档存在；机制见设计文档
+ * 「测试决策」的「复核收场的公开回执」。
+ *
  * **驱动读数与投影注册时序**（02c 第 5 条，夹具约定、不是验收判据）：需要从第 1 步起计数的用例必须
  * **挂载早于第 1 步**；「先跑几步再挂」的用例第一次观察读到的投影状态是从日志折出的历史，其步数与
  * 「当时那一步」可能差一格，期望值按实测运行读数写。步边界闸门不读投影——它按会话事件里的
@@ -64,6 +71,7 @@ import {
   mountAgentLoopTestHarness,
 } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as navigator from '../../src/index.ts'
+import { REVIEW_DOMAIN_NAME, REVIEW_TABLE, reviewRecordKey } from '../../src/index.ts'
 import type { Config } from '../../src/index.ts'
 import {
   ScriptedAdapter,
@@ -111,6 +119,12 @@ export interface NavigatorSession extends SessionOwner {
    * 这几步看不到它。
    */
   drive(steps: number, text?: string): Promise<void>
+  /**
+   * 等这次复核（本会话 + 触发步骤）那唯一一条记录落盘——复核收场的唯一同步点。落盘之前或之后调用
+   * 都行：并行续体那种「驱动先返回、记录后落盘」的格必须**先取回执再驱动**，否则读到的是旧盘面。
+   * 只在给了 `storageRoot` 的真实存储栈档可用。
+   */
+  settled(triggerStep: number): Promise<void>
 }
 
 /** 集成夹具的句柄。 */
@@ -245,6 +259,39 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
   } else {
     await mountStorageStack(ctx, options.storageRoot)
   }
+  /**
+   * 复核收场的公开回执（09 的前置能力）：与「这次复核那唯一一条记录已落盘」对齐的同步点。兑现点用
+   * 存储域自己的落盘事件——`put` 在 `await` 后端落盘之后发一次 `domain/changed`，载荷带 domain /
+   * table / key，按写链顺序、每条写恰一次；不包 DSH 的服务，也不给插件加钩子。
+   */
+  const settleWaiters = new Map<string, () => void>()
+  /** 已经落盘的那几条记录：登记晚于落盘时立刻兑现，而不是把用例挂到超时。 */
+  const settledKeys = new Set<string>()
+  ctx.on('domain/changed', (change) => {
+    if (change.operation !== 'put') return
+    if (change.domain !== REVIEW_DOMAIN_NAME || change.table !== REVIEW_TABLE) return
+    settledKeys.add(change.key)
+    settleWaiters.get(change.key)?.()
+  })
+
+  /**
+   * 等某次复核的记录落盘；已经落盘时立刻兑现。
+   * @param session - 那条会话。
+   * @param triggerStep - 触发步骤。
+   * @returns 记录已落盘时兑现。
+   * @throws 缺省桩档——那里不经过真域、不发 `domain/changed`，等下去只会超时。
+   */
+  const waitForSettle = async (session: Session, triggerStep: number): Promise<void> => {
+    if (options.storageRoot === undefined) {
+      throw new Error('mountNavigatorLoop: settled() needs storageRoot — domain/changed only comes from the real storage stack')
+    }
+    const key = reviewRecordKey(session.id, triggerStep)
+    if (settledKeys.has(key)) return
+    await new Promise<void>((resolve) => {
+      settleWaiters.set(key, resolve)
+    })
+  }
+
   const harness = await mountAgentLoopTestHarness(ctx)
   // 路由可被用例改成非默认值：断言「继承路由」时，默认值与被硬编码的值不可区分。
   const route = { provider: 'mock', model: 'mock', ...options.agentOptions }
@@ -431,6 +478,7 @@ export async function mountNavigatorLoop(options: NavigatorLoopOptions = {}): Pr
         event => event.type === 'turn/end' ? [event.data.reason] : [],
       ),
       drive: (steps, text) => drive(target, steps, text),
+      settled: (triggerStep) => waitForSettle(session, triggerStep),
     }
   }
 
