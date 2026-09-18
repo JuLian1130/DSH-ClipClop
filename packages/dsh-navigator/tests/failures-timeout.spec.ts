@@ -329,6 +329,9 @@ describe('2b 作废优先：等待 × stop × 失败，本步已取走的消息�
     expect(record['verdict']).toBeUndefined()
     expect(record['failureReason']).toBeUndefined()
 
+    // 「不注入、不追加停止说明」：设计文档那一格写「命中就落取消记录，不加说明、不停止」。
+    expect(fixture.agent.session.deriveMessages().filter(isPluginUserMessage)).toEqual([])
+
     // 「不停止」：只断记录的话，「照样停止 + 落一条取消记录」的实现同样绿。
     expect(hasHookAbort(fixture)).toBe(false)
     expect(fixture.main.turnEndReasons().at(-1)).toEqual({ kind: 'completed' })
