@@ -199,6 +199,8 @@ export async function bootConversation(
     current: sessionId,
     byId: { [sessionId]: { id: sessionId, displayTitle: 'fixture', blank: false, origin: 'user' } },
   }
+  // 只列下面会挂载的那几个插件 `inject` 的服务名：多一个没有读者的替身，就等于把生产装配猜宽一格
+  // （本夹具不挂载 api-gateway / api-session-controller，所以它们的 inject 不在这里）。
   const services: Record<string, unknown> = {
     sessions: {
       list: observable(() => listState),
@@ -207,14 +209,10 @@ export async function bootConversation(
     },
     remote: { $on: () => () => {}, call: async () => undefined },
     'remote.session': {},
-    'remote.commands': {},
-    'remote.subagents': {},
     settingsScope: { bind: () => observable(() => ({ value: { preference: 'zh' }, set: () => {} })) },
     fileUpload: { upload: async () => { throw new Error('web leg fixture: file upload is not stubbed') } },
     uiWorkspace: { openSession: () => {}, openWorkspace: async () => {} },
     sidebarRight: { openResource: () => {} },
-    connection: {},
-    typert: {},
   }
   for (const [name, value] of Object.entries(services)) ctx.provide(name, value)
   for (const plugin of [locale, uiSession, uiConversation, chat]) {
