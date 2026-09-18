@@ -35,10 +35,15 @@ import {
   REVIEW_TABLE,
   readReviewRecords,
   reviewRecordKey,
+  type ReviewCancelReason,
 } from '../src/index.ts'
 import { SCRIPTED_TOOL_NAME, userMessage, type ScriptedResponse } from './support/scripted-adapter.ts'
 import { disposeTrackedContexts } from './support/mounted-contexts.ts'
-import { mountNavigatorLoop, type NavigatorLoop } from './support/loop-fixture.ts'
+import {
+  mountNavigatorLoop,
+  type NavigatorLoop,
+  type ObservedCall,
+} from './support/loop-fixture.ts'
 
 /** 每个用例一套独立 context；磁盘根也逐用例回收。 */
 const roots: string[] = []
@@ -106,6 +111,15 @@ function waitForFirstSuggestion(fixture: NavigatorLoop): Promise<Message> {
   })
 }
 
+/** 一条请求是不是本插件的复核请求：末条是本插件注入、不带 `form` 的复核指令（带 `form` 的是干预消息）。 */
+function carriesReviewInstruction(call: ObservedCall): boolean {
+  const last = call.request.messages.at(-1)
+  return last?.role === 'user'
+    && last.source.kind === 'plugin'
+    && last.source.plugin === navigator.name
+    && last.source.form === undefined
+}
+
 /**
  * 读某次复核的原始存储文档里的 `record`（不经读回入口、不复制 schema）。
  * @param root - JSON 后端根。
@@ -136,7 +150,7 @@ async function expectCancelledRecord(
   root: string,
   sessionId: SessionId,
   triggerStep: number,
-  cancelReason: string,
+  cancelReason: ReviewCancelReason,
 ): Promise<void> {
   const records = readReviewRecords(sessionId)
   expect(records.map(record => [record.triggerStep, record.status, record.cancelReason]))
@@ -267,6 +281,41 @@ describe('② 任务取消：等待模式与并行模式各一次，取消原因
     expect(pendingSuggestions(fixture)).toEqual([])
     expect(fixture.main.calls().flatMap(call => call.request.messages).filter(isNavigatorNotice)).toEqual([])
     await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP, 'task-cancelled')
+  })
+
+  it('任务结束后晚到的复核收场不注销新一代的在途登记（同一会话仍最多一个在途复核）', async () => {
+    const root = await tempRoot()
+    /** 每一次复核的放行把手，按复核请求顺序。 */
+    const releases: (() => void)[] = []
+    const fixture = await mountNavigatorLoop({
+      // 间隔 1：每一步的步边界都是触发点，能连出「一次被终态取消、下一代仍在跑、再来一次到点」这一幕。
+      config: { triggerEverySteps: 1, mode: 'parallel' },
+      // 0 第 1 步撑住 turn；1 第 1 次复核（被任务结束取消、放行很晚）；2 第 2 步让 turn 收尾、会话空闲；
+      // 3 第 2 次复核（新的一代，停在闸门上）；4 / 5 之后两步的主会话请求。
+      script: [STEP, ADJUST_VERDICT, DONE, ADJUST_VERDICT, STEP, STEP, STEP],
+      storageRoot: root,
+      // 每一次复核都停在闸门上：第 1 次留到任务结束之后才放行，第 2 次留到读守卫那一刻。
+      reviewGate: (release) => { releases.push(release) },
+    })
+    // 第 1 次复核触发点是 1；turn 正常收尾、会话转入空闲 → 它被终态取消、在途登记随之注销。
+    const settled = fixture.main.settled(1)
+    await fixture.main.drive(2, '出发')
+    await settled
+    await expectCancelledRecord(root, fixture.main.session.id, 1, 'task-ended')
+
+    // 新的一代：会话被唤醒、下一步的步边界到点，第 2 次复核登记并停在闸门上。
+    await fixture.main.drive(1, '继续')
+    expect(fixture.main.calls().filter(carriesReviewInstruction)).toHaveLength(2)
+
+    // 放行第 1 次（已被取消、早已收场）的复核：它晚到的收场只有在仍指向自己时才准注销登记。
+    releases[0]?.()
+    // 再走两步：每一步的步边界都是触发点。若登记被那次晚到的收场误删，后面的触发点会打出第 3 次复核；
+    // 走出两步是为了让晚到的收场一定落在后一个触发点之前（先后不做约定，见 G10）。
+    await fixture.main.drive(1)
+    await fixture.main.drive(1)
+    expect(fixture.main.calls().filter(carriesReviewInstruction)).toHaveLength(2)
+
+    for (const release of releases) release()
   })
 })
 

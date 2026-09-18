@@ -173,10 +173,9 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     // 队列那一半认领。收场之后注销。
     const review: InFlightReview = { invalidated: false }
     inFlightReviews.set(session, review)
-    // 记录基底与计时起点在触发点冻结：完成 / 失败 / 取消三条写入路径共用它。并行那半的终态取消要在
-    // 复核还没收场时落记录，那一格没有结算可交回，所以基底不能等结算（见 `ReviewPoint`）。
-    const point = reviewPoint(session, config, triggerStep)
     if (config.mode === 'parallel') {
+      // 记录基底与计时起点在触发点冻结：完成 / 失败 / 取消三条写入路径共用它；并行这一支没有可回去的
+      // 应用点，终态取消要在复核收场之前落记录，所以在这里取（见 `ReviewPoint`）。
       // 并行：复核脱离本步，先发起再取回决策，主会话照常走下一步。续体自己收异常，绝不打断主会话。
       void settleParallelReview({
         ctx,
@@ -185,16 +184,21 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
         writeReviewRecord,
         inFlightReviews,
         phaseSignals,
-        point,
+        review,
+        point: reviewPoint(session, config, triggerStep),
       })
       return next()
     }
     let decision: PreStepDecision
     let settlement: ReviewSettlement | null
+    let point: ReviewPoint
     try {
       // 先取回内层决策，再按结论追加通知：waterfall 的内层默认返回「本步被 claim 的消息 +
       // runtime-context 消息」，自造 `{ kind: 'enter', messages }` 会静默丢掉后者。
       decision = await next()
+      // 快照与计时起点在触发点冻结；落在 `next()` 之后，与 03 起取快照的时刻一致——内层 handler 若在
+      // 这一步追加了会话内容，快照仍照规格「等于那一刻主会话对模型可见的完整上下文」。
+      point = reviewPoint(session, config, triggerStep)
       settlement = await reviewOnce({ ctx, session, upstream: signal, point })
     } finally {
       inFlightReviews.delete(session)
@@ -268,6 +272,8 @@ interface ParallelAttempt {
   readonly writeReviewRecord: ReviewWriter
   /** 在途登记表：复核一收场就注销，下一次到点才不再跳过。 */
   readonly inFlightReviews: WeakMap<Session, InFlightReview>
+  /** 这次复核自己的在途登记：注销时按身份核对，晚到的收场不删新一代的登记。 */
+  readonly review: InFlightReview
   /** 每个会话最近一次 pre-step 的取消信号：终态原因按它分「任务结束 / 任务取消」。 */
   readonly phaseSignals: WeakMap<Session, AbortSignal>
   /** 触发点冻结的记录基底与计时起点：终态取消在复核还没收场时就要用它落记录。 */
@@ -303,12 +309,19 @@ type ParallelRace =
  * @param attempt - 本次并行复核的全部输入。
  */
 async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
-  const { ctx, session, agent, writeReviewRecord, inFlightReviews, phaseSignals, point } = attempt
+  const { ctx, session, agent, writeReviewRecord, inFlightReviews, phaseSignals, review, point } = attempt
+  /**
+   * 注销在途登记——只在它仍指向**这次**复核时。任务结束 / 任务取消那次复核可能还挂在自己的超时上，
+   * 它晚到的收场绝不能删掉此后新一代复核的登记：删掉守卫就失效，同一会话会跑出两个复核。
+   */
+  const releaseInFlight = (): void => {
+    if (inFlightReviews.get(session) === review) inFlightReviews.delete(session)
+  }
   // 复核收场承诺：结算交回这一次 race；一收场就注销在途登记（不等下面的建议注入与落记录）。
   const reviewOutcome = reviewOnce({ ctx, session, upstream: undefined, point }).then(
     (settlement): ParallelRace => ({ kind: 'settled', settlement }),
     (): ParallelRace => ({ kind: 'settled', settlement: null }),
-  ).finally(() => { inFlightReviews.delete(session) })
+  ).finally(releaseInFlight)
   try {
     const winner = await Promise.race([
       reviewOutcome,
@@ -328,7 +341,7 @@ async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
     if (winner.kind === 'idle') {
       // 终态：复核还在途就等到了整个 agent 静止。已 abort 就是「任务取消」，否则是「任务结束」；
       // `{ kind: 'disposed' }` 归 11，不为它落记录。先注销在途登记：这次复核已经作废，不该继续挡住后续触发。
-      inFlightReviews.delete(session)
+      releaseInFlight()
       if (!(aborted && isDisposed(signal?.reason))) {
         await cancelReview(writeReviewRecord, session, point, aborted ? 'task-cancelled' : 'task-ended')
       }
