@@ -1,5 +1,5 @@
 /**
- * 真实入口腿（票据 12）的装配：临时 DSH home、navigator 覆盖补丁、CLI 入口解析与观察者读回。
+ * 真实入口腿（票据 12）的装配：临时 DSH home、navigator 覆盖补丁、CLI 入口解析、资源收尾与观察者读回。
  *
  * 两条腿都走**发布态 CLI 的真实 profile**（`--profile sdk` / `--profile acp`），用 `--patch` 覆盖把本包
  * 的构建产物按**绝对路径**插进 profile。这不走「按包名从安装副本装载」那条路线，所以 02b 的装载组合
@@ -11,12 +11,13 @@
  * @module
  */
 
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stringify } from 'yaml'
+import { navigatorLegScript, startMockModel, type MockModelServer } from './mock-model.ts'
 
 const packageDir = fileURLToPath(new URL('../..', import.meta.url))
 
@@ -40,44 +41,81 @@ export function dshBinPath(): string {
 }
 
 /**
- * 一个临时 DSH home：settings.yaml 把 deepseek 适配器切到 chat-completions，与 mock 的 SSE 帧对上。
- * @param prefix - 临时目录前缀，便于失败时认出是哪条腿。
- * @returns 绝对路径。
+ * 给子进程的完整环境：临时 home、本地 mock 作模型后端、免审批。
+ * @param baseURL - mock 模型服务基点。
+ * @param home - 临时 home。
+ * @returns 子进程环境。
  */
-export function createLegHome(prefix: string): string {
-  const home = mkdtempSync(join(tmpdir(), prefix))
-  writeFileSync(join(home, 'settings.yaml'), 'llm-deepseek:\n  protocol: chat-completions\n')
-  return home
+export function legEnv(baseURL: string, home: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    DSH_HOME: home,
+    DSH_TELEMETRY_DISABLED: '1',
+    DEEPSEEK_API_KEY: 'dsh-navigator-leg-key',
+    DEEPSEEK_BASE_URL: baseURL,
+    DSH_PERMISSION_MODE: 'danger-full-access',
+  }
 }
 
-/** navigator 覆盖补丁的配置。 */
-export interface NavigatorPatchOptions {
-  /** 触发间隔；两条腿都用 1，让第一次复核落在第 2 步。 */
-  readonly triggerEverySteps: number
-  /** 给出时把观察者条目一并插进同一份补丁，notice 逐条追加到该文件。 */
-  readonly noticesFile?: string
+/** 一次腿用例的收尾登记：`dispose` 按登记顺序**倒着**跑，后建的先拆。 */
+export interface LegScope {
+  add(cleanup: () => Promise<void> | void): void
+  dispose(): Promise<void>
 }
 
 /**
- * 写一份覆盖补丁：插入 navigator，按需再插观察者。
- * @param home - 临时 home。
- * @param options - 触发间隔与观察者文件。
- * @returns 补丁文件绝对路径。
+ * 开一个收尾作用域。
+ * @returns 登记与拆除入口。
  */
-export function writeNavigatorPatch(home: string, options: NavigatorPatchOptions): string {
-  const entries: Record<string, unknown>[] = [
-    {
-      id: 'navigator',
-      name: pluginEntry,
-      config: { triggerEverySteps: options.triggerEverySteps },
+export function createLegScope(): LegScope {
+  const cleanups: (() => Promise<void> | void)[] = []
+  return {
+    add: (cleanup) => { cleanups.push(cleanup) },
+    dispose: async () => {
+      for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
     },
-  ]
-  if (options.noticesFile !== undefined) {
-    entries.push({ id: 'notice-observer', name: observerEntry, config: { file: options.noticesFile } })
   }
+}
+
+/** 一次腿用例的前置。 */
+export interface NavigatorLeg {
+  /** 临时 DSH home；settings.yaml 已把 deepseek 适配器切到 chat-completions，与 mock 的 SSE 帧对上。 */
+  readonly home: string
+  /** 观察者落 notice 的文件。 */
+  readonly noticesFile: string
+  /** 覆盖补丁路径。 */
+  readonly patch: string
+  /** 脚本化模型服务。 */
+  readonly model: MockModelServer
+}
+
+/**
+ * 装一次腿用例的前置：临时 home、navigator 覆盖补丁、观察者条目与脚本化 mock 模型。触发间隔固定为 1，
+ * 让第一次复核落在第 2 步（第 1 步由脚本用工具调用撑住）。home 与 mock 的收尾登记进 `scope`。
+ * @param prefix - 临时目录前缀，便于失败时认出是哪条腿。
+ * @param review - 复核请求的答复结论。
+ * @param scope - 本用例的收尾作用域。
+ * @returns 前置的各个句柄。
+ */
+export async function mountNavigatorLeg(
+  prefix: string,
+  review: Record<string, unknown>,
+  scope: LegScope,
+): Promise<NavigatorLeg> {
+  const home = mkdtempSync(join(tmpdir(), prefix))
+  writeFileSync(join(home, 'settings.yaml'), 'llm-deepseek:\n  protocol: chat-completions\n')
+  const noticesFile = join(home, 'notices.jsonl')
   const patch = join(home, 'navigator.patch.yml')
-  writeFileSync(patch, stringify([{ insert: entries }]))
-  return patch
+  writeFileSync(patch, stringify([{
+    insert: [
+      { id: 'navigator', name: pluginEntry, config: { triggerEverySteps: 1 } },
+      { id: 'notice-observer', name: observerEntry, config: { file: noticesFile } },
+    ],
+  }]))
+  const model = await startMockModel(navigatorLegScript(review))
+  scope.add(() => model.close())
+  scope.add(() => { rmSync(home, { recursive: true, force: true }) })
+  return { home, noticesFile, patch, model }
 }
 
 /** 观察者记下的一条 notice。 */
@@ -97,21 +135,4 @@ export function readObservedNotices(file: string): ObservedNotice[] {
     .split('\n')
     .filter(line => line.trim() !== '')
     .map(line => JSON.parse(line) as ObservedNotice)
-}
-
-/**
- * 给子进程的完整环境：临时 home、本地 mock 作模型后端、免审批。
- * @param baseURL - mock 模型服务基点。
- * @param home - 临时 home。
- * @returns 子进程环境。
- */
-export function legEnv(baseURL: string, home: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    DSH_HOME: home,
-    DSH_TELEMETRY_DISABLED: '1',
-    DEEPSEEK_API_KEY: 'dsh-navigator-leg-key',
-    DEEPSEEK_BASE_URL: baseURL,
-    DSH_PERMISSION_MODE: 'danger-full-access',
-  }
 }

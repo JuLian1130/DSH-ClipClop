@@ -15,7 +15,7 @@ import { FIXED_INSTRUCTIONS } from '../../src/review-prompt.ts'
 /**
  * 复核请求的判别标记：固定指令的第一行，逐字出现在复核请求最后那条 user 消息里（JSON 转义不影响它）。
  */
-const REVIEW_MARKER = FIXED_INSTRUCTIONS.split('\n')[0] ?? FIXED_INSTRUCTIONS
+const REVIEW_MARKER = FIXED_INSTRUCTIONS.split('\n')[0]
 
 /** 一条请求的脚本化答复；两者都给时优先 `toolCall`。 */
 export interface MockModelReply {
@@ -62,7 +62,7 @@ export function startMockModel(
       const body = JSON.parse(raw) as Record<string, unknown>
       const attempt = requests.length + 1
       requests.push(body)
-      const reply = respond({ body, isReview: JSON.stringify(body.messages ?? null).includes(REVIEW_MARKER) }, attempt)
+      const reply = respond({ body, isReview: isReviewRequest(body) }, attempt)
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       const write = (payload: unknown): void => {
         res.write(`data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`)
@@ -127,6 +127,20 @@ export function keepTurnAlive(attempt: number): MockModelReply {
  */
 function isReviewRequest(request: Record<string, unknown>): boolean {
   return JSON.stringify(request.messages ?? null).includes(REVIEW_MARKER)
+}
+
+/**
+ * 两条腿共用的模型脚本：第 1 步用工具调用把 turn 撑过一步（否则第 1 步就收尾，复核没有到点的机会），
+ * 复核请求回给定结论，其余主会话请求回一句纯文本。
+ * @param review - 复核请求的答复结论（`verdict` / `reason` / `recommendation`）。
+ * @returns `startMockModel` 的 `respond`。
+ */
+export function navigatorLegScript(
+  review: Record<string, unknown>,
+): (request: MockModelRequest, attempt: number) => MockModelReply {
+  return ({ isReview }, attempt) => isReview
+    ? { text: JSON.stringify(review) }
+    : attempt === 1 ? keepTurnAlive(attempt) : { text: '收到' }
 }
 
 /**
