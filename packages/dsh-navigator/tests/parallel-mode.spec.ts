@@ -118,6 +118,28 @@ function pendingSuggestions(fixture: NavigatorLoop): readonly Message[] {
   return [...fixture.agent.inbox.nextStep, ...fixture.agent.inbox.nextTurn].filter(isNavigatorNotice)
 }
 
+/**
+ * 送达读数：某条消息进了某次主会话请求的 `messages` 时，返回请求里的那一份。
+ *
+ * 在**全部请求**里找，不借夹具的 `isReviewRequest` 启发式——建议被 claim 且排在批次末尾时，承载它的
+ * 主请求会被那个启发式误认成复核请求。
+ * @param fixture - 夹具。
+ * @param messageId - 要找的消息 id。
+ * @returns 请求 messages 里的那条消息；还没被送达时为 undefined。
+ */
+function deliveredMessage(fixture: NavigatorLoop, messageId: string): Message | undefined {
+  return fixture.main.calls()
+    .flatMap(call => call.request.messages)
+    .find(message => message.id === messageId)
+}
+
+/** 一条干预消息的 `summary`；不是 notice 时为空串。 */
+function summaryOf(message: Message | undefined): string {
+  return message?.source.kind === 'plugin' && message.source.form === 'notice'
+    ? message.source.summary
+    : ''
+}
+
 /** 全表里有没有 hook 触发的 `aborted`（并行模式的 `stop` 不得产生它）。 */
 function hasHookAbort(fixture: NavigatorLoop): boolean {
   return fixture.main.turnEndReasons().some(
@@ -179,6 +201,8 @@ describe('并行模式下复核不阻塞主会话', () => {
     // 再发第二次复核请求。
     expect(rig.fixture.agent.inbox.nextStep.map(message => message.id)).toContain(suggestion.id)
     expect(textOf(suggestion)).toContain(RECOMMENDATION)
+    // notice 形态：`summary` 非空（规格「两者都必须是带 `form: 'notice'` 的 user 消息，`summary` 非空」）。
+    expect(summaryOf(suggestion).length).toBeGreaterThan(0)
     expect(rig.fixture.main.reviews()).toHaveLength(1)
   })
 
@@ -215,14 +239,10 @@ describe('并行模式下复核不阻塞主会话', () => {
     // 建议正文以触发步骤开头（`summary` 就是正文开头的截断）。
     expect(textOf(suggestion).startsWith('第 1 步')).toBe(true)
 
-    // 送达那一半：建议进入下一次 pre-step 主会话请求的 messages。按 id 在全部请求里找承载它的那条
+    // 送达那一半：建议进入下一次 pre-step 主会话请求的 messages。在全部请求里按 id 找承载它的那条
     // （夹具的 `isReviewRequest` 启发式在这一帧会把承载请求误认成复核请求，不能借它过滤）。
     await rig.fixture.main.drive(1)
-    expect(
-      rig.fixture.main.calls().some(
-        call => call.request.messages.some(message => message.id === suggestion.id),
-      ),
-    ).toBe(true)
+    expect(deliveredMessage(rig.fixture, suggestion.id)).toBeDefined()
     // 停止那一半：全表里没有 hook 触发的 aborted。
     expect(hasHookAbort(rig.fixture)).toBe(false)
   })
@@ -245,7 +265,7 @@ describe('并行模式下复核不阻塞主会话', () => {
     rig.fixture.main.agent.steer(arriving)
     await rig.fixture.main.drive(1)
 
-    const carrying = mainRequests(rig.fixture).find(
+    const carrying = rig.fixture.main.calls().find(
       call => call.request.messages.some(message => message.id === arriving.id),
     )
     expect(carrying).toBeDefined()
@@ -256,8 +276,11 @@ describe('并行模式下复核不阻塞主会话', () => {
 })
 
 describe('并行建议的过期标注', () => {
-  it('真实用户消息落在建议产生之前：产生时就带标注', async () => {
-    const rig = await mountParallel({ triggerEverySteps: 1 }, [STEP, ADJUST_VERDICT, STEP, STEP])
+  it('真实用户消息落在建议产生之前：产生时就带标注，送达的正文也含它', async () => {
+    const rig = await mountParallel(
+      { triggerEverySteps: 1 },
+      [STEP, ADJUST_VERDICT, STEP, STEP, CONTINUE_VERDICT, STEP],
+    )
     await rig.fixture.main.drive(2, '出发')
     // 先 steer、驱动到这条消息落盘（锚点移动），再放行复核。
     rig.fixture.main.agent.steer(userMessage('换个方向'))
@@ -265,11 +288,19 @@ describe('并行建议的过期标注', () => {
 
     rig.releaseFirstReview()
     const suggestion = await rig.firstSuggestion
-    expect(textOf(suggestion)).toContain(EXPIRY_PHRASE)
+
+    // 本票第 5 条的读数落在送达面上：下一次 pre-step 的请求 messages 里那条正文含标注。
+    await rig.fixture.main.drive(1)
+    const delivered = deliveredMessage(rig.fixture, suggestion.id)
+    expect(delivered).toBeDefined()
+    expect(textOf(delivered)).toContain(EXPIRY_PHRASE)
   })
 
-  it('真实用户消息落在建议产生之后：待投递期间改写正文', async () => {
-    const rig = await mountParallel({ triggerEverySteps: 1 }, [STEP, ADJUST_VERDICT, STEP])
+  it('真实用户消息落在建议产生之后：待投递期间改写正文，送达时也带标注', async () => {
+    const rig = await mountParallel(
+      { triggerEverySteps: 1 },
+      [STEP, ADJUST_VERDICT, STEP, CONTINUE_VERDICT, STEP],
+    )
     await rig.fixture.main.drive(2, '出发')
     rig.releaseFirstReview()
     const suggestion = await rig.firstSuggestion
@@ -282,14 +313,27 @@ describe('并行建议的过期标注', () => {
     const rewritten = pendingSuggestions(rig.fixture).find(message => message.id === suggestion.id)
     expect(rewritten).toBeDefined()
     expect(textOf(rewritten)).toContain(EXPIRY_PHRASE)
+
+    // 落点 (b) 的读数落在请求体上，不是队列上：送达的那条正文也带标注。
+    await rig.fixture.main.drive(1)
+    const delivered = deliveredMessage(rig.fixture, suggestion.id)
+    expect(delivered).toBeDefined()
+    expect(textOf(delivered)).toContain(EXPIRY_PHRASE)
   })
 
   it('期间没有真实用户消息：送达的正文不带标注（否定控制）', async () => {
-    const rig = await mountParallel({ triggerEverySteps: 1 }, [STEP, ADJUST_VERDICT, STEP])
+    const rig = await mountParallel(
+      { triggerEverySteps: 1 },
+      [STEP, ADJUST_VERDICT, STEP, CONTINUE_VERDICT, STEP],
+    )
     await rig.fixture.main.drive(2, '出发')
     rig.releaseFirstReview()
     const suggestion = await rig.firstSuggestion
-    expect(textOf(suggestion)).not.toContain(EXPIRY_PHRASE)
+
+    await rig.fixture.main.drive(1)
+    const delivered = deliveredMessage(rig.fixture, suggestion.id)
+    expect(delivered).toBeDefined()
+    expect(textOf(delivered)).not.toContain(EXPIRY_PHRASE)
   })
 })
 

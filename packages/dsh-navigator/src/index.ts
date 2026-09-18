@@ -314,8 +314,8 @@ function annotatePendingSuggestions(agent: Agent): void {
  * @param triggerStep - 这次复核的触发步骤。
  * @returns 产生时就该带过期标注时为 true。
  */
-function isExpired(anchorStep: number | null | undefined, triggerStep: number): boolean {
-  return anchorStep !== null && anchorStep !== undefined && anchorStep >= triggerStep
+function isExpired(anchorStep: number | null, triggerStep: number): boolean {
+  return anchorStep !== null && anchorStep >= triggerStep
 }
 
 /**
