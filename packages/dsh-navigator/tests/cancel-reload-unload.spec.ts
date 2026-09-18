@@ -10,7 +10,8 @@
  *
  * 六条用例覆盖第 1、2 条（第 3 条不另立构造）：
  *  ① `等待 × continue`：第 3 步的复核停在闸门上，释放（重载）落下取消记录后放行；这次 `adjust` 成功
- *     收场也不注入（对话、两处待处理队列与随后那次请求都没有它）、不再写第二条记录，该步原样放行。
+ *     收场也不注入（对话、两处待处理队列与随后那次请求都没有它）、不再写第二条记录，该步原样放行；
+ *     取消记录带上快照那份消息 id 列表（钉住「基底在登记时建好、快照填进同一个对象」）。
  *  ② `等待 × stop`：同一帧，`failurePolicy: stop` 时释放让等待步追加写取消原因的停止说明并停止本 turn
  *     （正文不写「复核失败」）。
  *  ②b 同一帧 ＋ 未处理的消息里有真实用户消息：停止前那道检查照跑——不追加说明、不停止，这条消息不丢
@@ -220,6 +221,10 @@ describe('① 等待 × continue：释放取消在途复核，等待步原样放
     await fixture.remountPlugin()
     await settled
     await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP, PLUGIN_DISPOSED)
+    // 释放落在请求发出之后，快照已取：取消记录因此带上那份消息 id 列表（记录表取消列的「可空」只覆盖
+    // 取到快照之前就结束的那一格）。这条同时钉住「基底在登记时就建好、快照那一半填进同一个对象」。
+    expect((await rawRecord(root, fixture.main.session.id, TRIGGER_STEP))['messageIds'])
+      .toEqual(fixture.main.reviews()[0]?.snapshotIds)
 
     // 放行：这次复核以 adjust 成功收场，但释放已经落下取消记录——结论不生效、不再写第二条。
     release?.()

@@ -133,7 +133,7 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
   const releaseInFlightReviews = (): Promise<void> => {
     const writes: Promise<void>[] = []
     for (const [sessionId, review] of inFlightReviews) {
-      // 标记先置：本步的 handler 与并行的续体都按它跳过落盘与结论，`point` 有没有取到不影响这件事。
+      // 标记先置：本步的 handler 与并行的续体都按它跳过落盘与结论，基底有没有补上快照不影响这件事。
       review.released = true
       // 基底只差快照的消息 id 时（释放落在 `await next()` 期间）照落一条 `messageIds` 缺省的取消记录——
       // 记录表允许它缺省（「取到快照之前就结束则没有」）。
