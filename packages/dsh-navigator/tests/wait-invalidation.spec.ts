@@ -12,10 +12,11 @@
  * 本票第 4 项另按**原始存储文档**复验取消态的 `verdict` / `failureReason` 是 `undefined`（读回入口经
  * 声明 schema 解析、会剥掉未声明的键，只按它断等于空转）。
  *
- * 五个用例：窗口一（复核在途到达）× `followup` / `steer` 各一条，另加一条 `continue` 结论——在途那一支
- * 不看结论，任何结论都作废；窗口二（消息在触发点之前入队、被那次 pre-step 的 claim 取走）× `steer`
- * 一条；窗口三（消息在触发点那次 claim 之后、复核发起之前到达，由插入监听器置位）× `steer` 一条。
- * 五条都挂真实存储栈，否则 (d) 读不回取消记录。
+ * 六个用例，按消息到达的时点分四个窗口：窗口一（复核在途到达）× `followup` / `steer` 各一条，另加一条
+ * `continue` 结论——在途那一支不看结论，任何结论都作废；窗口二（消息在触发点之前入队、被那次 pre-step
+ * 的 claim 取走）× `steer` 一条；窗口三（本步 claim 之后、复核发起之前到达，由插入监听器置位）× `steer`
+ * 一条；窗口四（本步 claim 之后、插件 handler 入口之前到达，只能从待处理队列上看见）× `steer` 一条。
+ * 六条都挂真实存储栈，否则 (d) 读不回取消记录。
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -77,7 +78,7 @@ const STOP_VERDICT: ScriptedResponse = {
   text: JSON.stringify({ verdict: 'stop', reason: STOP_REASON, recommendation: '停下来重新对齐' }),
 }
 
-/** 一条 `continue` 结论：在途到达那一支不看结论，照作废；claim 检查那一支才过滤它。 */
+/** 一条 `continue` 结论：在途到达那一支不看结论，照作废；应用点检查那一支才过滤它。 */
 const CONTINUE_VERDICT: ScriptedResponse = {
   text: JSON.stringify({ verdict: 'continue', reason: '看起来正常', recommendation: '无' }),
 }
@@ -318,6 +319,43 @@ describe('窗口三 · `next()` 期间：消息在触发点那次 claim 之后�
       }
       return decision
     })
+
+    await fixture.main.drive(2, '出发')
+    await fixture.main.drive(1)
+
+    expect(fixture.main.reviews()).toHaveLength(1)
+    expectNoPluginIntervention(fixture)
+    expectNoHookAbort(fixture)
+    expectProcessed(fixture, interjectionId)
+    await expectCancelledRecord(root, fixture.main.session.id, TRIGGER_STEP)
+  })
+})
+
+describe('窗口四 · 在途登记之前：消息在本步 claim 之后、插件 handler 入口之前到达', () => {
+  it('steer 送出的消息一样作废，不被 stop 的 cancel 清掉，只落一条取消记录', async () => {
+    const root = await tempRoot()
+    const fixture = await mountNavigatorLoop({
+      config: { triggerEverySteps: EVERY_STEPS },
+      storageRoot: root,
+      mountEagerly: false,
+      script: [STEP, STEP, STOP_VERDICT, DONE, DONE],
+    })
+    // 测试侧脚手架：先注册、后挂插件，这条 handler 因此在瀑布里排在插件之前，它的序言在插件 handler
+    // 之前跑——正是「本步 claim 已过、在途登记未到」那一段（中间还隔着 `systemPrompt.assemble`）。
+    // 这一段到达的消息进不了 claim 批次、也没有在途对象可置位，只能从待处理队列上看见。不新增夹具
+    // 能力（`mountEagerly` 是既有选项）。
+    let preSteps = 0
+    let interjectionId = ''
+    fixture.ctx.on('agent/pre-step', async (_payload, next) => {
+      preSteps += 1
+      if (preSteps === 3) {
+        const interjection = userMessage('换个方向')
+        interjectionId = interjection.id
+        fixture.main.agent.steer(interjection)
+      }
+      return next()
+    })
+    await fixture.mountPlugin()
 
     await fixture.main.drive(2, '出发')
     await fixture.main.drive(1)

@@ -11,13 +11,14 @@
  * **等待期作废**（07）：等待复核期间到达的真实用户消息让本次复核作废——不注入、不追加停止说明、
  * 不停止，也不调用 `agent.cancel`（默认清空待处理队列，会把用户刚发的话丢掉）。作废只有一条判定：
  * 消息在等待期到达，由唯一的 `agent/inbox/inserted` 监听器在送消息那一次同步调用里置位（在途登记
- * 从触发点决定起，覆盖 `next()` 与复核请求，收场后注销）；
- * 消息在触发点那次 pre-step 的 claim 之前就已入队，则由应用点检查本步被 claim 的消息逮住。作废时
- * 只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废判定与
- * 干预动作之后（判定到干预之间不隔 await，否则此间到达的真实用户消息会被停止动作的 `cancel` 清掉）。
- * verdict 过滤只加在 claim 检查那一支（本实现的取舍，理由见设计文档该节）：在途到达不看结论、一律
- * 作废；claim 检查那一支只在 `adjust` / `stop` 上作废，`continue` 照旧落完成态（触发点那次 pre-step
- * 正常会 claim 到用户自己那条消息，04 的完成态用例建在这条上）。
+ * 从触发点决定起，覆盖 `next()` 与复核请求，收场后注销）；落在登记之前的（本步 claim 已过、插件
+ * handler 入口未到，中间隔着 `systemPrompt.assemble` 与先前注册的 handler）由应用点检查「本步被
+ * claim 的消息 ∪ `nextStep` / `nextTurn` 待处理队列」逮住——这一段里到达的消息只能从队列上看见。
+ * 作废时只落那条取消记录（原因 `invalidated`），完成态不落盘——所以完成态写入挪到了收场之后、作废
+ * 判定与干预动作之后（判定到干预之间不隔 await，否则此间到达的真实用户消息会被停止动作的 `cancel`
+ * 清掉）。verdict 过滤只加在应用点检查那一支（本实现的取舍，理由见设计文档该节）：在途到达不看结论、
+ * 一律作废；应用点检查那一支只在 `adjust` / `stop` 上作废，`continue` 照旧落完成态（触发点那次
+ * pre-step 正常会 claim 到用户自己那条消息，04 的完成态用例建在这条上）。
  *
  * 记录域在**加载路径上**打开（`openReviewStore`）：坏记录正是在 `open` 的装载路径上被跳过的，
  * 惰性打开会让「坏记录不挡加载」落空。
@@ -144,13 +145,17 @@ export async function apply(ctx: Context, config: Required<Config>): Promise<voi
     }
     // 失败 / 取消（没有结论）不触碰会话。
     if (settlement === null) return decision
-    // 作废只有一条判定语义，两处信号合成它：在途置位，或本步被 claim 的消息里有真实用户消息。
+    // 作废只有一条判定语义，两处信号合成它：在途置位，或应用点检查「本步被 claim 的消息 ∪ 待处理
+    // 队列」。后者必须带上队列：claim 早于 waterfall 派发（中间还隔着 `systemPrompt.assemble` 与排在
+    // 本插件之前的 handler），落在在途登记之前的真实用户消息进不了 claim 批次、也没有在途对象可置位，
+    // 但它一定还留在 `nextStep` / `nextTurn` 里——停止动作的 `cancel` 会把它一起清掉。
     // 判定落在收场之后；09 的失败策略停止与它共用这一条（作废优先、不停止）。verdict 过滤只加在
-    // claim 检查那一支——在途到达按规格「一律作废」，而 claim 检查的规格前提是「注入建议、追加
-    // 停止说明或停止 turn 之前」，`continue` 什么也不做，照旧落完成态（04 的完成态三态格建在这条上：
+    // 应用点检查那一支——在途到达按规格「一律作废」，而应用点检查的规格前提是「注入建议、追加停止
+    // 说明或停止 turn 之前」，`continue` 什么也不做，照旧落完成态（04 的完成态三态格建在这条上：
     // 触发点那次 pre-step 正常会 claim 到用户自己那条消息，不过滤则 04 的完成态用例必红）。
+    const unprocessed = [...messages, ...agent.inbox.nextStep, ...agent.inbox.nextTurn]
     const invalidated = review.invalidated
-      || (settlement.outcome.verdict !== 'continue' && messages.some(isRealUserMessage))
+      || (settlement.outcome.verdict !== 'continue' && unprocessed.some(isRealUserMessage))
     // 完成态写入挪到作废判定之后：作废时只落那条取消记录，不落完成态——先落完成态再同键覆盖正是
     // 04 要避免的。
     if (invalidated) {
@@ -190,7 +195,7 @@ interface InFlightReview {
 /**
  * 真实用户消息的判别式（规格「什么算真实用户消息」）：`role === 'user' && source.kind === 'user'`。
  * 工具结果、插件写入的说明与建议、批准都不算；遇到不认识的来源一律按「不是」处理。
- * @param message - 一条插入事件或本步被 claim 的消息。
+ * @param message - 一条插入事件、本步被 claim 的消息，或待处理队列里的消息。
  * @returns 是真实用户消息时为 true。
  */
 function isRealUserMessage(message: UserMessage): boolean {
