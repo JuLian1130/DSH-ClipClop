@@ -85,7 +85,7 @@ ls -d node_modules/@dsh-clipclop/dsh-navigator      # 本包的副本，应当�
 ls -A node_modules/@deepseek-ai 2>/dev/null || echo '（该目录已不存在，正常）'   # 空输出＝里面的包已被回收
 ```
 
-- [ ] `node_modules/@dsh-clipclop/dsh-navigator` 还在——本包是按包名装进 profile 的。这一步只证「装上了」；它是否真的被装载解析到，见第 6 步的激活与复核记录。
+- [ ] `node_modules/@dsh-clipclop/dsh-navigator` 还在——这就是第 4 步按 tarball 装进来的那份副本。这一步只证「装上了」；它是否真的被装载解析到，见第 6 步的激活与复核记录。
 - [ ] 启动过 Desktop 之后，`ls -A node_modules/@deepseek-ai` 没有输出（目录还在但空了；目录整个不在时命令行会打印上面那行提示，同样算预期），或 `pnpm-lock.yaml` 消失——都属**预期现象**：Desktop 在每次生产启动时回收自己的核心包，并在它改动了 profile 清单/`overrides`、或树里还有核心包残留时删掉那份 lock。不要据此改配置或重装。
 
 > 本包的 peer 绑到哪一份 DSH，不要在磁盘上推——以第 6 步「插件真的激活 + 有复核记录」为准。
@@ -195,6 +195,6 @@ rm -rf /tmp/dsh-nav-g3
 
 跑完（无论通过与否）记两处：
 
-- [ ] 设计文档 `docs/dsh-navigator-design.md` 的「验证状态」：把 G3 从「仍未验证」移到「已实测通过」，或在原行写明失败结论（含日期、Desktop 版本、dsh 版本）；若走的是收窄那一档（第 9 步末尾），再写明收窄到哪一档与原因。本清单已在该行挂上链接。
+- [ ] 设计文档 `docs/dsh-navigator-design.md` 的「验证状态」：把 G3 从「仍未验证」移到「已实测通过」，或在原行写明结论（含日期、Desktop 版本、dsh 版本）——在第 0 步就因 Desktop 版本不符停下时写**「未验」**（并写明实测到的版本），不要写成「失败」；走失败结论时写明失败在哪一步，若还走了收窄那一档（第 9 步末尾）再写明收窄到哪一档与原因。本清单已在该行挂上链接。
 - [ ] 结论一句话模板：
-      `G3：Desktop <版本>（dsh <版本>，pnpm <版本>）上按本清单链接 tarball 产物并启用 bundle，<通过 | 失败>；证据：profile 里的安装副本 <路径>、复核记录 <路径>、对话里的折叠行 <截图/描述>；<未收窄 | 已收窄到 CLI/Web/SDK，原因 …>。`
+      `G3：Desktop <版本>（dsh <版本>，pnpm <版本>）上按本清单链接 tarball 产物并启用 bundle，<通过 | 失败 | 未验（原因 …）>；证据：profile 里的安装副本 <路径>、复核记录 <路径>、对话里的折叠行 <截图/描述>；<未收窄 | 已收窄到 CLI/Web/SDK，原因 …>。`
