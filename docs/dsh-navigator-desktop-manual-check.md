@@ -77,19 +77,18 @@ test ! -e node_modules/@dsh-clipclop/dsh-navigator/src && echo '副本不含 src
 - [ ] 安装副本里有 `lib/index.js` 与 `lib/index.d.ts`。
 - [ ] 安装副本里**没有** `src/`（证明它是预构建产物，不是源码）。
 
-### 4b. 两条「看着像坏了、其实正常」的预期（必做）
-
-装完之后（尤其**每次启动过 Desktop 之后**）profile 树会变样：Desktop 在每次生产启动时回收它自己的核心包（`apps/desktop/src/profile-core-cleanup.ts` 的 `cleanProfileCorePackages`，由 `project-manager.ts` 的 `applyRelease` 调用），并在有残留时删掉 `profile/pnpm-lock.yaml`。
+### 4b. 装完后的两点预期（第 6 步首次启动之后再回来看一眼）
 
 ```bash
 cd "$PROFILE"
-ls -d node_modules/@dsh-clipclop/dsh-navigator   # 你的包不是核心包，应当一直在
-ls node_modules/@deepseek-ai 2>/dev/null || echo '（核心包已被 Desktop 回收，正常）'
+ls -d node_modules/@dsh-clipclop/dsh-navigator      # 本包的副本，应当在
+ls -A node_modules/@deepseek-ai 2>/dev/null || echo '（该目录已不存在，正常）'   # 空输出＝里面的包已被回收
 ```
 
-- [ ] `node_modules/@dsh-clipclop/dsh-navigator` 还在（这是「按包名装载进 profile」在本步的读数）。
-- [ ] `node_modules/@deepseek-ai/` 或 `pnpm-lock.yaml` 不见了 —— 记为**预期现象**，不要据此改配置或重装。
-- [ ] 不要在磁盘上推「插件绑到了哪一份 DSH」：装完时的磁盘树不是 Host 运行期真正用的那一份，`require.resolve(…, {paths:[…]})` 这类读数通过与否都说明不了问题。本包最终绑到哪一份，以第 6 步「插件真的激活 + 有复核记录」为准。
+- [ ] `node_modules/@dsh-clipclop/dsh-navigator` 还在——本次装载就是从这里取的（G3「bundle 解析到 profile 内」在本步的读数）。
+- [ ] 启动过 Desktop 之后，`ls -A node_modules/@deepseek-ai` 没有输出（该目录本身可能还在、也可能不在），或 `pnpm-lock.yaml` 消失——都属**预期现象**：Desktop 在每次生产启动时回收自己的核心包，并在它改动了 profile 清单/`overrides`、或树里还有核心包残留时删掉那份 lock。不要据此改配置或重装。
+
+> 本包的 peer 绑到哪一份 DSH，不要在磁盘上推——以第 6 步「插件真的激活 + 有复核记录」为准。
 
 ## 5. 启用 bundle 并写联调配置
 
@@ -185,8 +184,9 @@ rm -rf /tmp/dsh-nav-g3
 | 插件装了、配置也改了，但行为没变化 | profile 的 `cordis.patch.yml` 没被读到（文件名/层级不对） | 对照 `$DSH_HOME/profiles/desktop/cordis.yml`（根配置，应为空数组）与 `cordis.patch.yml`；注意本插件条目 id 必须是 `dsh-navigator` |
 | 之前还能用，某次启动后设置被重置 | Desktop 的**原生恢复**会 `sanitizeProfile`：把 profile 的 `cordis.patch.yml` 备份成 `.bak-<时间戳>`，并把 `bundles` 重置回 web 模板（第三方 bundle 被关掉） | 从 `.bak-<时间戳>` 恢复 patch，重新把包名加回 `bundles`；这在记录里注明一次即可 |
 | 装的时候报 prepare / 构建脚本被拦 | 装的是源码包或 `file:` 目录，而不是第 2 步的 tarball | 只用 tarball 装，且带 `--ignore-scripts` |
-| profile 里 `node_modules/@deepseek-ai/` 或 `pnpm-lock.yaml` 不见了 | Desktop 每次生产启动都在回收自己的核心包（有残留时连 lock 一起删）——见 4b | 预期现象，不要重装或改配置 |
-| Desktop 自带的 dsh 不是 `0.1.6-alpha.1`，或插件激活了但注入的消息形状不对 | 本包只对 alpha.1 承诺行为；peer 范围与 Node 解析都拦不住版本错配（见第 0 步） | 按第 0 步停止并记「Desktop 版本不符，未验」 |
+| profile 里 `node_modules/@deepseek-ai` 空了或 `pnpm-lock.yaml` 不见了 | Desktop 每次生产启动都在回收自己的核心包——见 4b | 预期现象，不要重装或改配置 |
+| Desktop 自带的 dsh 不是 `0.1.6-alpha.1` | 本包只对 alpha.1 承诺行为；peer 范围会接受 alpha.2，Node 的解析又不校验范围（见第 0 步） | 按第 0 步停止并记「Desktop 版本不符，未验」 |
+| 插件激活了，但注入的消息形状不对（那一行的摘要/正文与规格不符） | 真实失败信号，不是环境问题 | 记下那条消息的形状与会话事件，按第 10 步把失败写进设计文档 G3 行（不属于收窄那一档） |
 | 记录文件没有、复核也没发 | 插件没激活（多半是 bundle 未启用），或该会话不是顶层会话（子 agent 会话不触发） | 核对第 5 步；确认用的是自己新建的普通会话 |
 
 **收窄退路**（设计文档已写死）：若 Desktop 这一路在本机确认走不通，就把联调范围收窄到 **CLI / Web / SDK**（这三条在本仓已有可重跑的自动化用例：`prebuilt-artifact.spec.ts`、`web-entry.spec.ts`、`sdk-entry.spec.ts`），并在记录里写清「Desktop 路径失败的**具体一步**与报错」。
