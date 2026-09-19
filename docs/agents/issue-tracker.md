@@ -6,7 +6,7 @@
 
 - 每个功能使用一个目录：`.scratch/<feature-slug>/`。
 - 功能规格保存为 `.scratch/<feature-slug>/spec.md`。
-- 规格顶部使用 `Status:` 记录状态；可交由编码代理实施的规格使用 `ready-for-agent`。
+- 规格顶部使用 `Status:` 记录状态：`ready-for-agent` 表示可交由编码代理实施；`implemented` 表示规格的验收标准已全部落地——每条判据都有可跑用例、门禁全绿，且没有判据仍挂在未验证的机制上。规格之后再改，状态跟着回退，不在文档里留一句与仓库现状不符的状态。
 - 拆分实施任务的票在 `.scratch/<feature-slug>/issues/` 下按 `01-<slug>.md` 顺序创建：一张票一个文件，编号按依赖顺序（阻塞者在前），每票的 Blocked by 写明它依赖的票。
 
 当技能要求发布到 issue tracker 时，按以上约定创建或更新对应 Markdown 文件。
