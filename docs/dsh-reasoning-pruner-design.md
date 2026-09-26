@@ -144,7 +144,9 @@ interface ReasoningPrunePayload {
 - pi-ai：`if (state.blocks.length !== message.content.length) return invalidReplay('block count does not match assistant content')`，随后逐位要求 `replay.type === block.type`（`packages/llm/llm-pi-ai/src/replay.ts:190-192`）。
 - DeepSeek Messages：`if (!Array.isArray(envelope.blocks) || envelope.blocks.length !== message.content.length) return fail('block count mismatch')`（`packages/llm/llm-deepseek/src/replay.ts:55`）。
 
-不对齐时抛的是 `INVALID_REPLAY_STATE`，而**两端都把它吞掉**：pi-ai 的 `toPiAssistant` 捕获后调 `onDegrade` 再返回 `foreignAssistant(message)`（`packages/llm/llm-pi-ai/src/replay.ts:249-260`），Messages 侧同理返回 `undefined` 信封（`llm-deepseek/src/replay.ts:39-45`）。后果是**整条消息**（连同一个不该丢的文本签名与工具调用签名）跌落到 provider-neutral 重建：不报错、不失败、只是丢掉签名。`onReplayDegrade` 是**可选配置**，出厂没有任何 bundle 配它（`packages/llm/llm-pi-ai/src/adapter.ts:98-104,366-367`），所以默认完全静默。
+不对齐时抛的是 `INVALID_REPLAY_STATE`，而**两端都把它吞掉**：pi-ai 的 `toPiAssistant` 捕获后调 `onDegrade` 再返回 `foreignAssistant(message)`（`packages/llm/llm-pi-ai/src/replay.ts:249-260`），Messages 侧同理返回 `undefined` 信封（`llm-deepseek/src/replay.ts:39-45`）。后果是**整条消息**（连同一个不该丢的文本签名与工具调用签名）跌落到 provider-neutral 重建：不报错、不失败、只是丢掉签名。
+
+**`onReplayDegrade` 的准确状态是「有日志信号、无程序化观测面」**（不是「完全静默」——这一处曾被写错）：回调本身是适配器 config 上的**可选**字段（`packages/llm/llm-pi-ai/src/adapter.ts:98-104`，内部包成 `onReplayDegrade(reason)`，`:366-367`），而**出厂的工厂函数都硬编码配了它、记一条 `ctx.logger.warn`**：pi-ai 见 `packages/llm/llm-pi-ai/src/index.ts:222-227`（`llm-pi-ai: unusable replay state on assistant history for route "…"`），Messages 见 `packages/llm/llm-deepseek/src/host.ts:26-28`（安装版对应 `@deepseek-ai/dsh-llm-pi-ai/lib/index.js` 与 `-llm-deepseek/lib/index.js` 同处）。**但没有任何 bundle 把该警告接到可观测面、也没有消费者读取它**（`packages/bundle/**/cordis.patch.yml` 里零命中），所以排障只能翻日志。实现上仍应把它当**测试夹具的断言钩子**（那是唯一的程序化用法），不要接进插件的生产配置。
 
 **因此裁剪的定义必须包含信封**：内容块数组与信封块数组**同步过滤、保持逐位对齐**。`readReplayState` 对每个块的要求很宽（类型属于 text/reasoning/tool-call，签名是字符串，`redacted` 是布尔；`replay.ts:135-144`），所以「同步删掉对应条目」既合法也足够——存活的文本与工具调用块保留各自签名，这正是我们要的。
 
@@ -232,9 +234,15 @@ interface ReasoningPrunePayload {
 设计文档的行号来自 DSH 源码 checkout 的 `0.1.7-rc.2`；本仓实际装入的是 `0.1.6-alpha.1`。已按机制依赖逐项核对**安装版本**：
 
 - **全部机制依赖的 API 都在**：`registerMessageProjection`、`contentGeneration`、`replaceGeneration`、`ignorable`、`KNOWN_SESSION_EVENT_TYPES`，以及承载类型 `web/deepseek-search-llm-request` 都在 `0.1.6-alpha.1` 的产物里（`lib/types/index.js`、`lib/types/surface.d.ts`、`lib/types/known-event-types.js`）。
-- **已发现两处真实差异**：
+- **已发现三处真实差异**：
   1. **`TurnEndReasonMap` 在 `0.1.6-alpha.1` 没有 `forked` 变体**（`lib/types/types.d.ts:165-201`，只有 `completed` / `aborted` / `blocked` / `error` / `max-tokens` / `interrupted`），而 checkout 版本有（`packages/core/session/src/types.ts:228`）。⇒ 规格闸门 D 把 `forked` 列进 `turn/end` 原因取值集合，在安装版本上**跑不出这一支**；判据不得依赖它出现。
-  2. **浏览器侧的 settings 域服务换了名字**（这是本节最要紧的一条）：checkout 版本提供 `ctx.configForms`，**安装版本提供 `ctx.settingsScope`**——`SettingsScopeBinder.bind<T>(spec): SettingsScope<T>`，`SettingsScope` 的面是 `getSnapshot()` / `subscribe()` / `set` / `unset` / `mutate(ops, expectedRevision?)`（安装包 `@deepseek-ai/dsh-client-ui-settings/lib/types/client/settings-scope.d.ts`、`settings-contract.d.ts`；`lib/types/client/index.d.ts` 开头明写「Provides `ctx.settingsScope`, the settings-namespace scope service every preference row binds its durable section through」）。已实测确认安装产物里**不存在** `ctx.configForms`。⇒ 激活点 ④ 的浏览器半必须按 `settingsScope` 实现；相应地「宿主是否 serve 该命名空间」的守卫在安装版本上读 `SettingsScopeSnapshot.status === 'unavailable'`，而不是 checkout 版本的 `whileServed(...)`。
+  2. **格式世代不同：checkout 是 v4，安装版本是 v3**（安装版 `lib/types/types.js:54` 的 `SESSION_FORMAT_VERSION = 3`；checkout `packages/core/session/src/types.ts:89` 是 `4`）。**这一条最影响实现前提**，因为它连带改变三项普查所依赖的事实：
+     - **已知事件类型集合大小不同**：checkout **59** 条（`packages/core/session/src/known-event-types.ts:22-82`），安装版本 **57** 条。差的正是 `developer/message` 与 `workspace/changes`；承载类型 `web/deepseek-search-llm-request` **两侧都在**（已实测确认——这是本设计成立的前提）。
+     - **表面类型集合不同**：checkout **5** 条（含 `developer/message`），安装版本 **4** 条。
+     - **「关系折叠是常开的读门」在安装版本上不成立**：安装版闭包内 `assertReleasedV4Relationships` **零命中**（它是 v3→v4 的机制；安装版是 v3，读路径走 `assertV3Event`，不调用它）。⇒ 本节下方「任何有结构校验的类型每次重载都会撞上，不是偶发」**只在 checkout 成立**；候选清单里靠它排除类型的理由（`RELATIONSHIP_TYPES` 常开读门）在安装版本上**不适用**。
+     - **方向是「更宽松」而非更危险**：安装版的 v3 读路径对未知类型**不拒收**（只拒 `tool/code-dispatch*`），所以安装版本上「借一个已有类型」的风险面比 checkout **更小**。
+     - ⇒ 实施时**以安装版本的类型集合与读路径为准**；`workspace/changes`（候选行 3）在整个安装版闭包里**零命中**——它在安装版本上连类型定义都没有。
+  3. **浏览器侧的 settings 域服务换了名字**（这是本节最要紧的一条）：checkout 版本提供 `ctx.configForms`，**安装版本提供 `ctx.settingsScope`**——`SettingsScopeBinder.bind<T>(spec): SettingsScope<T>`，`SettingsScope` 的面是 `getSnapshot()` / `subscribe()` / `set` / `unset` / `mutate(ops, expectedRevision?)`（安装包 `@deepseek-ai/dsh-client-ui-settings/lib/types/client/settings-scope.d.ts`、`settings-contract.d.ts`；`lib/types/client/index.d.ts` 开头明写「Provides `ctx.settingsScope`, the settings-namespace scope service every preference row binds its durable section through」）。已实测确认安装产物里**不存在** `ctx.configForms`。⇒ 激活点 ④ 的浏览器半必须按 `settingsScope` 实现；相应地「宿主是否 serve 该命名空间」的守卫在安装版本上读 `SettingsScopeSnapshot.status === 'unavailable'`，而不是 checkout 版本的 `whileServed(...)`。
 - **实施要求**：实现时以**安装版本的 `lib/**/*.d.ts`** 为类型依据，票面里凡是引 `path:line` 的地方，若该文件在被引包内，需同时确认安装产物的形状一致；发现不一致时以安装版本为准并回报，**不要**改 DSH 源码、也不要加版本判断分支。
 
 **未验证、明确不断言**：
@@ -273,7 +281,7 @@ interface ReasoningPrunePayload {
 
 **已核实的一处候选风险（第 1 名）**：`web/deepseek-search-llm-request` 在 v0→v1 的迁移边上有 payload 语义校验，要求 `endpoint`/`apiVersion`/`body` 三个非空字段（`packages/session/session-format-v0-to-v1/src/payload-validation.ts:287-291`）。但该断言只从**已发布旧格式的迁移校验**调用（`session-format-v0-to-v1/src/validation.ts:216`、`session-format-v2-to-v3/src/payload.ts:71`），而当前格式是 **v4**（`packages/core/session/src/types.ts:89`），v3→v4 的 admission **不调用** payload 语义（`session-format-v3-to-v4/src/*` 零引用）。⇒ 对以 v4 写入的会话，该风险**不触发**。仍要记住：它意味着这个类型**历史上**有过语义，将来收紧格式时可能被重新加回。
 
-**最危险的排除项**（值得单独记）：`subagent/catalog` —— `session-format-v1-to-v2/src/validation.ts:122-127` **常开**调用 `catalogFact(event.data)` 且不满足就抛，任意 payload 会让**整段会话读不出来**。
+**最危险的排除项**（值得单独记）：`subagent/catalog` —— **checkout** `packages/session/session-format-v3-to-v4/src/validation.ts:122-127`（在 `assertReleasedV4Relationships` 内，`:110` 起）**常开**调用 `catalogFact(event.data)` 且不满足就抛（实现 `src/facts.ts:72-83`，抛 `requires a supported versioned catalog fact`），任意 payload 会让**整段会话读不出来**。**注意引用别搞错包**：`catalogFact` 在 `session-format-v1-to-v2` 里**零命中**（该包从不调用它），它是 v3→v4 的机制；且「常开」这一属性**只在 checkout 成立**——安装版本是 v3、闭包内 `catalogFact` 与 `assertReleasedV4Relationships` 均**零命中**，`assertReleasedArtifactRelationships` 的 switch 里没有 `subagent/catalog` 分支（见「验证状态 · 源码 checkout 与安装版本的差异」第 2 条）。
 
 **其他被排除的原因**：表面类型 5 个（投影会拦掉、节点不入表面）；`RELATIONSHIP_TYPES` 26 个（常开读门）；消费者会脱轨的：`image/offload`（投影已占用）、`todo/write`（未守卫的 `.flatMap` → TypeError）、`feedback/message-put|delete`（无条件 parse → ZodError 弄坏 feedback Remote）、`feedback/record`（触发全日志 OTLP 上传）、`goal/change`（写入永久失败哨兵）、`agent/inbox/spliced`（解构 `...inserted` → TypeError）、`agent-preset/selected`（headless 对异形 payload 抛）、`model/selection`/`plan/mode`（wire `viewSchema.parse` 抛）、`sandbox/mode`（提交前抛）、`permission/preset`（静默漂移成 'custom'）、`approval/policy`（覆盖 + 污染 strict union）、`subagent/model-selection-policy`、`subagent/descriptor`（会**清掉**子会话身份）、`tool-workflow/*`（客户端渲染出 key 为 `undefined` 的幽灵卡片）。
 
