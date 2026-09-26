@@ -2,13 +2,13 @@
 
 状态：机制已逐条核实，**实现未开始**。耐久记录的承载类型经类型普查选定为 **`web/deepseek-search-llm-request`**（候选排序与排除清单见「待办与上游诉求」）；**闸门 A 未关闭**，方案仍可能整体作废。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
-本文件引用的 DSH 扩展点按 **`0.1.7-rc.2`**（DSH 源码 checkout 的版本）逐条核实，路径为 DSH 仓内相对路径。**但这不等于插件的构建版本**：本仓通过 `peerDependencies` 依赖的是 `^0.1.6-alpha.1`，实际装入的是 **`0.1.6-alpha.1`**（先例 `packages/dsh-navigator/package.json` 的 peerDependencies）。因此 `path:line` 是**源码 checkout** 的坐标、而运行期是安装版本——两者不是同一份代码。已就这一点做过一次核对，结论见「验证状态 · 源码 checkout 与安装版本的差异」。升级后按下文「验证状态」的核对清单重跑一遍，而不是预先写防御分支或版本判断——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
+本文件引用的 DSH 扩展点按**最新版本 `0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。**最新版本是新插件的唯一基准**：不为旧版本留兼容路径、版本判断分支或降级行为（`AGENTS.md` 的「DSH 版本基准」）。用户运行环境（`~/.dsh/profiles/`）与 DSH 源码 checkout 都是 `0.1.7-rc.2`；本仓的开发依赖另见下文说明。升级后按下文「验证状态」的核对清单重跑一遍——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
 本文件记录**取舍与机制**：为什么这样定、挂哪个钩子、事件字段形状、源码依据与待实测项。**需求陈述与验收标准在[实施规格](../.scratch/historical-reasoning-pruning/spec.md)里**，规格只写操作性定义、可观察判据与交付约束，不复制本文件的机制描述。判断一句话该放哪边：**删掉它之后，有没有验收标准变得无法判断**——会，属于规格；不会，属于本文件。两者冲突时：需求以规格为准，取舍与机制以本文件为准。
 
 ## 范围与约束
 
-- 只开发插件，不修改 deepseek-harness 源码。所有接缝都是已有扩展点：`agent/pre-step` 与 `agent/request-error`（waterfall，可 `prepend`）、`ctx.sessions.registerMessageProjection`、以及手动入口所需的设置面——**浏览器侧那个服务的名字按版本不同**（本仓实装是 `ctx.settingsScope`，checkout 是 `ctx.configForms`，见「验证状态 · 源码 checkout 与安装版本的差异」）。
+- 只开发插件，不修改 deepseek-harness 源码。所有接缝都是已有扩展点：`agent/pre-step` 与 `agent/request-error`（waterfall，可 `prepend`）、`ctx.sessions.registerMessageProjection`、以及手动入口所需的设置面（`ctx.settings` / `ctx.configForms`）。
 - 服务依赖交给原生 `inject`：Cordis 在依赖就绪前不会激活插件（`vendor/cordis/src/fiber.ts:611-623` 把缺依赖的插件置为 INACTIVE），所以在 `apply` 里查服务是否存在是死代码。缺服务的表现是「插件不激活」，由 DSH 启动审计报告。
 - 包名：插件是 `dsh-reasoning-pruner`（功能命名，同 `dsh-navigator` 的先例）；`dsh-smarter-context` 只是**未来**的容器名，当前不建、不为它预留任何结构。
 
@@ -174,11 +174,11 @@ interface ReasoningPrunePayload {
 - 主界面开关需要一个**双面包**（这是本设计里唯一的额外交付物）：
   - host 半：`Config` 里的布尔字段，命名空间即 patch 行的 `id`，字段必须标 `.volatile()`（settings 的写入路径拒绝非 volatile 路径）。
   - 浏览器半：`dsh.client { platform: 'web' }` + `exports["./client"]` 产物，把开关注册为 `settings.general.item` 这一行（契约 `packages/client/ui-settings/src/client/contract/slots.ts:80-97`：**单个偏好**的 additive seat；该 seat 只堆行，**行自己画内部包括 label**，owner **不收到任何 props**（`children?: never`），文案、当前值、写入路径全归注册者）。注册形状的真实先例：`ctx.slots.inject('settings.general.item', () => ctx.slots.register({ name, id, order, locale, inject }, Row))`（`packages/client/ui-settings-general/src/client/index.ts:76-89`，其中 `current-version` 占 `order: 100` 并注明「每个功能注册的偏好行都在 100 以下」）；行的实现先例见 `DeveloperToolsRow.tsx`（`Switch` + `busy`/`failed` 两态 + `role="alert"`）。
-  - 读走 **install 版本提供的服务**——**这一点按版本不同**：DSH 源码 checkout（`0.1.7-rc.2`）上是 `ctx.configForms.get('<Host plugin entry id>')`（`packages/client/ui-settings/src/client/config-form.ts:230,266,290-301` 的 `namespace = entryId`，`getSnapshot()` 读、`set(field, value)` 写；该 `set` 返回 `Promise<boolean>`，Host 拒绝时**返回 `false`**）；而**本仓实际装入的 `0.1.6-alpha.1` 上是 `ctx.settingsScope.bind({ namespace })`**，返回的 `SettingsScope` 提供 `getSnapshot()` / `subscribe()` / `set(field, value)` / `unset(field)` / `mutate(ops, expectedRevision?)`，`set` 返回 `Promise<void>`（实装产物 `@deepseek-ai/dsh-client-ui-settings/lib/types/client/settings-scope.d.ts` 与 `settings-contract.d.ts`；已实测确认安装产物里**不存在** `ctx.configForms`，该包也**不含 `src/`**，引用要写 `lib/types/client/**`）。实现时**以安装版本的 `lib/types/client/**` 为准**，不要按本文的字面量写 `configForms`。
+  - 读走 `ctx.configForms.get('<Host plugin entry id>')` —— 它的 `namespace` 就是 entry id（`packages/client/ui-settings/src/client/config-form.ts:290-301`），`getSnapshot()` 读、`set(field, value)` 写（`:114` 的 `set` 返回 **`Promise<boolean>`**：Host 拒绝时**返回 `false`**）。**注册必须包在 `whileServed([...])` 里**（`:317` 起）：该守卫让「宿主从未 compose 该命名空间」的部署不显示这一行，否则会出现一个没有写入目标的死行。
   - **写回被拒绝的形态是个陷阱，两版本都不同于直觉**：实装的 `SettingsScope.set` 在 Host 业务拒绝时**照常 fulfill（resolve `undefined`），不 reject**——实装 `lib/client.js` 的 `mutate()` 里是 `if (!response.ok) { await this.recover(generation); return; }`（普通 `return`），只有 `operation()` 自身抛异常时才 reject。
     - **但也不能把「快照回退」当观察面**：`set()` **从不做乐观写入**——快照的 `value` 只在成功时由 `mirror.acceptView(response.value)` 更新，失败走 `recover()` → `mirror.load()` → `derive()`；因此**业务拒绝路径上快照本来就没变过**，断言「值回到翻转前」是**恒真的空转判据**。
     - ⇒ 正确的可观察量是**界面失败态**：照框架先例 `packages/client/ui-settings-general/src/client/DeveloperToolsRow.tsx:24-37`（行自带 `busy` / `failed` 两态、失败渲染 `role="alert"`），并注意**业务拒绝捕不到 UI 侧的 `.catch()`**——`failed` 必须在 await 之后核验结果，不能只靠 catch 置位。
-  - **注册必须包在「宿主真的 serve 该命名空间」的守卫里**：checkout 版本上该守卫是 `whileServed([...])`（`config-form.ts:311-337`，作用见票 06）；安装版本上对应的是 `SettingsScopeSnapshot.status === 'unavailable'`（命名空间未暴露给本客户端或连接把偏好留在进程内时）——两种形态的共同意图是「宿主从未 compose 该命名空间时不要显示一个没有写入目标的死行」。**按安装版本实现，并在该 `status` 为 `unavailable` 时不注册该行。**
+  - **注册必须包在「宿主真的 serve 该命名空间」的守卫里**：`whileServed([...])`（`packages/client/ui-settings/src/client/config-form.ts:317` 起；作用是「宿主从未 compose 该命名空间时不要显示一个没有写入目标的死行」）。**按最新版本实现**——更早版本上对应的是 `SettingsScopeSnapshot.status === 'unavailable'`，本仓基准不再用它。
   - **没有**「声明 Config 就自动长出 UI」的通路：`autoGenerate` 在客户端零消费者（checkout 与已装包里均 0 命中），出厂的插件清单页是只读的。所以浏览器半是必需的，不是优化。
   - **而且浏览器半的产物格式是一条硬约束**：必须是 **CJS 闭包工厂**（`banner` 写 `window.__ModuleLoader__.load({id, factory})`、`footer` 收口，`packages/client/tsdown.client.ts:617-623`），`exports["./client"]` 只能是字符串或带字符串 `default` 的对象——别的形状直接抛。装载侧要求 `dsh.client`（`platform` 必须等于 `'web'`）+ 该导出路径的**文件已存在**（`packages/client/modules/src/index.ts:195-205,838-847`）。**本仓现有的 `tsc -p tsconfig.json` 直出 `lib/` 产不出这个格式**，所以本票要落定一个客户端打包步骤（`tsdown` 或等价物）或手写那份小产物。缺产物时**同步抛出**（`client-modules: client bundle not found; run \`pnpm run build\` before launch`，`:92,103`，聚合成 `ClientPackageCompositionError`），该 fiber FAILED——不是静默跳过。
 - **置灰按保守闸门**：判不准就不给。判据需要**三个**事实，不是两个：
@@ -229,21 +229,19 @@ interface ReasoningPrunePayload {
 - **A2（`prompt_tokens` 真的下降）**：**仍未验证**，是经济前提本身。空串计入零 token 近乎同义反复，真正没证的是**服务端会不会补偿性要求回显**。
 - 附带记录本机实际路由的更省形态：`cline-pass` 的自有适配器只在推理非空时才写该字段（`~/.dsh/profiles/web/node_modules/dsh-cline-pass/lib/adapter.js:204-213` 的 `...(reasoning.length > 0 ? { reasoning_content: reasoning } : {})`），即裁剪后走的是**变体 C（字段整个省略）**，比 B 更干净。
 
-**源码 checkout 与安装版本的差异（本次核对）**
+**基准：最新版本是唯一基准**
 
-设计文档的行号来自 DSH 源码 checkout 的 `0.1.7-rc.2`；本仓实际装入的是 `0.1.6-alpha.1`。已按机制依赖逐项核对**安装版本**：
+设计文档的行号来自 DSH 源码 checkout，而该 checkout 的版本是 **`0.1.7-rc.2`**——**这就是最新版本，也是本插件的唯一基准**（`AGENTS.md` 的「DSH 版本基准」）。已核实三处环境，结论一致：
 
-- **全部机制依赖的 API 都在**：`registerMessageProjection`、`contentGeneration`、`replaceGeneration`、`ignorable`、`KNOWN_SESSION_EVENT_TYPES`，以及承载类型 `web/deepseek-search-llm-request` 都在 `0.1.6-alpha.1` 的产物里（`lib/types/index.js`、`lib/types/surface.d.ts`、`lib/types/known-event-types.js`）。
-- **已发现三处真实差异**：
-  1. **`TurnEndReasonMap` 在 `0.1.6-alpha.1` 没有 `forked` 变体**（`lib/types/types.d.ts:165-201`，只有 `completed` / `aborted` / `blocked` / `error` / `max-tokens` / `interrupted`），而 checkout 版本有（`packages/core/session/src/types.ts:228`）。⇒ 规格闸门 D 把 `forked` 列进 `turn/end` 原因取值集合，在安装版本上**跑不出这一支**；判据不得依赖它出现。
-  2. **格式世代不同：checkout 是 v4，安装版本是 v3**（安装版 `lib/types/types.js:54` 的 `SESSION_FORMAT_VERSION = 3`；checkout `packages/core/session/src/types.ts:89` 是 `4`）。**这一条最影响实现前提**，因为它连带改变三项普查所依赖的事实：
-     - **已知事件类型集合大小不同**：checkout **59** 条（`packages/core/session/src/known-event-types.ts:22-82`），安装版本 **57** 条。差的正是 `developer/message` 与 `workspace/changes`；承载类型 `web/deepseek-search-llm-request` **两侧都在**（已实测确认——这是本设计成立的前提）。
-     - **表面类型集合不同**：checkout **5** 条（含 `developer/message`），安装版本 **4** 条。
-     - **「关系折叠是常开的读门」在安装版本上不成立**：安装版闭包内 `assertReleasedV4Relationships` **零命中**（它是 v3→v4 的机制；安装版是 v3，读路径走 `assertV3Event`，不调用它）。⇒ 本节下方「任何有结构校验的类型每次重载都会撞上，不是偶发」**只在 checkout 成立**；候选清单里靠它排除类型的理由（`RELATIONSHIP_TYPES` 常开读门）在安装版本上**不适用**。
-     - **方向是「更宽松」而非更危险**：安装版的 v3 读路径对未知类型**不拒收**（只拒 `tool/code-dispatch*`），所以安装版本上「借一个已有类型」的风险面比 checkout **更小**。
-     - ⇒ 实施时**以安装版本的类型集合与读路径为准**；`workspace/changes`（候选行 3）在整个安装版闭包里**零命中**——它在安装版本上连类型定义都没有。
-  3. **浏览器侧的 settings 域服务换了名字**（这是本节最要紧的一条）：checkout 版本提供 `ctx.configForms`，**安装版本提供 `ctx.settingsScope`**——`SettingsScopeBinder.bind<T>(spec): SettingsScope<T>`，`SettingsScope` 的面是 `getSnapshot()` / `subscribe()` / `set` / `unset` / `mutate(ops, expectedRevision?)`（安装包 `@deepseek-ai/dsh-client-ui-settings/lib/types/client/settings-scope.d.ts`、`settings-contract.d.ts`；`lib/types/client/index.d.ts` 开头明写「Provides `ctx.settingsScope`, the settings-namespace scope service every preference row binds its durable section through」）。已实测确认安装产物里**不存在** `ctx.configForms`。⇒ 激活点 ④ 的浏览器半必须按 `settingsScope` 实现；相应地「宿主是否 serve 该命名空间」的守卫在安装版本上读 `SettingsScopeSnapshot.status === 'unavailable'`，而不是 checkout 版本的 `whileServed(...)`。
-- **实施要求**：实现时以**安装版本的 `lib/**/*.d.ts`** 为类型依据，票面里凡是引 `path:line` 的地方，若该文件在被引包内，需同时确认安装产物的形状一致；发现不一致时以安装版本为准并回报，**不要**改 DSH 源码、也不要加版本判断分支。
+- **用户运行环境**（`~/.dsh/profiles/node_modules/@deepseek-ai/`，即 GUI 真正加载插件的层）：**231 个 DSH 包全部是 `0.1.7-rc.2`**。
+- **DSH 源码 checkout**：`0.1.7-rc.2`。
+- **本仓的开发依赖**：`packages/dsh-navigator/package.json` 仍写 `0.1.6-alpha.1`（30 处）。**这是唯一的落后项，且不影响本插件**——按「已有插件是否针对最新版本开发不在本规则范围内」，不为它做升级；**新插件的依赖声明直接用 `0.1.7-rc.2`**，基准与运行环境因此一致。
+
+**已作废的判断**：本文件此前曾按「实装 `0.1.6-alpha.1`」记下三处「真实差异」——`TurnEndReasonMap` 无 `forked` 变体、格式世代为 v3（连带已知类型 57 条、表面类型 4 条、`assertReleasedV4Relationships` 不生效）、浏览器侧服务名为 `ctx.settingsScope` 而非 `ctx.configForms`。**这三条全部只是「开发仓依赖落后」的产物，不是设计约束**，按最新版本基准一律作废：
+
+- 逐条对过 `0.1.7-rc.2` 的产物：`TurnEndReasonMap` **有** `forked`；`SESSION_FORMAT_VERSION` 是 **4**（`KNOWN_SESSION_EVENT_TYPES` **59** 条、表面类型 **5** 条、`assertReleasedV4Relationships` 是常开读门——本文件「待办与上游诉求」里那条结论**在最新版本上成立**）；浏览器侧服务名是 **`ctx.configForms`**，守卫是 `whileServed([...])`（见「激活点 ④」）。
+- 唯一保留的产物级事实是**承载类型的可用性**：`web/deepseek-search-llm-request` 在最新版本的 `KNOWN_SESSION_EVENT_TYPES` 里、且**不在** `RELATIONSHIP_TYPES` 里——这是本设计成立的前提，两侧都已实测确认。
+- ⇒ 实现与票据一律按 `0.1.7-rc.2` 的**源码 `path:line`** 与**同版本产物**写，不需要任何版本判断分支。
 
 **未验证、明确不断言**：
 
@@ -281,7 +279,7 @@ interface ReasoningPrunePayload {
 
 **已核实的一处候选风险（第 1 名）**：`web/deepseek-search-llm-request` 在 v0→v1 的迁移边上有 payload 语义校验，要求 `endpoint`/`apiVersion`/`body` 三个非空字段（`packages/session/session-format-v0-to-v1/src/payload-validation.ts:287-291`）。但该断言只从**已发布旧格式的迁移校验**调用（`session-format-v0-to-v1/src/validation.ts:216`、`session-format-v2-to-v3/src/payload.ts:71`），而当前格式是 **v4**（`packages/core/session/src/types.ts:89`），v3→v4 的 admission **不调用** payload 语义（`session-format-v3-to-v4/src/*` 零引用）。⇒ 对以 v4 写入的会话，该风险**不触发**。仍要记住：它意味着这个类型**历史上**有过语义，将来收紧格式时可能被重新加回。
 
-**最危险的排除项**（值得单独记）：`subagent/catalog` —— **checkout** `packages/session/session-format-v3-to-v4/src/validation.ts:122-127`（在 `assertReleasedV4Relationships` 内，`:110` 起）**常开**调用 `catalogFact(event.data)` 且不满足就抛（实现 `src/facts.ts:72-83`，抛 `requires a supported versioned catalog fact`），任意 payload 会让**整段会话读不出来**。**注意引用别搞错包**：`catalogFact` 在 `session-format-v1-to-v2` 里**零命中**（该包从不调用它），它是 v3→v4 的机制；且「常开」这一属性**只在 checkout 成立**——安装版本是 v3、闭包内 `catalogFact` 与 `assertReleasedV4Relationships` 均**零命中**，`assertReleasedArtifactRelationships` 的 switch 里没有 `subagent/catalog` 分支（见「验证状态 · 源码 checkout 与安装版本的差异」第 2 条）。
+**最危险的排除项**（值得单独记）：`subagent/catalog` —— `packages/session/session-format-v3-to-v4/src/validation.ts:122-127`（在 `assertReleasedV4Relationships` 内，`:110` 起）**常开**调用 `catalogFact(event.data)` 且不满足就抛（实现 `src/facts.ts:72-83`，抛 `requires a supported versioned catalog fact`），任意 payload 会让**整段会话读不出来**。**注意引用别搞错包**：`catalogFact` 在 `session-format-v1-to-v2` 里**零命中**（该包从不调用它），它是 v3→v4 的机制——这是 v4 的常开读门，正是本设计排除有结构校验类型的主要理由。
 
 **其他被排除的原因**：表面类型 5 个（投影会拦掉、节点不入表面）；`RELATIONSHIP_TYPES` 26 个（常开读门）；消费者会脱轨的：`image/offload`（投影已占用）、`todo/write`（未守卫的 `.flatMap` → TypeError）、`feedback/message-put|delete`（无条件 parse → ZodError 弄坏 feedback Remote）、`feedback/record`（触发全日志 OTLP 上传）、`goal/change`（写入永久失败哨兵）、`agent/inbox/spliced`（解构 `...inserted` → TypeError）、`agent-preset/selected`（headless 对异形 payload 抛）、`model/selection`/`plan/mode`（wire `viewSchema.parse` 抛）、`sandbox/mode`（提交前抛）、`permission/preset`（静默漂移成 'custom'）、`approval/policy`（覆盖 + 污染 strict union）、`subagent/model-selection-policy`、`subagent/descriptor`（会**清掉**子会话身份）、`tool-workflow/*`（客户端渲染出 key 为 `undefined` 的幽灵卡片）。
 
