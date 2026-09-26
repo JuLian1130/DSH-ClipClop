@@ -1,6 +1,6 @@
 # dsh-reasoning-pruner 设计
 
-状态：机制已逐条核实，**实现未开始**。闸门 A（端点接受度）与闸门 B（缓存净收益）见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)，两者均未关闭；文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
+状态：机制已逐条核实，**实现未开始**，且**存在一处未解的机制阻塞**（见「待办与上游诉求」——`ignorable` 的写入路径）。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
 本文件引用的 DSH 扩展点按 **`0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。未来版本**乐观地先视为兼容**：升级后按下文「验证状态」的核对清单重跑一遍，而不是预先写防御分支或版本判断——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
@@ -47,7 +47,7 @@ DSH 里凡是「历史是否被改动过」的判据都要分清用的是哪一�
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
-     * 让指定历史回合的推理块自此次记录起不再进入模型可见历史。
+     * 让指定历史步骤的推理块自此次记录起不再进入模型可见历史。
      * 目标是当前表面节点；记录本身不变。
      * @messageProjection
      */
@@ -68,19 +68,46 @@ declare module '@deepseek-ai/dsh-session/types' {
 - 降级方向是安全的：推理全文仍在日志里，不会产生损坏的会话，也不会出现「两端都不报错却内容分叉」——最坏情况只是白花 token。所以判据（规格闸门 C）写成：有插件时重载与运行期一致；无插件时**不得拒绝整个会话**，只能得到未裁剪版。
 - 这是**需要向上游提的**一条：按那份 note 的措辞，替代机制尚不存在，而本插件是第一个真正需要「仓外、改变重建、但必须可重载」的外部事件生产者。
 
-### 回合资格：按每条 assistant 消息读它自己的传输
+### **阻塞：`append` 写不出 `ignorable`，而种子路径无法为既存会话追加**
+
+上一条的前提是「我们能写出带 `ignorable: true` 的事件」。**这条前提在当前版本不成立**，必须先解决，否则整条耐久路线不成立。证据：
+
+- `Session.append` 的第三个参数类型只有 `SurfaceIntent`（`surfaceOp`/`sourceEventSeqs`），**没有任何 envelope 通道**；它构造事件时硬编码 `{type, seq, time, data, surfaceOp?, sourceEventSeqs?}`——**没有 `ignorable` 字段**（`packages/core/session/src/index.ts:722-726` 签名、`:745-751` 构造）。
+- 写入路径**不校验**事件类型：`persistBatch` 直接 `appendLines`，而 `appendLines` 只做编码与落盘（`packages/session/session-persistence-jsonl/src/index.ts:856-868`、`:1324-1348`）。所以 append 会**成功**，问题被推迟到下次打开。
+- 读取路径**校验并拒绝**：`validateStoredEvents` 对未知类型且 `ignorable !== true` 直接抛 `SessionFormatUnsupportedError`（`packages/session/session-persistence/src/storage-contract.ts:69-80`）。调用点是读路径（`session-persistence-jsonl/src/index.ts:675`、`:807`、`generation.ts:528`）。
+- ⇒ **失败形态是最坏的组合：写入静默成功，重载时整段会话被拒绝。** 这正是本仓 ADR 0002（`docs/adr/0002-review-records-outside-session-log.md`）记录过的同一个坑——dsh-navigator 当时因此把复核记录搬到会话日志之外。
+- 种子路径（`CreateSessionOptions.seed`）**确实允许** envelope 带 `ignorable`（`assertSessionEventEnvelope` 的键白名单含它，`packages/core/session/src/index.ts:207-240`），但它只在**创建/恢复会话**时生效，不能给一个已经在跑的会话追加事件；本插件的裁剪是运行期决策。
+- `KNOWN_SESSION_EVENT_TYPES` 是运行时**未冻结**的普通 `Set`（`known-event-types.ts:22`，全文件无 `Object.freeze`），也经 `@deepseek-ai/dsh-session` 导出（`index.ts:36`）——但即使插件拿到同一模块实例去 `add` 自己的类型，那也只是**本进程内**有效：重载是另一个进程，生成集合不含它。**不作为方案。**
+- 该 note 声称有第三方插件依赖此字段，但仓内 `ignorable: true` 只出现在测试夹具里（`grep` 全仓无生产写入点），与本条一致：**存在读取约定，但不存在公开写入路径。**
+
+**结论**：耐久记录必须改走**已知事件类型 + 自有 message projection**，或走会话日志之外。三条候选路径及其代价见「待办与上游诉求」。**这条阻塞解除前，规格不得标 `ready-for-agent`。**
+
+### 裁剪资格：按每条 assistant 消息读它自己的传输
 
 - 传输写在耐久的 replay 信封里，随 `assistant/message` 落盘：`{ response: { kind: 'pi-ai', version: 2, api, provider, model, … }, blocks }`（`packages/llm/llm-pi-ai/src/replay.ts:20-30,77-89`；落盘链 `packages/llm/llm-pi-ai/src/stream.ts:213` → `packages/core/agent-loop/src/agent.ts:442,500` → `packages/llm/llm/src/message.ts:20`）。
 - Messages 适配器的信封是 `{ response: { kind: 'deepseek-messages', version: 1, model }, blocks }`，**没有 `api`**（`packages/llm/llm-deepseek/src/replay.ts:29-31`）。
-- 因此资格判定 = 「信封是 pi-ai 且 `response.api === 'openai-completions'`」，**逐回合**。这是唯一能拿到「这一轮由哪个传输产生」的地方：`resolveModelInfo` 把 api 丢掉了（`packages/llm/llm-pi-ai/src/adapter.ts:300-315`），`requestHeader()`/`requestContext()` 也没有它。
+- 因此资格判定 = 「信封是 pi-ai 且 `response.api === 'openai-completions'`」，**逐步骤**。这是唯一能拿到「这一步由哪个传输产生」的地方：`resolveModelInfo` 把 api 丢掉了（`packages/llm/llm-pi-ai/src/adapter.ts:300-315`），`requestHeader()`/`requestContext()` 也没有它。
 - 注意措辞：本仓的传输字面量是 `'openai-completions'`，不是 `chat-completions`。
 
 ### 裁剪操作本身：移除块，不是把文本置空
 
 - DSH 侧的块类型是 `{ type: 'reasoning', text }`（`packages/llm/llm/src/types.ts:67-71`）。
-- pi-ai 组装历史轮时先过滤：`thinkingBlocks.filter(block => block.thinking.trim().length > 0)`（pi-ai 的 `dist/api/openai-completions.js:979`），再由**存活的**块的 `thinkingSignature` 决定写哪个线上字段（`:998-1005`）。
+- pi-ai 组装历史 assistant 消息时先过滤：`thinkingBlocks.filter(block => block.thinking.trim().length > 0)`（pi-ai 的 `dist/api/openai-completions.js:979`），再由**存活的**块的 `thinkingSignature` 决定写哪个线上字段（`:998-1005`）。
 - 因此**把文本置空**仍有签名存活，会走 `preservedReasoningDetails` 分支把 `reasoning_details` 原 blob 照送（`:1041-1042`）——线上零节省，而本地计量会报出节省。空格更差：`trim()` 让它与空串完全等价。
 - 结论：裁剪 = **移除块**。移除后字段由 pi-ai 的 compat 补丁补 `""`（`:1044-1047`，`requiresReasoningContentOnAssistantMessages: isDeepSeek` 在 `:1286`）；不满足该条件时字段干脆缺席，即规格闸门 A 的 C 变体。
+
+### **必须与 replay 信封同步**（本设计最容易踩的坑）
+
+只移除内容里的推理块**不够**，它会撞上一条静默的降级路径。两个适配器都校验「耐久 replay 信封」与「消息内容」**逐位对齐**：
+
+- pi-ai：`if (state.blocks.length !== message.content.length) return invalidReplay('block count does not match assistant content')`，随后逐位要求 `replay.type === block.type`（`packages/llm/llm-pi-ai/src/replay.ts:190-192`）。
+- DeepSeek Messages：`if (!Array.isArray(envelope.blocks) || envelope.blocks.length !== message.content.length) return fail('block count mismatch')`（`packages/llm/llm-deepseek/src/replay.ts:55`）。
+
+不对齐时抛的是 `INVALID_REPLAY_STATE`，而**两端都把它吞掉**：pi-ai 的 `toPiAssistant` 捕获后调 `onDegrade` 再返回 `foreignAssistant(message)`（`packages/llm/llm-pi-ai/src/replay.ts:249-260`），Messages 侧同理返回 `undefined` 信封（`llm-deepseek/src/replay.ts:39-45`）。后果是**整条消息**（连同一个不该丢的文本签名与工具调用签名）跌落到 provider-neutral 重建：不报错、不失败、只是丢掉签名。`onReplayDegrade` 是**可选配置**，出厂没有任何 bundle 配它（`packages/llm/llm-pi-ai/src/adapter.ts:98-104,366-367`），所以默认完全静默。
+
+**因此裁剪的定义必须包含信封**：内容块数组与信封块数组**同步过滤、保持逐位对齐**。`readReplayState` 对每个块的要求很宽（类型属于 text/reasoning/tool-call，签名是字符串，`redacted` 是布尔；`replay.ts:135-144`），所以「同步删掉对应条目」既合法也足够——存活的文本与工具调用块保留各自签名，这正是我们要的。
+
+**这条同时决定了验证方式**：闸门 C 必须**显式构造反例**（只改内容不改信封），断言它触发退化；否则这个坑在实现时看不出来。可用 `onReplayDegrade` 作为断言钩子（它在适配器 config 上，测试夹具可配）。
 
 ### 激活点 ①：溢出救援
 
@@ -88,13 +115,13 @@ declare module '@deepseek-ai/dsh-session/types' {
 - 那次请求已经失败，重试本来就是无缓存的全价请求，所以表面内容变更**不额外付缓存代价**。
 - **但它自己不会触发重试。** compaction-basic 的重试凭证是 `replaceGeneration`（`index.ts:202` 取基线、`:212-219` 与 `:229-233` 判进展），而投影只推进 `contentGeneration`。所以：
   - 通行做法是**搭它的车**：若 compaction-basic 自己决定重试（tool-result pruner 落了 replace，或摘要成功提交），我们的裁剪已经先落盘，重试请求就带着裁剪版历史，这可能正是让重试成功的原因。这条路径**可行且够用**。
-  - 若它不重试（`selectCompactableRange` 返回 `null` 且 tool-result pruner 没落任何 replace，或摘要在我们的裁剪之后失败），请求仍然失败——我们的裁剪只对**后续**回合生效。
+  - 若它不重试（`selectCompactableRange` 返回 `null` 且 tool-result pruner 没落任何 replace，或摘要在我们的裁剪之后失败），请求仍然失败——我们的裁剪只对**后续**步骤生效。
 - **可选加强（需裁决）**：我们自己「拥有恢复」并返回 `{kind: 'retry'}`。契约明确允许这么做——`RequestErrorAction = { kind: 'retry' } | undefined`，文档写着「listener 拥有恢复时返回 `{kind:'retry'}`，或调 `next()` 委托」（`packages/core/agent/src/runtime-types.ts:121-122,341-353`）。因为我们是最外层，可以 `const action = await next()`，在拿到非 retry 结果而本次确有裁剪落盘时改返回 `{kind:'retry'}`。**代价**：必须自带一个有界计数（照 compaction-basic 的 `overflowRetries` 形状，含 `agent/status → idle` 重置），否则会在裁剪救不回来的请求上无限重试。首版建议**先不做**，等闸门 B-2 的实测说明「搭车」够不够。
 
 ### 激活点 ②：批量推进
 
 - 挂 `ctx.on('agent/pre-step', h, { prepend: true })`。同样 `prepend`：裁剪必须在 compaction-basic 自己测量/选区之前落盘，否则被裁的区间可能已经被摘要遮蔽。
-- 与 ① 不同类：它不是补救，而是让裁剪**存活到后续每个请求**；代价是每次推进边界要按全价重算一次边界尾，靠步数间隔 `M` 摊薄。`M` 与保留窗口 `K` 的默认值**待闸门 B 背书**。
+- 与 ① 不同类：它不是补救，而是让裁剪**存活到后续每个请求**；代价是每次推进边界要按全价重算一次边界尾，靠步数间隔 `M` 摊薄。`M` 由闸门 B 背书（成本），保留窗口 `K` 由闸门 D 背书（质量）；两者在实测前取保守默认。
 - **不能用 `ctx.tokenMeter.measure` 判压**。计量器按**原始表面事件**定价，不读投影：`measure()` 走 `priceSurface(state.surface, …)`（`packages/llm/token-meter/src/index.ts:146-157`），而 `token-meter/src/**` 全仓不引用 `messageProjections`/`projectedMessages`；同一个包的 `surface-projection.ts:1-10` 说明 replace 走的是一套 shadow-price 协议，与本插件无关。所以 ② 的节奏只能由自己的步数计数决定。
 - 连带的事实（必须记录，因为是可观察的差异）：**裁剪不会降低 `tokenMeter.measure` 的读数**。`deriveMessages()` 会应用投影（请求确实变小），但计量器与压缩压力读数不会随之下降。表现是「省了钱，界面上的上下文占比不动」。这不是缺陷而是机制事实，规格不为其设判据，但实现时不要在文档里把它说成「降低上下文占用」。
 
@@ -105,8 +132,8 @@ declare module '@deepseek-ai/dsh-session/types' {
   - host 半：`Config` 里的布尔字段，命名空间即 patch 行的 `id`，字段必须标 `.volatile()`（settings 的写入路径拒绝非 volatile 路径）。
   - 浏览器半：`dsh.client { platform: 'web' }` + `exports["./client"]` 产物，把开关注册为 `settings.general.item` 这一行（契约 `packages/client/ui-settings/src/client/contract/slots.ts:92`：**单个偏好**的 additive seat，文案、当前值、写入路径都归注册者），经 `ctx.configForms` 写回命名空间。
   - **没有**「声明 Config 就自动长出 UI」的通路：`autoGenerate` 在客户端零消费者，出厂的插件清单页是只读的。所以浏览器半是必需的，不是优化。
-- **置灰按保守闸门**：判不准就不给。可用的现成事实只有两个——`ctx.remote.llm.listConfigurableProviders()` 给出的 `settingsNs`（`llm-deepseek` 确定是 Messages，可确定置灰）与显式 route 级 `api`（`packages/llm/llm-pi-ai/src/config.ts:329`，读得到的就是确定的）。从 catalog 继承协议的 pi-ai 路由**判不准**，保守闸门把它当未知置灰，代价是可能误伤一条本可受益的路由；它会在该路由跑过一个回合后用 replay 信封自愈。
-- 服务端另有硬强制作：裁剪只作用于**回合资格成立**的回合（逐回合读 replay 信封），资格不成立的回合原样保留。界面的置灰只是提前告知，不是安全保证。
+- **置灰按保守闸门**：判不准就不给。可用的现成事实只有两个——`ctx.remote.llm.listConfigurableProviders()` 给出的 `settingsNs`（`llm-deepseek` 确定是 Messages，可确定置灰）与显式 route 级 `api`（`packages/llm/llm-pi-ai/src/config.ts:329`，读得到的就是确定的）。从 catalog 继承协议的 pi-ai 路由**判不准**，保守闸门把它当未知置灰，代价是可能误伤一条本可受益的路由；它会在该路由跑过一个步骤后用 replay 信封自愈。
+- 服务端另有硬强制作：裁剪只作用于**裁剪资格成立**的历史步骤（逐步骤读 replay 信封），资格不成立的步骤原样保留。界面的置灰只是提前告知，不是安全保证。
 
 ## 被排除的替代方案
 
@@ -123,16 +150,34 @@ declare module '@deepseek-ai/dsh-session/types' {
 
 **只有源码依据、需要运行时确认**（实现时按此顺序验，验不过就停下改设计）：
 
-1. **未装载插件的读者重载带 `reasoning-prune/applied` 的会话**：应当接受并跳过（`ignorable: true`），重建出未裁剪历史，**不得拒绝整段会话**。这是 `ignorable` 这条路的关键假设，也是最该先写用例的一条。
-2. **投影在两条折叠路径上一致**：运行期增量折叠与重载全量折叠得到同一个裁剪版历史（`foldSurface` 的 `project` 分支与 `SurfaceManager` 的增量路径）。
-3. **`contentGeneration` 确实是请求快照失效的信号**：投影落地后，下一步请求包含裁剪版消息（`agent.ts:396` 的比较）。
-4. **`ignorable` 事件的 data 在 JSONL / deepseek-log 往返后仍完整**：投影在重载后仍能读到自己的 targets（`packages/session/session-log-deepseek/src/index.ts:79-110` 的 `common` 保留 `data`，但这条要端到端验）。
-5. **闸门 A、闸门 B**：见规格，尚未开始。闸门 A 的探针已就绪（`.scratch/probes/reasoning-content-empty-acceptance.mjs`，含 usage 读数）。
+1. **耐久写入路径**（当前阻塞，见上节）：先确定用哪条路径，再验它。若走「复用已知事件类型」，必须验该类型的既有不变式与消费者不被打扰；若走上游改动，先改后验。
+2. **重载不退化**：裁剪后重载，被裁消息仍是裁剪版；且**未装载插件**的读者不得拒绝整段会话。
+3. **replay 信封不退化的反例**：只改内容不改信封必须触发 `onReplayDegrade`（用它作断言钩子）；同步过滤后必须不触发，且存活块签名保留。
+4. **投影在两条折叠路径上一致**：运行期增量折叠与重载全量折叠得到逐字节相同的模型可见历史。
+5. **`contentGeneration` 确实是请求快照失效的信号**：投影落地后，下一步请求包含裁剪版消息（`agent.ts:396` 的比较）。
+6. **`ignorable` 事件的 data 在 JSONL / deepseek-log 往返后仍完整**（若最终走该路径）：`packages/session/session-log-deepseek/src/index.ts:79-110` 的 `common` 保留 `data`，但这条要端到端验。
+7. **闸门 A、闸门 B、闸门 D**：见规格，尚未开始。闸门 A 的探针已就绪（`.scratch/probes/reasoning-content-empty-acceptance.mjs`，含 usage 读数）。
 
-**未验证、明确不断言**：`token-meter` 之外是否还有别的读投影的计量面（如上下文占比 UI 的取数路径）——本次只核实了 `measure()` 不读投影，没有追 UI 侧的取数；`ignorable` 在**历史格式迁移**边界上更严（那份 note 的「Consequences」段提到 v0→v1 拒绝一切未知类型），本插件只承诺 equal-version append/reload，跨格式迁移不在首版范围。
+**未验证、明确不断言**：
+
+- `token-meter` 之外是否还有别的读投影的计量面（如上下文占比 UI 的取数路径）——本次只核实了 `measure()` 不读投影，没有追 UI 侧的取数。
+- **跨格式迁移**不在首版范围：`ignorable` 在历史格式迁移边界上更严（那份 note 的「Consequences」段提到 v0→v1 拒绝一切未知类型），本插件只承诺 equal-version append/reload。
+- **`project` 计划不推进表面节点**：`applySurfacePlan` 的 `project` 分支只写 `projectedMessages` 与 `contentGeneration`，**不 push 表面节点**（`packages/core/session/src/surface.ts:573-583`）。因此「把投影注册到 `assistant/message` 上、用纯规则裁剪」这条路**不可行**——它会让该类型的事件整体不进表面。此结论由源码推出，未运行验证。
 
 ## 待办与上游诉求
 
-- **上游诉求（一条）**：为「仓外、改变模型可见重建、且必须可重载」的插件事件提供一个不依赖 `ignorable` 的机制。本插件是这类生产者的第一个实例，证据是 `@messageProjection` + `ignorable` 的组合。
+### 阻塞的候选路径（**未裁决**，这是当前唯一的前沿）
+
+1. **复用已知事件类型 + 自有 message projection。** 机制上可行：`registerMessageProjection` 只按**类型**去重，而 `planSurfaceEvent` 先按 `projections.find(item => item.type === event.type)` 命中投影（`packages/core/session/src/surface.ts:529-534`），因此插件可以为**任意已知类型**注册投影并追加该类型，不限于 `MESSAGE_PROJECTION_EVENT_TYPES`（那个集合只服务「必须提供解释器」的报错）。
+   - 代价：**必须挑一个不会被既有消费者误解的类型**。追加某个类型的额外事件会进入该类型自己的读取者——`step/start`/`step/end` 被 `sessionStats` 计数、`llm/retry` 被重试投影折叠、`goal/change`/`todo/write`/`hook/*` 同理。选错会让别人的读数错乱。
+   - 需要一次专门的类型普查才能定，**本文档不预先指定**。
+2. **请求上游增加写入通道**（`Session.append` 可选 envelope，或运行期注册事件类型的正式机制）。最干净，但依赖外部改动，且那份 note 明确说「事件名注册」已被否决过——要提就得连带说明为什么本场景不同于被否决的那条理由（我们的事件**改变**重建，不是信息性的）。
+3. **耐久记录移到会话日志之外**（ADR 0002 的路径）。proven，但**对 message projection 不适用**：投影必须是日志的纯函数（`packages/core/session/src/surface.ts:35-46`），`SessionMessageProjectionContext` 只给 `nodes`/`events`/`baseSeq`/`messages`，**没有任何外部状态通道**。所以这条路等于放弃「重载后一致」，与规格闸门 C 冲突。
+   - 除非接受降级：裁剪只在**当前进程**生效，重载后回到完整版历史。那会推翻「裁剪是持久的」这条用户故事，**不推荐**。
+
+### 其余待办
+
+- **上游诉求（一条）**：为「仓外、改变模型可见重建、且必须可重载」的插件事件提供一个不依赖 `ignorable` 的机制。本插件是这类生产者的第一个实例；那两份文档（note 与 ADR）都指向同一个缺口。是否提、以及用哪条路径，取决于上面第 1 与第 2 条的取舍。
 - 包名与目录：`packages/dsh-reasoning-pruner/`，`dsh-smarter-context` 只作为未来的容器名保留。
-- ② 的 `M`/`K` 默认值、① 是否自持重试：均由闸门 B 的实测结果决定。
+- ② 的 `M` 由闸门 B 定值、`K` 由闸门 D 定值；① 是否自持重试由闸门 B-2 的实测结果决定。
+- **ADR 待写**：原计划记录「用 `ignorable` 承载一个会改变重建的事件」这一取舍；**现因上述阻塞而搁置**——该取舍是否成立取决于最终选哪条路径，写早了会记下一个不存在的决定。
