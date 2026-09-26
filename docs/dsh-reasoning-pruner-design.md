@@ -1,6 +1,6 @@
 # dsh-reasoning-pruner 设计
 
-状态：机制已逐条核实，**实现未开始**。耐久记录的写入路径已找到可行解（复用已知事件类型 + 自有投影，见「阻塞」一节），**待类型普查定下具体类型**即可解除。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
+状态：机制已逐条核实，**实现未开始**。耐久记录的承载类型经类型普查选定为 **`web/deepseek-search-llm-request`**（候选排序与排除清单见「待办与上游诉求」）；**闸门 A 未关闭**，方案仍可能整体作废。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
 本文件引用的 DSH 扩展点按 **`0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。未来版本**乐观地先视为兼容**：升级后按下文「验证状态」的核对清单重跑一遍，而不是预先写防御分支或版本判断——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
@@ -43,10 +43,12 @@ DSH 里凡是「历史是否被改动过」的判据都要分清用的是哪一�
 
 **结论先行**：借用一个**已知（在生成集合内）的 log-only 事件类型**承载我们的 payload，并为该类型注册自有投影。已知类型无需 `ignorable`、天然可重载，于是「阻塞」一节的两难消失。
 
-- payload 形状（**与承载类型无关**，承载类型待类型普查定）：
+**承载类型（普查选定）：`web/deepseek-search-llm-request`**。理由：全仓没有任何 payload 读取者、不在 `RELATIONSHIP_TYPES` 里、不是表面类型、生产者存在且是宿主自己的（所以真实事件与我们的事件共存是既成事实）。第一顺位的残余风险是「将来有人开始读它」，第二顺位是 `session-log-deepseek` 的原样上传——见「两条必须在实现前处理的约束」。
+
+- payload 形状：
 
 ```ts
-/** 我们自己的投影载荷；随承载类型的事件落盘。 */
+/** 我们自己的投影载荷；随承载类型的事件落盘。**不得含会话内容**（会随日志上传）。 */
 interface ReasoningPrunePayload {
   /** 要裁剪的历史步骤，按它们的 assistant/message seq 列出。 */
   targets: SessionSeq[]
@@ -96,10 +98,10 @@ interface ReasoningPrunePayload {
   - `registerMessageProjection` 只按**类型**去重（`index.ts:942-950`），对「注册在哪个类型上」没有约束；全仓当前只有 `image/offload` 注册过投影（`compaction-image-offload/src/index.ts:26`）。
   - 插件缺席时的降级也安全：投影未命中 → 不触发 `MESSAGE_PROJECTION_EVENT_TYPES` 报错 → `surfaceOp === undefined` 直接返回（`surface.ts:535-538`），事件被**忽略**，重载得到未裁剪历史。
   - **待定的唯一问题是「借哪个类型」**：追加某类型的额外事件会进入该类型自己的读取者与结构校验。已排除的例子：`step/end` 有严格状态机校验（`session-format-v3-to-v4/src/relationships.ts:291-295` 要求「有打开步骤」，多一条就打乱 `step/start` 的配对），`compaction/*`、`command/*`、`request/*`、`session/end-seed`、`llm/retry` 皆属 `RELATIONSHIP_TYPES`；`image/offload` 的投影已被占用且重复注册直接抛。
-  - **正在做的类型普查**会给出「无生产者、无结构校验、无消费者计数」的安全候选；在普查结论落地前**本文档不指定具体类型**。
+  - 承载类型的选择见「待办与上游诉求」的普查结果（已选定 `web/deepseek-search-llm-request`）。
 - `KNOWN_SESSION_EVENT_TYPES` 是运行时**未冻结**的普通 `Set`（`known-event-types.ts:22`，无 `Object.freeze`），也经 `@deepseek-ai/dsh-session` 导出（`index.ts:36`）。同进程 `add` 确实能让 `validateStoredEvents` 从拒绝转为接受——**但重载是另一个进程**，生成集合不含它。**不作为耐久方案**；不过它是一个真实的同进程完整性缺口，值得单独记一笔。
 
-**结论**：耐久记录在**不修改 DSH** 的前提下有路可走——**复用已知事件类型 + 自有投影**，这也让 `ignorable` 整条线连同它的契约张力一起作废。上游诉求从「必须先解决」降级为「可选改进」。**待类型普查给出候选类型后，本阻塞即可判定解除**；在那之前规格不标 `ready-for-agent`。
+**结论**：耐久记录在**不修改 DSH** 的前提下有路可走——**复用已知事件类型 + 自有投影**，这也让 `ignorable` 整条线连同它的契约张力一起作废。上游诉求从「必须先解决」降级为「可选改进」。承载类型已由全量类型普查选定为 `web/deepseek-search-llm-request`（见「待办与上游诉求」）。
 
 **连带更正 ADR 0002 的前提**：那条 ADR 写「`Session.append` 无法写入 `ignorable`，于是整段日志被拒绝」——**对 `append` 正确，但它漏了 `seed`**。如果将来要重估复核记录的存放位置，应以「运行期 vs 构造期」这个区分重述，而不是笼统地说「无法写入」。
 
@@ -191,9 +193,38 @@ interface ReasoningPrunePayload {
 
 **已定**：复用已知事件类型 + 自有 message projection（`registerMessageProjection` 只按类型去重，`planSurfaceEvent` 先按类型字串命中投影，见 `packages/core/session/src/surface.ts:529-534`；不限于 `MESSAGE_PROJECTION_EVENT_TYPES`，那个集合只服务「必须提供解释器」的报错）。
 
-**未定**：具体借哪个类型。这不是审美问题——追加某类型的额外事件会进入该类型自己的**结构校验**与**消费者**，选错会打乱别人的读数或让日志读不出来。已排除的例子：`step/end`（`session-format-v3-to-v4/src/relationships.ts:291-295` 要求「有打开的步骤」，多一条会打乱 `step/start` 配对）、`image/offload`（投影已被占用、重复注册直接抛）、以及全部 `RELATIONSHIP_TYPES` 成员。
+**普查已完成**（59 个已知类型全查）。两条改变实现前提的结构事实：
 
-**正在做类型普查**给出「无生产者、无结构校验、无消费者计数」的安全候选；在普查结论落地前**本文档不指定类型**。
+1. **关系折叠是常开的读门，不只是 v3→v4 迁移边**：`SessionLogScanner.finish()` **无条件**调用 `assertReleasedV4Relationships`（`packages/session/session-persistence-jsonl/src/format.ts:465-468`），而该 scanner 就是普通读路径（`format.ts:535` 明文、`index.ts:964` zstd）。⇒ 任何有结构校验的类型**每次重载都会撞上**，不是偶发。
+2. **包内不变式伴侣（invariant）不出厂**：base / web-app / headless / acp-app / sdk-app 的 bundle 里**零** invariant 行；只有 sdk-minimal 挂了 5 条，且都不是领域不变式（依据 `.agents/notes/archived/simplification/2026-08-03-omit-invariants-from-shipped-config.md`）。⇒ 只在 invariant 文件里出现的「破坏者」**在出厂组合里不生效**，属开发/测试面。
+
+另：`docs/persistence-schema.json` **没有运行期消费者**（只被 `scripts/gen-persistence-catalog.ts` 及其 spec 读），它不校验任何东西。
+
+**候选排序**（全部通过五项核查，最安全在前）：
+
+| # | 类型 | 为何安全 | 残余风险 |
+|---|---|---|---|
+| 1 | `web/deepseek-search-llm-request` | 全仓**没有任何** payload 读取者；有生产者（`packages/web/web-search-deepseek/src/index.ts:118-121` 的 `recordRequest`），所以真实事件与我们的事件共存是既有事实 | 将来可能有人读 `endpoint`/`apiVersion`/`body`；且 `session-log-deepseek` 会把 `data` 原样上传 |
+| 2 | `deliverables/presented` | 唯一消费者带守卫（`client/ui-deliverables/.../turn-deliverables.ts:170` 的 `isPresentedData`，不匹配返回 null） | 避开 `turn`/`callId`/`files` 这些键 |
+| 3 | `workspace/changes` | 同上，带守卫 `isChangesEvent` | payload 带 `turn >= 1` 的整数会触发一次无对应摘要的 changelog 拉取 |
+| 4 | `schedule/change` | **全仓无生产者**，所有 bundle 里 `disabled: true`，唯一读取者 warn 兜底 | 开发面的 `schedule/invariant.ts` 会在启动时折叠全日志并 `fail()` |
+| 5-6 | `hook/result`、`hook/invoked` | 出厂组合里**没挂**任何 hook 桥（6 个 bundle / 4 个 preset / apps 全零引用） | 未挂载的 `hook-protocol/invariant.ts` |
+| 7-10 | `team/member`、`team/task`、`team/message/queued`、`team/message/delivered` | 消费者只在实验性的 agent-team 里，而**没有 bundle 引用它** | 那个投影对异形 payload 直接抛 |
+| 11-12 | `approval/asked`、`approval/decided` | 出厂无任何消费者 | 未挂载的 `user-approval/invariant.ts` |
+
+**最危险的排除项**（值得单独记）：`subagent/catalog` —— `session-format-v1-to-v2/src/validation.ts:122-127` **常开**调用 `catalogFact(event.data)` 且不满足就抛，任意 payload 会让**整段会话读不出来**。
+
+**其他被排除的原因**：表面类型 5 个（投影会拦掉、节点不入表面）；`RELATIONSHIP_TYPES` 26 个（常开读门）；消费者会脱轨的：`image/offload`（投影已占用）、`todo/write`（未守卫的 `.flatMap` → TypeError）、`feedback/message-put|delete`（无条件 parse → ZodError 弄坏 feedback Remote）、`feedback/record`（触发全日志 OTLP 上传）、`goal/change`（写入永久失败哨兵）、`agent/inbox/spliced`（解构 `...inserted` → TypeError）、`agent-preset/selected`（headless 对异形 payload 抛）、`model/selection`/`plan/mode`（wire `viewSchema.parse` 抛）、`sandbox/mode`（提交前抛）、`permission/preset`（静默漂移成 'custom'）、`approval/policy`（覆盖 + 污染 strict union）、`subagent/model-selection-policy`、`subagent/descriptor`（会**清掉**子会话身份）、`tool-workflow/*`（客户端渲染出 key 为 `undefined` 的幽灵卡片）。
+
+**我的推荐：`web/deepseek-search-llm-request`（第 1 名）**，但有一个必须先决的隐私问题——见下。
+
+### **两条必须在实现前处理的约束**（普查发现，我已独立复核）
+
+1. **`session-log-deepseek` 默认开启且原样上传 `data`**（`enabled` 默认 `true`，`packages/session/session-log-deepseek/src/index.ts:52`；base bundle 挂载于 `packages/bundle/base/cordis.patch.yml:43`）。⇒ 借用的 payload **不得含会话内容**，否则会随日志上传离开本机。我们的 payload 只放 `seq` 数组，天然满足；但这条要写成硬约束，因为它会随「顺手多记一点上下文」而破。
+2. **脱离折叠看不到插件注册的投影**：`session-query`（`documents.ts:60`、`index.ts:191`、`tracing.ts:187`）与迁移代际校验（`generation.ts:543`）用的是**硬编码的首方投影表** `currentSessionMessageProjections`（`session-format-catalog/src/message-projections.ts:7`，当前只有 `image-offload`）。
+   - **模型可见路径是对的**：正常重载走 `SessionStore.prepare` → `Session.fromRestore(..., this.projections)`（`index.ts:1032-1038`），用的是插件注册的投影。
+   - **受影响的是辅助读者**：会话检索/文档/传播与迁移校验会得到**未裁剪**的历史。这不是「日志读不出来」，而是「辅助读者降级」。
+   - 后果：规格闸门 C 的「重载后一致」指的是**模型可见历史**，这一点成立；但**不得**把判据写成「任何读者都看到裁剪版」——那做不到。这是本设计的一处真实能力边界，已记入规格。
 
 ### 已核实但不采用的其他路径（留档）
 
