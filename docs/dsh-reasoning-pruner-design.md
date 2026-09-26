@@ -179,7 +179,8 @@ interface ReasoningPrunePayload {
 - **置灰按保守闸门**：判不准就不给。判据需要**三个**事实，不是两个：
   1. **路由目录**——`ctx.remote.llm.listConfigurableProviders()` 给出的 `settingsNs`（`llm-deepseek` 确定是 Messages，可确定置灰；该 `@Remote` 在 `packages/llm/llm/src/index.ts:549`，返回项含 `settingsNs`，`packages/llm/llm/src/types.ts:245-263`）。
   2. **显式 route 级 `api`**（`packages/llm/llm-pi-ai/src/config.ts:329`）——读得到的就是确定的；它**只在显式给出时**才进路由（`:468,481`），所以「profile 没写 `api`」就是判不准。
-  3. **当前路由是哪一条**——必须取自 **`modelSelection` 投影**的 `lastUsed` / `next`。`lastUsed` 由 `request/header` 折叠而来，是这条会话**实际用过**的路由（`packages/api/session-controller/src/model-selection-projection.ts:19-31,56-68`；客户端经 `binding.session.projections.faceOf('modelSelection')`，先例 `packages/client/ui-model-selection/src/client/service.ts:79`）。
+  3. **当前路由是哪一条**——按**实装的公共接缝**取 **`ctx.modelDirectories.directoryFor(sessionId)`** 快照里的 `current`（`ModelDirectoryState.current` 的文档写着「Effective selection: durable next-request projection, then Host default」——正是本条要的语义；实装包 `@deepseek-ai/dsh-client-ui-model-selection/lib/types/client/directory.d.ts`）。
+     - **不要**写 `binding.session.projections.faceOf('modelSelection')`：它在 checkout 里确实存在（`packages/client/ui-model-selection/src/client/service.ts:79`），但那是**该包内部的私有实现**（`directoryFor` 间接用到它），不是别的插件能调用的接缝。
      - **不得用 `remote.session.modelCatalog()` 的 `default`**：那是**部署默认**、不是会话当前路由——`buildModelCatalog` 的形参注释写明 "deployment default used before a Session selects a model"（`packages/api/session-controller/src/catalog.ts:14-22`），其值来自 `AgentDefaultModelConfig.currentSelection()` 读的部署级配置（`packages/core/agent-default-model/src/index.ts:67-73`）。会话中途换过路由时它仍指向旧默认，置灰会按错的路由判。
 
   从 catalog 继承协议的 pi-ai 路由**判不准**，保守闸门把它当未知置灰，代价是可能误伤一条本可受益的路由；它会在该路由跑过一个步骤后用 replay 信封自愈。
