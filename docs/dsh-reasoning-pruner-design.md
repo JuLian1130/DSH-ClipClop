@@ -2,7 +2,7 @@
 
 状态：机制已逐条核实，**实现未开始**。耐久记录的承载类型经类型普查选定为 **`web/deepseek-search-llm-request`**（候选排序与排除清单见「待办与上游诉求」）；**闸门 A 未关闭**，方案仍可能整体作废。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
-本文件引用的 DSH 扩展点按 **`0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。未来版本**乐观地先视为兼容**：升级后按下文「验证状态」的核对清单重跑一遍，而不是预先写防御分支或版本判断——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
+本文件引用的 DSH 扩展点按 **`0.1.7-rc.2`**（DSH 源码 checkout 的版本）逐条核实，路径为 DSH 仓内相对路径。**但这不等于插件的构建版本**：本仓通过 `peerDependencies` 依赖的是 `^0.1.6-alpha.1`，实际装入的是 **`0.1.6-alpha.1`**（先例 `packages/dsh-navigator/package.json` 的 peerDependencies）。因此 `path:line` 是**源码 checkout** 的坐标、而运行期是安装版本——两者不是同一份代码。已就这一点做过一次核对，结论见「验证状态 · 源码 checkout 与安装版本的差异」。升级后按下文「验证状态」的核对清单重跑一遍，而不是预先写防御分支或版本判断——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
 本文件记录**取舍与机制**：为什么这样定、挂哪个钩子、事件字段形状、源码依据与待实测项。**需求陈述与验收标准在[实施规格](../.scratch/historical-reasoning-pruning/spec.md)里**，规格只写操作性定义、可观察判据与交付约束，不复制本文件的机制描述。判断一句话该放哪边：**删掉它之后，有没有验收标准变得无法判断**——会，属于规格；不会，属于本文件。两者冲突时：需求以规格为准，取舍与机制以本文件为准。
 
@@ -197,7 +197,30 @@ interface ReasoningPrunePayload {
 4. **投影在两条折叠路径上一致**：运行期增量折叠与重载全量折叠得到逐字节相同的模型可见历史。
 5. **`contentGeneration` 确实是请求快照失效的信号**：投影落地后，下一步请求包含裁剪版消息（`agent.ts:396` 的比较）。
 6. **`ignorable` 事件的 data 在 JSONL / deepseek-log 往返后仍完整**（若最终走该路径）：`packages/session/session-log-deepseek/src/index.ts:79-110` 的 `common` 保留 `data`，但这条要端到端验。
-7. **闸门 A、闸门 B、闸门 D**：见规格，尚未开始。闸门 A 的探针已就绪（`.scratch/probes/reasoning-content-empty-acceptance.mjs`，含 usage 读数）。
+7. **闸门 A、闸门 B、闸门 D**：见规格。闸门 A **已拆分**（见下），B/D 尚未开始；闸门 A 的探针已就绪（`.scratch/probes/reasoning-content-empty-acceptance.mjs`，含 usage 读数）。
+
+**闸门 A 的拆分：接受度已有生产先例，计费下降仍待实测**
+
+接受度这一半（「端点是否接受裁剪后的形状」）**不必等真实网关**——DSH 今天就在 DeepSeek 路由上发这个形状：
+
+- pi-ai 的官方 DeepSeek 目录把该要求写成硬约束，填充值是**空串**：`deepseek.json` 的三个 `deepseek-v4-*` 条目**全部**带 `compat: { requiresReasoningContentOnAssistantMessages: true, thinkingFormat: "deepseek", … }`（`node_modules/.pnpm/@earendil-works+pi-ai@0.85.1*/…/dist/providers/data/deepseek.json`）。
+- 字段的文档注释直接写明语义：**「Whether replayed assistant messages need an empty `reasoning_content` while reasoning is on」**（`packages/llm/llm-pi-ai/src/catalog.ts:385-386`）；DSH 自己的测试为这条继承关系背书（`packages/llm/llm-pi-ai/tests/catalog.spec.ts:823-825`）。
+- 实现按此填充，条件是「该 compat 位 + `model.reasoning` + 字段仍缺席」：`assistantMsg.reasoning_content = ""`（pi-ai `dist/api/openai-completions.js:1044-1047`）；自动检测条件是 `provider === "deepseek" || baseUrl.toLowerCase().includes("deepseek.com")`（同文件 `:1249`，赋给该位在 `:1286`）。
+- ⇒ 只要一条历史 assistant 消息**没有非空 thinking 块**（模型切换、跨 provider 历史、降级重建都会产生），生产代码就会发 `reasoning_content: ""`，即规格闸门 A 的 **B 变体**。**若端点拒收空串，这个 compat 位就是自毁的**——它存在的唯一目的就是满足这条要求。
+
+因此准确的验证状态是：
+
+- **A1（端点接受裁剪后的形状）**：从「未知」降为**有生产先例的强证据**，不再否决实现。仍需一次性确认，但**不阻塞开工**。其适用范围要写明：覆盖 **chat-completions 传输 + DeepSeek 目录判定**；**不含** `llm-deepseek` 的 Messages 传输（那条走 thinking + signature，裁剪即丢掉该块，机制更简单，且已被裁剪资格排除）。
+- **A2（`prompt_tokens` 真的下降）**：**仍未验证**，是经济前提本身。空串计入零 token 近乎同义反复，真正没证的是**服务端会不会补偿性要求回显**。
+- 附带记录本机实际路由的更省形态：`cline-pass` 的自有适配器只在推理非空时才写该字段（`~/.dsh/profiles/web/node_modules/dsh-cline-pass/lib/adapter.js:204-213` 的 `...(reasoning.length > 0 ? { reasoning_content: reasoning } : {})`），即裁剪后走的是**变体 C（字段整个省略）**，比 B 更干净。
+
+**源码 checkout 与安装版本的差异（本次核对）**
+
+设计文档的行号来自 DSH 源码 checkout 的 `0.1.7-rc.2`；本仓实际装入的是 `0.1.6-alpha.1`。已按机制依赖逐项核对**安装版本**：
+
+- **全部机制依赖的 API 都在**：`registerMessageProjection`、`contentGeneration`、`replaceGeneration`、`ignorable`、`KNOWN_SESSION_EVENT_TYPES`，以及承载类型 `web/deepseek-search-llm-request` 都在 `0.1.6-alpha.1` 的产物里（`lib/types/index.js`、`lib/types/surface.d.ts`、`lib/types/known-event-types.js`）。
+- **已发现一处真实差异**：`TurnEndReasonMap` 在 `0.1.6-alpha.1` **没有 `forked` 变体**（`lib/types/types.d.ts:165-201`，只有 `completed` / `aborted` / `blocked` / `error` / `max-tokens` / `interrupted`），而 checkout 版本有（`packages/core/session/src/types.ts:228`）。⇒ 规格闸门 D 把 `forked` 列进 `turn/end` 原因取值集合，在安装版本上**跑不出这一支**；判据不得依赖它出现。
+- **实施要求**：实现时以**安装版本的 `lib/**/*.d.ts`** 为类型依据，票面里凡是引 `path:line` 的地方，若该文件在被引包内，需同时确认安装产物的形状一致；发现不一致时以安装版本为准并回报，**不要**改 DSH 源码、也不要加版本判断分支。
 
 **未验证、明确不断言**：
 
