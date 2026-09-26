@@ -45,20 +45,38 @@ DSH 里凡是「历史是否被改动过」的判据都要分清用的是哪一�
 
 **承载类型（普查选定）：`web/deepseek-search-llm-request`**。理由：全仓没有任何 payload 读取者、不在 `RELATIONSHIP_TYPES` 里、不是表面类型、生产者存在且是宿主自己的（所以真实事件与我们的事件共存是既成事实）。第一顺位的残余风险是「将来有人开始读它」，第二顺位是 `session-log-deepseek` 的原样上传——见「两条必须在实现前处理的约束」。
 
-- payload 形状：
+- payload 形状（**三条硬约束**见下）：
 
 ```ts
-/** 我们自己的投影载荷；随承载类型的事件落盘。**不得含会话内容**（会随日志上传）。 */
+/** 自有命名空间信封。顶层只有这一个键——结构上不可能带出 `turn`/`step` 坐标。 */
 interface ReasoningPrunePayload {
-  /** 要裁剪的历史步骤，按它们的 assistant/message seq 列出。 */
-  targets: SessionSeq[]
+  clipclop: {
+    /** 要裁剪的历史步骤，按它们的 assistant/message seq 列出。 */
+    targets: SessionSeq[]
+  }
 }
 ```
+
+**三条硬约束**（前两条来自类型普查，第三条是普查补正）：
+
+1. **不得表面可见**：不带 `surfaceOp`/`sourceEventSeqs`——非表面类型带这些会直接抛（`surface.ts:310-319`）。
+2. **不得是 `@messageProjection` 类型**，也不要相信 `MESSAGE_PROJECTION_EVENT_TYPES`：投影查找只按**类型**（`surface.ts:529`），而对一个已有投影的活跃类型再注册会抛（`index.ts:942-945`）。所以**永不**复用 `image/offload`。
+3. **payload 必须无坐标**：客户端时间线索引对**每一个**事件都读 `data.turn` / `data.step`，不看类型（`packages/client/ui-conversation/src/client/conversation/location-index.ts:139-149`），并用它**重指** `currentTurn`/`currentStep` 游标（`:318-322`、`:528-539`）。⇒ 顶层出现数字 `turn` 会把后续无坐标事件**归错轮次**，UI 时间线分组错误。这就是上面为什么用**单个命名空间键**：让约束由结构保证，而不是靠记住。
+   - 另有一个特例值得知道：`data.turn === null` 表示**会话作用域**（`:141`）。
+   - 附带记录一个「至多一次」消费者：`agent-team` 的 `roster.ts:360-364` 用「该会话第一条任意类型事件」来兑现一个一次性屏障；它对第二条事件会提前兑现。它在没有 bundle 引用的实验包里，且是提交后（contained）监听器，只在挂载该组合时才是正确性风险。
+
+4. **payload 不得含会话内容**：`session-log-deepseek` 默认开启（`enabled` 默认 `true`，`packages/session/session-log-deepseek/src/index.ts:52`；base bundle 挂载于 `packages/bundle/base/cordis.patch.yml:43`）并把 `data` **原样上传**到远端。我们的 payload 只有 seq 数组，天然满足——但这条要写成硬约束，因为它会随「顺手多记一点上下文」而破。
 
 - 事件**不带 `surfaceOp`**（它必须是 log-only 类型）。投影在折叠期把这些 seq 的消息换成「移除推理块」的副本。
 - 校验全放在 `project()` 里，照 `image-offload` 的做法：payload 形状、target 必须是**当前表面节点**（`context.nodes`）、重复 seq 抛错、目标事件必须是 `assistant/message`（否则裁剪会作用到错误对象上）。投影必须是纯函数：它在运行期增量折叠与重载全量折叠两条路径上都会被调用，两侧结果必须一致，且**不得抛「信息不足」类错误**——一旦抛错，那条日志就再也读不出来。
 - 追加走 `session.append(<承载类型>, payload)`；`Session.append` 对**已知**类型没有任何障碍。
 - **注意投影拦截的副作用**：为某类型注册投影后，该类型的**每一个**事件在每次折叠时都会走投影（`surface.ts:529-534` 先于所有其他分支）。所以投影必须对「不是我们写的」该类型事件也安全返回（返回空 Map、不抛错）——否则会把宿主自己的事件拦下来。选定承载类型后必须用用例钉住这一点。
+
+**两种分发机制的成败语义**（决定了坏 payload 在哪一步炸，普查补正）：
+
+- **提交后**的 `session/event` 观察者**不能**否决一次 append：`invokeContainedSessionObservers` 是 try/catch + `logger.warn`（`packages/core/session/src/index.ts:403-419`）。最坏是记一条警告并留下卡住的状态，**不会**让 append 失败。
+- **提交前**的 `internal/dispatch` 监听器**可以**否决：`collectSessionCallbacks` 在 append 的 try 内、`this.log.push`（`:761`）**之前**运行（`:759`）。这是唯一的硬失败路径——测试期的 invariant 伴侣正是在这里 stage 并 `fail()`。
+- 我们的投影属于**提交前**：`planSurfaceEvent` 由 `surfaceManager.validateNext`（`:752`）调用，也在 push 之前。⇒ 坏 payload 会让 **append 本身失败**，但原因是 **SurfaceManager 校验**，不是监听器。这对实现有直接含义：**校验失败是当场大声的，不会留下坏日志**。
 
 ### `ignorable: true`：**已作废的路线**，留档以免后人重走
 
@@ -196,7 +214,10 @@ interface ReasoningPrunePayload {
 **普查已完成**（59 个已知类型全查）。两条改变实现前提的结构事实：
 
 1. **关系折叠是常开的读门，不只是 v3→v4 迁移边**：`SessionLogScanner.finish()` **无条件**调用 `assertReleasedV4Relationships`（`packages/session/session-persistence-jsonl/src/format.ts:465-468`），而该 scanner 就是普通读路径（`format.ts:535` 明文、`index.ts:964` zstd）。⇒ 任何有结构校验的类型**每次重载都会撞上**，不是偶发。
-2. **包内不变式伴侣（invariant）不出厂**：base / web-app / headless / acp-app / sdk-app 的 bundle 里**零** invariant 行；只有 sdk-minimal 挂了 5 条，且都不是领域不变式（依据 `.agents/notes/archived/simplification/2026-08-03-omit-invariants-from-shipped-config.md`）。⇒ 只在 invariant 文件里出现的「破坏者」**在出厂组合里不生效**，属开发/测试面。
+2. **包内不变式伴侣（invariant）在出厂组合里不生效，但在测试里按「属主包」选择性挂载**（普查第一版说得过宽，此处是补正后的准确版本）：
+   - **出厂**：base / web-app / headless / acp-app / sdk-app 的 bundle 里**零** invariant 行；只有 sdk-minimal 挂了 5 条，且都不是领域不变式（依据 `.agents/notes/archived/simplification/2026-08-03-omit-invariants-from-shipped-config.md`）。
+   - **测试**：Vitest **默认**挂载 invariant（`vitest.config.ts:164`、`vitest.e2e.config.ts:42`、`vitest.expected.config.ts:11`、`vitest.snapshot.config.ts:50` 均含 `./scripts/test-invariants.ts`），但选择规则是**按属主包**：只挂 `../packages/<a>/<b>/src/invariant.ts`，匹配不上就挂零个（`scripts/test-invariants.ts:114-123`）。
+   - **对本插件的实际含义**：插件自己的测试放在 `<我们的包>/tests/**` 时，匹配不到 `packages/<a>/<b>/` 这个模式，**拿到零个伴侣**——所以 invariant 的抛错**不会**在我们自己的测试里出现；而任何**仓内包**的测试只要经手我们借用的那个类型，就会挂上该属主包的伴侣并可能抛。**风险面是「仓内包测试」，不是「只有 sdk-minimal」。** 这直接决定第 1 候选为何安全：`packages/web` 下**不存在** invariant 文件，所以即使属主匹配成功也挂不到东西。
 
 另：`docs/persistence-schema.json` **没有运行期消费者**（只被 `scripts/gen-persistence-catalog.ts` 及其 spec 读），它不校验任何东西。
 
@@ -204,13 +225,15 @@ interface ReasoningPrunePayload {
 
 | # | 类型 | 为何安全 | 残余风险 |
 |---|---|---|---|
-| 1 | `web/deepseek-search-llm-request` | 全仓**没有任何** payload 读取者；有生产者（`packages/web/web-search-deepseek/src/index.ts:118-121` 的 `recordRequest`），所以真实事件与我们的事件共存是既有事实 | 将来可能有人读 `endpoint`/`apiVersion`/`body`；且 `session-log-deepseek` 会把 `data` 原样上传 |
-| 2 | `deliverables/presented` | 唯一消费者带守卫（`client/ui-deliverables/.../turn-deliverables.ts:170` 的 `isPresentedData`，不匹配返回 null） | 避开 `turn`/`callId`/`files` 这些键 |
-| 3 | `workspace/changes` | 同上，带守卫 `isChangesEvent` | payload 带 `turn >= 1` 的整数会触发一次无对应摘要的 changelog 拉取 |
+| 1 | `web/deepseek-search-llm-request` | 全仓**没有任何** payload 读取者；有生产者（`packages/web/web-search-deepseek/src/index.ts:118-121` 的 `recordRequest`），所以真实事件与我们的事件共存是既有事实；`packages/web` 下**不存在** invariant 文件 | 将来可能有人读 `endpoint`/`apiVersion`/`body`；且 `session-log-deepseek` 会把 `data` 原样上传。**注意**：v0→v1 迁移边**有**该类型的 payload 语义校验（要求三个字段），但它**不在**当前 v4 读路径上——已核实，见下 |
+| 2 | `deliverables/presented` | 唯一消费者带守卫（`client/ui-deliverables/.../turn-deliverables.ts:170` 的 `isPresentedData`，不匹配返回 null） | 避开 `turn`/`callId`/`files` 这些键（它的真实 payload **就带** `turn`） |
+| 3 | `workspace/changes` | 同上，带守卫 `isChangesEvent` | 真实 payload **是** `{turn}`，我们的必须省略；带 `turn >= 1` 的整数会触发一次无对应摘要的 changelog 拉取 |
 | 4 | `schedule/change` | **全仓无生产者**，所有 bundle 里 `disabled: true`，唯一读取者 warn 兜底 | 开发面的 `schedule/invariant.ts` 会在启动时折叠全日志并 `fail()` |
 | 5-6 | `hook/result`、`hook/invoked` | 出厂组合里**没挂**任何 hook 桥（6 个 bundle / 4 个 preset / apps 全零引用） | 未挂载的 `hook-protocol/invariant.ts` |
 | 7-10 | `team/member`、`team/task`、`team/message/queued`、`team/message/delivered` | 消费者只在实验性的 agent-team 里，而**没有 bundle 引用它** | 那个投影对异形 payload 直接抛 |
 | 11-12 | `approval/asked`、`approval/decided` | 出厂无任何消费者 | 未挂载的 `user-approval/invariant.ts` |
+
+**已核实的一处候选风险（第 1 名）**：`web/deepseek-search-llm-request` 在 v0→v1 的迁移边上有 payload 语义校验，要求 `endpoint`/`apiVersion`/`body` 三个非空字段（`packages/session/session-format-v0-to-v1/src/payload-validation.ts:287-291`）。但该断言只从**已发布旧格式的迁移校验**调用（`session-format-v0-to-v1/src/validation.ts:216`、`session-format-v2-to-v3/src/payload.ts:71`），而当前格式是 **v4**（`packages/core/session/src/types.ts:89`），v3→v4 的 admission **不调用** payload 语义（`session-format-v3-to-v4/src/*` 零引用）。⇒ 对以 v4 写入的会话，该风险**不触发**。仍要记住：它意味着这个类型**历史上**有过语义，将来收紧格式时可能被重新加回。
 
 **最危险的排除项**（值得单独记）：`subagent/catalog` —— `session-format-v1-to-v2/src/validation.ts:122-127` **常开**调用 `catalogFact(event.data)` 且不满足就抛，任意 payload 会让**整段会话读不出来**。
 
