@@ -1,0 +1,11 @@
+{
+  // 构建配置（tsconfig.json）的 `include` 只有 `src`；类型检查门禁必须同时覆盖 `tests`，否则测试代码
+  // 的漂移不在任何门禁里。包脚本 `typecheck` 指向本文件。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}
