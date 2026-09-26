@@ -1,6 +1,6 @@
 # dsh-reasoning-pruner 设计
 
-状态：机制已逐条核实，**实现未开始**，且**存在一处未解的机制阻塞**（运行期耐久写入路径，见「阻塞」一节）。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
+状态：机制已逐条核实，**实现未开始**。耐久记录的写入路径已找到可行解（复用已知事件类型 + 自有投影，见「阻塞」一节），**待类型普查定下具体类型**即可解除。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
 本文件引用的 DSH 扩展点按 **`0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。未来版本**乐观地先视为兼容**：升级后按下文「验证状态」的核对清单重跑一遍，而不是预先写防御分支或版本判断——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
@@ -41,25 +41,26 @@ DSH 里凡是「历史是否被改动过」的判据都要分清用的是哪一�
 
 ### 耐久记录的形状
 
-- 自有事件类型 `reasoning-prune/applied`，在 `SessionEventMap` 上以 `@messageProjection` 声明，数据形状照 `image/offload` 的 `targets` 数组（每个 target 至少含 `seq`）：
+**结论先行**：借用一个**已知（在生成集合内）的 log-only 事件类型**承载我们的 payload，并为该类型注册自有投影。已知类型无需 `ignorable`、天然可重载，于是「阻塞」一节的两难消失。
+
+- payload 形状（**与承载类型无关**，承载类型待类型普查定）：
 
 ```ts
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /**
-     * 让指定历史步骤的推理块自此次记录起不再进入模型可见历史。
-     * 目标是当前表面节点；记录本身不变。
-     * @messageProjection
-     */
-    'reasoning-prune/applied': { targets: { seq: SessionSeq }[] }
-  }
+/** 我们自己的投影载荷；随承载类型的事件落盘。 */
+interface ReasoningPrunePayload {
+  /** 要裁剪的历史步骤，按它们的 assistant/message seq 列出。 */
+  targets: SessionSeq[]
 }
 ```
 
-- `project()` 在折叠期把每个 target seq 的消息换成「移除推理块」的副本。校验全放在 `project()` 里，照 `image-offload` 的做法：data 形状、target 必须是**当前表面节点**（`context.nodes`）、重复 seq 抛错、目标事件类型受限。投影必须是纯函数：它会在运行期增量折叠与重载全量折叠两条路径上被调用，两侧结果必须一致。
-- 追加时不带 `surfaceOp`（非表面事件），但要带 `ignorable: true`——原因见下。
+- 事件**不带 `surfaceOp`**（它必须是 log-only 类型）。投影在折叠期把这些 seq 的消息换成「移除推理块」的副本。
+- 校验全放在 `project()` 里，照 `image-offload` 的做法：payload 形状、target 必须是**当前表面节点**（`context.nodes`）、重复 seq 抛错、目标事件必须是 `assistant/message`（否则裁剪会作用到错误对象上）。投影必须是纯函数：它在运行期增量折叠与重载全量折叠两条路径上都会被调用，两侧结果必须一致，且**不得抛「信息不足」类错误**——一旦抛错，那条日志就再也读不出来。
+- 追加走 `session.append(<承载类型>, payload)`；`Session.append` 对**已知**类型没有任何障碍。
+- **注意投影拦截的副作用**：为某类型注册投影后，该类型的**每一个**事件在每次折叠时都会走投影（`surface.ts:529-534` 先于所有其他分支）。所以投影必须对「不是我们写的」该类型事件也安全返回（返回空 Map、不抛错）——否则会把宿主自己的事件拦下来。选定承载类型后必须用用例钉住这一点。
 
-### `ignorable: true`：一个必须显式记录的限制
+### `ignorable: true`：**已作废的路线**，留档以免后人重走
+
+下面这一节记录的是**最初选定的路线**（自有事件类型 + `ignorable: true`）及其全部依据。它现在**不再采用**，保留原因有二：一是契约层面的分析仍成立、对任何想走这条路的人有价值；二是它解释了我们为什么不走这条路。
 
 - 外部插件的事件类型**永远不在** `KNOWN_SESSION_EVENT_TYPES` 里：该集合由 `scripts/gen-persistence-catalog.ts` 从本仓源码生成，其文件头注释明说 out-of-repo 事件「by construction」不在其中（`packages/core/session/src/known-event-types.ts:1-21`）。
 - 持久化 seam 对未知事件**只在** envelope 显式带 `ignorable: true` 时才接受（`packages/core/session/src/surface.ts:311-312`；`packages/session/session-log-deepseek/src/index.ts:102`）；absent 即 required-on-read，会拒绝整段会话。
@@ -68,9 +69,9 @@ declare module '@deepseek-ai/dsh-session/types' {
 - 降级方向是安全的：推理全文仍在日志里，不会产生损坏的会话，也不会出现「两端都不报错却内容分叉」——最坏情况只是白花 token。所以判据（规格闸门 C）写成：有插件时重载与运行期一致；无插件时**不得拒绝整个会话**，只能得到未裁剪版。
 - 这是**需要向上游提的**一条：按那份 note 的措辞，替代机制尚不存在，而本插件是第一个真正需要「仓外、改变重建、但必须可重载」的外部事件生产者。
 
-### **阻塞：运行期写不出 `ignorable`，而种子路径只在构造期生效**
+### **为什么不走 `ignorable`：运行期写不出，且契约不符**
 
-上一条的前提是「我们能在**运行期**写出带 `ignorable: true` 的事件」。**这条前提在当前版本不成立**，必须先解决，否则整条耐久路线不成立。证据：
+按当时选定的路线（自有事件类型 + `ignorable: true`），前提是「我们能在**运行期**写出带 `ignorable: true` 的事件」。**这条前提不成立**，而且即便成立，契约也不符。证据：
 
 - `Session.append` 的第三个参数类型只有 `SurfaceIntent`（`surfaceOp`/`sourceEventSeqs`），**没有任何 envelope 通道**；它构造事件时硬编码 `{type, seq, time, data, surfaceOp?, sourceEventSeqs?}`——**没有 `ignorable` 字段**（`packages/core/session/src/index.ts:722-726` 签名、`:745-751` 构造）。
 - 写入路径**不校验**事件类型：`persistBatch` 直接 `appendLines`，而 `appendLines` 只做编码与落盘（`packages/session/session-persistence-jsonl/src/index.ts:856-868`、`:1324-1348`）。所以 append 会**成功**，问题被推迟到下次打开。
@@ -86,10 +87,19 @@ declare module '@deepseek-ai/dsh-session/types' {
 
 **其余候选路径的核实结果**：
 
+- **`ignorable` 已被排除为方案**：即便能写，它承载的是一个「省略安全」的声明，而裁剪**改变**模型可见重建——契约与用途不符（见上一节）。
+- **`SessionHandle.append`（经 `ctx.sessionPersistence`）能耐久写入任意 envelope**：写入路径只查 JSON 可序列化，不查事件类型（`storage-contract.ts:131-137`），出厂先例是 `message-feedback`（`packages/feedback/message-feedback/src/index.ts:261-268` 手搓 `{...event, seq, time}` 后调 `handle.append`）。绕过 `Session.append` 即可带上 `ignorable`。
+  - **但对本设计不可用**：写入所有权按会话 id 独占（`storage.ts:429-432` 的 `claimWrite` → `SessionAlreadyOwnedError`；`index.ts:323-325` 的 `create` → `SessionAlreadyExistsError`）。经独立实测：`OWNED_DURING_OPEN = SessionAlreadyOwnedError`、只读 handle append = `SessionReadOnlyError`、关闭后才 `OK`。**活跃的 agent 会话拿不到写 handle**，而本插件的裁剪正是发生在活跃会话里。
+- **复用已知事件类型 + 自有投影（当前领先方案）**。机制上成立，且**不需要 `ignorable`**：已知类型天然可重载（它们在生成集合里），所以整个阻塞消失。
+  - `planSurfaceEvent` **先按类型字串查投影**，命中即返回 `kind:'project'`，早于任何 `surfaceOp` 处理（`packages/core/session/src/surface.ts:529-534`）；投影可以返回**任意表面 seq** 的消息替换。
+  - 出厂测试正是这个形状：`test/project` 事件（seq 1）改写了更早的 `user/message`（seq 0）的内容（`packages/core/session/tests/message-projections.spec.ts:16-24`）。⇒ **一个 log-only 事件可以驱动对 assistant 消息的改写**，这正是本设计需要的。
+  - `registerMessageProjection` 只按**类型**去重（`index.ts:942-950`），对「注册在哪个类型上」没有约束；全仓当前只有 `image/offload` 注册过投影（`compaction-image-offload/src/index.ts:26`）。
+  - 插件缺席时的降级也安全：投影未命中 → 不触发 `MESSAGE_PROJECTION_EVENT_TYPES` 报错 → `surfaceOp === undefined` 直接返回（`surface.ts:535-538`），事件被**忽略**，重载得到未裁剪历史。
+  - **待定的唯一问题是「借哪个类型」**：追加某类型的额外事件会进入该类型自己的读取者与结构校验。已排除的例子：`step/end` 有严格状态机校验（`session-format-v3-to-v4/src/relationships.ts:291-295` 要求「有打开步骤」，多一条就打乱 `step/start` 的配对），`compaction/*`、`command/*`、`request/*`、`session/end-seed`、`llm/retry` 皆属 `RELATIONSHIP_TYPES`；`image/offload` 的投影已被占用且重复注册直接抛。
+  - **正在做的类型普查**会给出「无生产者、无结构校验、无消费者计数」的安全候选；在普查结论落地前**本文档不指定具体类型**。
 - `KNOWN_SESSION_EVENT_TYPES` 是运行时**未冻结**的普通 `Set`（`known-event-types.ts:22`，无 `Object.freeze`），也经 `@deepseek-ai/dsh-session` 导出（`index.ts:36`）。同进程 `add` 确实能让 `validateStoredEvents` 从拒绝转为接受——**但重载是另一个进程**，生成集合不含它。**不作为耐久方案**；不过它是一个真实的同进程完整性缺口，值得单独记一笔。
-- `registerMessageProjection` 只按**类型**去重（`index.ts:943-945`），对「注册在哪个类型上」**没有约束**——实测可为 `user/message`（表面类型）与 `session/title`（log-only 类型）注册而不报错。所以「借用已知类型」这条路是**可用的**，但需要一次类型普查：追加某个类型的额外事件会进入该类型自己的读取者（`sessionStats` 数 `step/*`、重试投影折叠 `llm/retry`、`goal/change`/`todo/write`/`hook/*` 同理），选错会让别人的读数错乱。
 
-**结论**：耐久记录在当前版本只有两条真正可行的路——**复用已知事件类型 + 自有投影**（需类型普查），或**请上游加运行期写入通道**。四条候选路径的代价见「待办与上游诉求」。**这条阻塞解除前，规格不得标 `ready-for-agent`。**
+**结论**：耐久记录在**不修改 DSH** 的前提下有路可走——**复用已知事件类型 + 自有投影**，这也让 `ignorable` 整条线连同它的契约张力一起作废。上游诉求从「必须先解决」降级为「可选改进」。**待类型普查给出候选类型后，本阻塞即可判定解除**；在那之前规格不标 `ready-for-agent`。
 
 **连带更正 ADR 0002 的前提**：那条 ADR 写「`Session.append` 无法写入 `ignorable`，于是整段日志被拒绝」——**对 `append` 正确，但它漏了 `seed`**。如果将来要重估复核记录的存放位置，应以「运行期 vs 构造期」这个区分重述，而不是笼统地说「无法写入」。
 
@@ -161,7 +171,7 @@ declare module '@deepseek-ai/dsh-session/types' {
 
 **只有源码依据、需要运行时确认**（实现时按此顺序验，验不过就停下改设计）：
 
-1. **耐久写入路径**（当前阻塞，见上节）：先确定用哪条路径，再验它。若走「复用已知事件类型」，必须验该类型的既有不变式与消费者不被打扰；若走上游改动，先改后验。
+1. **选定承载类型**（当前唯一前沿，见「待办」）：普查给定候选后，验该类型既有的结构校验与消费者不被打扰。
 2. **重载不退化**：裁剪后重载，被裁消息仍是裁剪版；且**未装载插件**的读者不得拒绝整段会话。**已实测的参考读数**：构造期种入一个带 `ignorable: true` 的自有事件，在两进程间往返后投影仍生效、模型可见历史被改写、且插件缺席的冷读不拒绝（`validateStoredEvents` 跳过未知但 ignorable 的行，`storage-contract.ts:75`）。这条证明了「未知但 ignorable 的事件 + 自有投影」这条链**本身**是通的——缺的只是运行期写入点。
 3. **replay 信封不退化的反例**：只改内容不改信封必须触发 `onReplayDegrade`（用它作断言钩子）；同步过滤后必须不触发，且存活块签名保留。
 4. **投影在两条折叠路径上一致**：运行期增量折叠与重载全量折叠得到逐字节相同的模型可见历史。
@@ -177,20 +187,25 @@ declare module '@deepseek-ai/dsh-session/types' {
 
 ## 待办与上游诉求
 
-### 阻塞的候选路径（**未裁决**，这是当前唯一的前沿）
+### 当前唯一的前沿：挑哪个已知类型承载
 
-1. **复用已知事件类型 + 自有 message projection。** 机制上可行：`registerMessageProjection` 只按**类型**去重，而 `planSurfaceEvent` 先按 `projections.find(item => item.type === event.type)` 命中投影（`packages/core/session/src/surface.ts:529-534`），因此插件可以为**任意已知类型**注册投影并追加该类型，不限于 `MESSAGE_PROJECTION_EVENT_TYPES`（那个集合只服务「必须提供解释器」的报错）。
-   - 代价：**必须挑一个不会被既有消费者误解的类型**。追加某个类型的额外事件会进入该类型自己的读取者——`step/start`/`step/end` 被 `sessionStats` 计数、`llm/retry` 被重试投影折叠、`goal/change`/`todo/write`/`hook/*` 同理。选错会让别人的读数错乱。
-   - 需要一次专门的类型普查才能定，**本文档不预先指定**。
-2. **请求上游增加写入通道**（`Session.append` 可选 envelope，或运行期注册事件类型的正式机制）。最干净，但依赖外部改动，且那份 note 明确说「事件名注册」已被否决过——要提就得连带说明为什么本场景不同于被否决的那条理由（我们的事件**改变**重建，不是信息性的）。
+**已定**：复用已知事件类型 + 自有 message projection（`registerMessageProjection` 只按类型去重，`planSurfaceEvent` 先按类型字串命中投影，见 `packages/core/session/src/surface.ts:529-534`；不限于 `MESSAGE_PROJECTION_EVENT_TYPES`，那个集合只服务「必须提供解释器」的报错）。
+
+**未定**：具体借哪个类型。这不是审美问题——追加某类型的额外事件会进入该类型自己的**结构校验**与**消费者**，选错会打乱别人的读数或让日志读不出来。已排除的例子：`step/end`（`session-format-v3-to-v4/src/relationships.ts:291-295` 要求「有打开的步骤」，多一条会打乱 `step/start` 配对）、`image/offload`（投影已被占用、重复注册直接抛）、以及全部 `RELATIONSHIP_TYPES` 成员。
+
+**正在做类型普查**给出「无生产者、无结构校验、无消费者计数」的安全候选；在普查结论落地前**本文档不指定类型**。
+
+### 已核实但不采用的其他路径（留档）
+
+1. **`SessionHandle.append`（`ctx.sessionPersistence`）**：能把任意 envelope 写上盘（写入路径只查 JSON 可序列化，`storage-contract.ts:131-137`；先例 `feedback/message-feedback/src/index.ts:261-268`）。**但对本设计不可用**：写入所有权按会话 id 独占（`storage.ts:429-432`、`index.ts:323-325`），活跃的 agent 会话拿不到写 handle。**留档理由**：它是唯一能绕过 `Session.append` 限制的写入口，将来若有「插件自有会话」的需求会用到。
+2. **请求上游增加运行期写入通道**（`Session.append` 可选 envelope，或运行期注册事件类型的正式机制）。现已**降级为可选改进**——上一条已让本设计不需要它。若将来要提，措辞应是「运行期没有写入 `ignorable` 的公开路径；构造期（seed）有」，而不是笼统的「没有写入路径」；并且要说明我们的事件**改变**重建，与被否决的「事件名注册」不是同一类问题。
 3. **种子路径（构造期种入带 `ignorable` 的自有事件）** —— **真实存在，但本设计用不上**。独立复核已两进程实测通过（种入 `ignorable: true` 的自有事件 → 重载后投影仍生效、模型可见历史被改写；插件缺席的冷读也不拒绝）。限制是它**只在构造/恢复时生效**，而裁剪是运行期中途的决策。**列在这里是为了防止后人重新发现它时误以为本设计漏看了。**
 4. **耐久记录移到会话日志之外**（ADR 0002 的路径）。proven，但**对 message projection 不适用**：投影必须是日志的纯函数（`packages/core/session/src/surface.ts:35-46`），`SessionMessageProjectionContext` 只给 `nodes`/`events`/`baseSeq`/`messages`，**没有任何外部状态通道**——用闭包去读外部缓存会让 `project` 非纯、依赖重放顺序，正是契约禁止的。所以这条路等于放弃「重载后一致」，与规格闸门 C 冲突。
    - 除非接受降级：裁剪只在**当前进程**生效，重载后回到完整版历史。那会推翻「裁剪是持久的」这条用户故事，**不推荐**。
 
 ### 其余待办
 
-- **上游诉求（一条）**：为「仓外、**运行期**写入、改变模型可见重建、且必须可重载」的插件事件提供一个不依赖 `ignorable` 的机制。本插件是这类生产者的第一个实例；那份 note 与 ADR 0002 都指向同一个缺口，但两者都只描述了「无法用 `append` 写入」，没提「seed 可以、运行期不行」这个区分——提诉求时应按这个更准确的措辞。
 - 包名与目录：`packages/dsh-reasoning-pruner/`，`dsh-smarter-context` 只作为未来的容器名保留。
 - ② 的 `M` 由闸门 B 定值、`K` 由闸门 D 定值；① 是否自持重试由闸门 B-2 的实测结果决定。
-- **ADR 待写**：原计划记录「用 `ignorable` 承载一个会改变重建的事件」这一取舍；**现因上述阻塞而搁置**——该取舍是否成立取决于最终选哪条路径，写早了会记下一个不存在的决定。
-- **ADR 0002 前提待更正**（本仓已提交的文档）：它的结论（记录移出会话日志）大概率仍然正确，但**理由**需要按「运行期 vs 构造期」重述。这是另一份文档的改动，不折进本设计。
+- **ADR 待写**：原计划记录「用 `ignorable` 承载一个会改变重建的事件」这一取舍；**已作废**——路线本身不采用了。若类型普查发现「借用别人的事件类型」有值得记录的长期代价（例如与宿主类型语义冲突），那才是该写 ADR 的取舍。
+- **ADR 0002 前提待更正**（本仓已提交的文档）：它的结论（记录移出会话日志）大概率仍然正确，但**理由**需要按「运行期 vs 构造期」重述，并且它漏掉了 `seed` 与 `SessionHandle.append` 两条真实写入路径。这是另一份文档的改动，不折进本设计。
