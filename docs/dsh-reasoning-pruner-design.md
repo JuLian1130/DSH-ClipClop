@@ -1,6 +1,6 @@
 # dsh-reasoning-pruner 设计
 
-状态：机制已逐条核实，**实现未开始**，且**存在一处未解的机制阻塞**（见「待办与上游诉求」——`ignorable` 的写入路径）。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
+状态：机制已逐条核实，**实现未开始**，且**存在一处未解的机制阻塞**（运行期耐久写入路径，见「阻塞」一节）。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
 本文件引用的 DSH 扩展点按 **`0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。未来版本**乐观地先视为兼容**：升级后按下文「验证状态」的核对清单重跑一遍，而不是预先写防御分支或版本判断——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
@@ -68,19 +68,30 @@ declare module '@deepseek-ai/dsh-session/types' {
 - 降级方向是安全的：推理全文仍在日志里，不会产生损坏的会话，也不会出现「两端都不报错却内容分叉」——最坏情况只是白花 token。所以判据（规格闸门 C）写成：有插件时重载与运行期一致；无插件时**不得拒绝整个会话**，只能得到未裁剪版。
 - 这是**需要向上游提的**一条：按那份 note 的措辞，替代机制尚不存在，而本插件是第一个真正需要「仓外、改变重建、但必须可重载」的外部事件生产者。
 
-### **阻塞：`append` 写不出 `ignorable`，而种子路径无法为既存会话追加**
+### **阻塞：运行期写不出 `ignorable`，而种子路径只在构造期生效**
 
-上一条的前提是「我们能写出带 `ignorable: true` 的事件」。**这条前提在当前版本不成立**，必须先解决，否则整条耐久路线不成立。证据：
+上一条的前提是「我们能在**运行期**写出带 `ignorable: true` 的事件」。**这条前提在当前版本不成立**，必须先解决，否则整条耐久路线不成立。证据：
 
 - `Session.append` 的第三个参数类型只有 `SurfaceIntent`（`surfaceOp`/`sourceEventSeqs`），**没有任何 envelope 通道**；它构造事件时硬编码 `{type, seq, time, data, surfaceOp?, sourceEventSeqs?}`——**没有 `ignorable` 字段**（`packages/core/session/src/index.ts:722-726` 签名、`:745-751` 构造）。
 - 写入路径**不校验**事件类型：`persistBatch` 直接 `appendLines`，而 `appendLines` 只做编码与落盘（`packages/session/session-persistence-jsonl/src/index.ts:856-868`、`:1324-1348`）。所以 append 会**成功**，问题被推迟到下次打开。
 - 读取路径**校验并拒绝**：`validateStoredEvents` 对未知类型且 `ignorable !== true` 直接抛 `SessionFormatUnsupportedError`（`packages/session/session-persistence/src/storage-contract.ts:69-80`）。调用点是读路径（`session-persistence-jsonl/src/index.ts:675`、`:807`、`generation.ts:528`）。
 - ⇒ **失败形态是最坏的组合：写入静默成功，重载时整段会话被拒绝。** 这正是本仓 ADR 0002（`docs/adr/0002-review-records-outside-session-log.md`）记录过的同一个坑——dsh-navigator 当时因此把复核记录搬到会话日志之外。
-- 种子路径（`CreateSessionOptions.seed`）**确实允许** envelope 带 `ignorable`（`assertSessionEventEnvelope` 的键白名单含它，`packages/core/session/src/index.ts:207-240`），但它只在**创建/恢复会话**时生效，不能给一个已经在跑的会话追加事件；本插件的裁剪是运行期决策。
-- `KNOWN_SESSION_EVENT_TYPES` 是运行时**未冻结**的普通 `Set`（`known-event-types.ts:22`，全文件无 `Object.freeze`），也经 `@deepseek-ai/dsh-session` 导出（`index.ts:36`）——但即使插件拿到同一模块实例去 `add` 自己的类型，那也只是**本进程内**有效：重载是另一个进程，生成集合不含它。**不作为方案。**
-- 该 note 声称有第三方插件依赖此字段，但仓内 `ignorable: true` 只出现在测试夹具里（`grep` 全仓无生产写入点），与本条一致：**存在读取约定，但不存在公开写入路径。**
 
-**结论**：耐久记录必须改走**已知事件类型 + 自有 message projection**，或走会话日志之外。三条候选路径及其代价见「待办与上游诉求」。**这条阻塞解除前，规格不得标 `ready-for-agent`。**
+**种子路径确实存在，但它救不了本设计**（这一点经独立复核、且已实测：真正的两进程往返能把一个带 `ignorable: true` 的自有事件种进去并重载成功）：
+
+- `CreateSessionOptions.seed` / `CreateAgentOptions.seed` **接受**手写 envelope，`assertSessionEventEnvelope` 的键白名单含 `ignorable` 且接受 `ignorable === true`（`packages/core/session/src/index.ts:218`、`:231`）；未知的 ignorable 记录在表面折叠里被放行（`packages/core/session/src/surface.ts:312`），再被按类型字串命中的投影消费（`:529-534`）。
+- **但它只在构造/恢复时生效。** 全仓只有两处写入 `log`：种子循环（`index.ts:587`）与 `append`（`:761`）；前者是构造期，运行期唯一的写入点就是 `append`——而它写不出 `ignorable`。`resume` 走的也是「冷读既存日志 + 作为 seed 重建」（`agent-loop/src/index.ts:858`），不是运行期追加。
+- 本插件的裁剪是**运行期中途的决策**（挂在 `agent/pre-step` / `agent/request-error` 上），不可能等到下一次构造会话才落地。所以种子路径是一条**真实但用不上**的能力：它适合「构造时就已知道全部决策」的场景，不适合本插件。
+- 因此**上一条「存在读取约定、不存在公开写入路径」的措辞需要收窄**：准确说法是「**运行期**没有写入 `ignorable` 的公开路径；构造期（seed）有」。
+
+**其余候选路径的核实结果**：
+
+- `KNOWN_SESSION_EVENT_TYPES` 是运行时**未冻结**的普通 `Set`（`known-event-types.ts:22`，无 `Object.freeze`），也经 `@deepseek-ai/dsh-session` 导出（`index.ts:36`）。同进程 `add` 确实能让 `validateStoredEvents` 从拒绝转为接受——**但重载是另一个进程**，生成集合不含它。**不作为耐久方案**；不过它是一个真实的同进程完整性缺口，值得单独记一笔。
+- `registerMessageProjection` 只按**类型**去重（`index.ts:943-945`），对「注册在哪个类型上」**没有约束**——实测可为 `user/message`（表面类型）与 `session/title`（log-only 类型）注册而不报错。所以「借用已知类型」这条路是**可用的**，但需要一次类型普查：追加某个类型的额外事件会进入该类型自己的读取者（`sessionStats` 数 `step/*`、重试投影折叠 `llm/retry`、`goal/change`/`todo/write`/`hook/*` 同理），选错会让别人的读数错乱。
+
+**结论**：耐久记录在当前版本只有两条真正可行的路——**复用已知事件类型 + 自有投影**（需类型普查），或**请上游加运行期写入通道**。四条候选路径的代价见「待办与上游诉求」。**这条阻塞解除前，规格不得标 `ready-for-agent`。**
+
+**连带更正 ADR 0002 的前提**：那条 ADR 写「`Session.append` 无法写入 `ignorable`，于是整段日志被拒绝」——**对 `append` 正确，但它漏了 `seed`**。如果将来要重估复核记录的存放位置，应以「运行期 vs 构造期」这个区分重述，而不是笼统地说「无法写入」。
 
 ### 裁剪资格：按每条 assistant 消息读它自己的传输
 
@@ -151,7 +162,7 @@ declare module '@deepseek-ai/dsh-session/types' {
 **只有源码依据、需要运行时确认**（实现时按此顺序验，验不过就停下改设计）：
 
 1. **耐久写入路径**（当前阻塞，见上节）：先确定用哪条路径，再验它。若走「复用已知事件类型」，必须验该类型的既有不变式与消费者不被打扰；若走上游改动，先改后验。
-2. **重载不退化**：裁剪后重载，被裁消息仍是裁剪版；且**未装载插件**的读者不得拒绝整段会话。
+2. **重载不退化**：裁剪后重载，被裁消息仍是裁剪版；且**未装载插件**的读者不得拒绝整段会话。**已实测的参考读数**：构造期种入一个带 `ignorable: true` 的自有事件，在两进程间往返后投影仍生效、模型可见历史被改写、且插件缺席的冷读不拒绝（`validateStoredEvents` 跳过未知但 ignorable 的行，`storage-contract.ts:75`）。这条证明了「未知但 ignorable 的事件 + 自有投影」这条链**本身**是通的——缺的只是运行期写入点。
 3. **replay 信封不退化的反例**：只改内容不改信封必须触发 `onReplayDegrade`（用它作断言钩子）；同步过滤后必须不触发，且存活块签名保留。
 4. **投影在两条折叠路径上一致**：运行期增量折叠与重载全量折叠得到逐字节相同的模型可见历史。
 5. **`contentGeneration` 确实是请求快照失效的信号**：投影落地后，下一步请求包含裁剪版消息（`agent.ts:396` 的比较）。
@@ -172,12 +183,14 @@ declare module '@deepseek-ai/dsh-session/types' {
    - 代价：**必须挑一个不会被既有消费者误解的类型**。追加某个类型的额外事件会进入该类型自己的读取者——`step/start`/`step/end` 被 `sessionStats` 计数、`llm/retry` 被重试投影折叠、`goal/change`/`todo/write`/`hook/*` 同理。选错会让别人的读数错乱。
    - 需要一次专门的类型普查才能定，**本文档不预先指定**。
 2. **请求上游增加写入通道**（`Session.append` 可选 envelope，或运行期注册事件类型的正式机制）。最干净，但依赖外部改动，且那份 note 明确说「事件名注册」已被否决过——要提就得连带说明为什么本场景不同于被否决的那条理由（我们的事件**改变**重建，不是信息性的）。
-3. **耐久记录移到会话日志之外**（ADR 0002 的路径）。proven，但**对 message projection 不适用**：投影必须是日志的纯函数（`packages/core/session/src/surface.ts:35-46`），`SessionMessageProjectionContext` 只给 `nodes`/`events`/`baseSeq`/`messages`，**没有任何外部状态通道**。所以这条路等于放弃「重载后一致」，与规格闸门 C 冲突。
+3. **种子路径（构造期种入带 `ignorable` 的自有事件）** —— **真实存在，但本设计用不上**。独立复核已两进程实测通过（种入 `ignorable: true` 的自有事件 → 重载后投影仍生效、模型可见历史被改写；插件缺席的冷读也不拒绝）。限制是它**只在构造/恢复时生效**，而裁剪是运行期中途的决策。**列在这里是为了防止后人重新发现它时误以为本设计漏看了。**
+4. **耐久记录移到会话日志之外**（ADR 0002 的路径）。proven，但**对 message projection 不适用**：投影必须是日志的纯函数（`packages/core/session/src/surface.ts:35-46`），`SessionMessageProjectionContext` 只给 `nodes`/`events`/`baseSeq`/`messages`，**没有任何外部状态通道**——用闭包去读外部缓存会让 `project` 非纯、依赖重放顺序，正是契约禁止的。所以这条路等于放弃「重载后一致」，与规格闸门 C 冲突。
    - 除非接受降级：裁剪只在**当前进程**生效，重载后回到完整版历史。那会推翻「裁剪是持久的」这条用户故事，**不推荐**。
 
 ### 其余待办
 
-- **上游诉求（一条）**：为「仓外、改变模型可见重建、且必须可重载」的插件事件提供一个不依赖 `ignorable` 的机制。本插件是这类生产者的第一个实例；那两份文档（note 与 ADR）都指向同一个缺口。是否提、以及用哪条路径，取决于上面第 1 与第 2 条的取舍。
+- **上游诉求（一条）**：为「仓外、**运行期**写入、改变模型可见重建、且必须可重载」的插件事件提供一个不依赖 `ignorable` 的机制。本插件是这类生产者的第一个实例；那份 note 与 ADR 0002 都指向同一个缺口，但两者都只描述了「无法用 `append` 写入」，没提「seed 可以、运行期不行」这个区分——提诉求时应按这个更准确的措辞。
 - 包名与目录：`packages/dsh-reasoning-pruner/`，`dsh-smarter-context` 只作为未来的容器名保留。
 - ② 的 `M` 由闸门 B 定值、`K` 由闸门 D 定值；① 是否自持重试由闸门 B-2 的实测结果决定。
 - **ADR 待写**：原计划记录「用 `ignorable` 承载一个会改变重建的事件」这一取舍；**现因上述阻塞而搁置**——该取舍是否成立取决于最终选哪条路径，写早了会记下一个不存在的决定。
+- **ADR 0002 前提待更正**（本仓已提交的文档）：它的结论（记录移出会话日志）大概率仍然正确，但**理由**需要按「运行期 vs 构造期」重述。这是另一份文档的改动，不折进本设计。
