@@ -67,6 +67,9 @@ interface ReasoningPrunePayload {
 
 4. **payload 不得含会话内容**：`session-log-deepseek` 默认开启（`enabled` 默认 `true`，`packages/session/session-log-deepseek/src/index.ts:52`；base bundle 挂载于 `packages/bundle/base/cordis.patch.yml:43`）并把 `data` **原样上传**到远端。我们的 payload 只有 seq 数组，天然满足——但这条要写成硬约束，因为它会随「顺手多记一点上下文」而破。
 
+- **类型侧的代价（已核；不是缺陷，而是「借用已知类型」这条取舍的价格）**：`append<T>(type: T, data: SessionEventMap[T])` 把 `data` 严格约束到宿主声明的 `DeepSeekSearchLlmRequest`（`packages/core/session/src/index.ts:722-726`；`SessionEvent<T>` 的 `data` 见 `packages/core/session/src/types.ts:493-500`），而为同一个 key 再声明一个不同类型是 interface 合并的重复属性错误——**所以只能 cast**，而 cast 又必须在不改 DSH 源码的前提下做。于是**投影自己的校验成为唯一的形状闸门**：编译期没有（类型是宿主的），运行时也没有——`validateSessionEventData` 只分支表面类型 / `request/header` / `tool/result`（`packages/core/session/src/surface.ts:172-226`），v4 读门禁 `assertReleasedV4Relationships` 对内层无消息槽的类型原样放行（`packages/session/session-format-v3-to-v4/src/validation.ts:110-130`：逐事件只查 developer / message-source / delivery / catalog 四类事实；`src/sources.ts:12-34` 的 `mapEventMessages` 对名单外类型原样返回）。
+- **为什么不能自建一个新类型（这条取舍的根据）**：`KNOWN_SESSION_EVENT_TYPES` 的生成头注释写死「Downstream（**out-of-repo**）插件事件**按构造就在这个列表之外**。持久化的 `ignorable` 标记才是兼容机制」（`packages/core/session/src/known-event-types.ts:15-16`）——不在该列表里的类型会被 v4 读路径拒收，这正是必须借用一个**已在本仓声明**的已知类型的原因。
+
 - 事件**不带 `surfaceOp`**（它必须是 log-only 类型）。投影在折叠期把这些 seq 的消息换成「移除推理块」的副本。
 - 校验全放在 `project()` 里，照 `image-offload` 的做法：payload 形状、target 必须是**当前表面节点**（`context.nodes`）、重复 seq 抛错、目标事件必须是 `assistant/message`（否则裁剪会作用到错误对象上）。投影必须是纯函数：它在运行期增量折叠与重载全量折叠两条路径上都会被调用，两侧结果必须一致，且**不得抛「信息不足」类错误**——一旦抛错，那条日志就再也读不出来。
 - 追加走 `session.append(<承载类型>, payload)`；`Session.append` 对**已知**类型没有任何障碍。
