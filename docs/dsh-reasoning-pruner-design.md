@@ -8,7 +8,7 @@
 
 ## 范围与约束
 
-- 只开发插件，不修改 deepseek-harness 源码。所有接缝都是已有扩展点：`agent/pre-step` 与 `agent/request-error`（waterfall，可 `prepend`）、`ctx.sessions.registerMessageProjection`、`ctx.settings` / `ctx.configForms`（手动入口的界面）。
+- 只开发插件，不修改 deepseek-harness 源码。所有接缝都是已有扩展点：`agent/pre-step` 与 `agent/request-error`（waterfall，可 `prepend`）、`ctx.sessions.registerMessageProjection`、以及手动入口所需的设置面——**浏览器侧那个服务的名字按版本不同**（本仓实装是 `ctx.settingsScope`，checkout 是 `ctx.configForms`，见「验证状态 · 源码 checkout 与安装版本的差异」）。
 - 服务依赖交给原生 `inject`：Cordis 在依赖就绪前不会激活插件（`vendor/cordis/src/fiber.ts:611-623` 把缺依赖的插件置为 INACTIVE），所以在 `apply` 里查服务是否存在是死代码。缺服务的表现是「插件不激活」，由 DSH 启动审计报告。
 - 包名：插件是 `dsh-reasoning-pruner`（功能命名，同 `dsh-navigator` 的先例）；`dsh-smarter-context` 只是**未来**的容器名，当前不建、不为它预留任何结构。
 
