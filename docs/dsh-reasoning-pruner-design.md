@@ -75,6 +75,8 @@ interface ReasoningPrunePayload {
 - 追加走 `session.append(<承载类型>, payload)`；`Session.append` 对**已知**类型没有任何障碍。
 - **注意投影拦截的副作用**：为某类型注册投影后，该类型的**每一个**事件在每次折叠时都会走投影（`surface.ts:529-534` 先于所有其他分支）。所以投影必须对「不是我们写的」该类型事件也安全返回（返回空 Map、不抛错）——否则会把宿主自己的事件拦下来。**判别规则写死**：payload **顶层出现 `clipclop` 键** ⇒ 这是我们的事件，按下文严格校验（违规抛）；**没有该键** ⇒ 宿主事件，返回空 Map、不抛错。**不得**用「是否符合 `DeepSeekSearchLlmRequest` 的字段（`endpoint`/`apiVersion`/`body`）」来判别——那会把放行分支绑死在外部包的 schema 上，宿主改字段就会让我们对宿主事件抛错，而投影一抛错那条日志就再也读不出来（见上一条）。选定承载类型后必须用用例钉住这一点。
 
+- **注册本身还有一个不可避免的代价（已核；这是承载类型选择的实际价格，不是缺陷）**：投影命中就推进 `contentGeneration`，**与投影返回什么无关**——`applySurfacePlan` 的 `project` 分支无条件 `state.contentGeneration += 1`（`packages/core/session/src/surface.ts:579-583`）。承载体是宿主自己也在用的类型（每次辅助搜索都 append，`packages/web/web-search-deepseek/src/index.ts:117-121`），所以**宿主每产生一条该类型事件**，下一步请求的 `startsSeries` 就为真（`packages/core/agent-loop/src/agent.ts:396`），落一条 `request/header` `reason: 'series'`（`:615-616`），工具基线被重置且 `updates` 清空（`packages/core/session/src/tool-history.ts:36`），系统提示词走替换分支（`packages/core/agent-loop/src/runtime-context.ts:95`）。**不注册投影时不会发生**：该类型非表面类型，`if (surfaceOp === undefined) return`（`surface.ts:538`）让 `plan` 为空，两个计数都不动。**规避不了**：推进发生在投影之前，返回空 Map 无用。⇒ 上文把「生产者存在且是宿主自己的」当作好处（共存是既成事实），准确的说法是**它同时是坏处**——共存有代价。代价的量级**尚未量化**；观察面写在票 01 第 5 条与票 02 第 12 条，两处都要求把它逐条断死，以免无声扩大。
+
 **两种分发机制的成败语义**（决定了坏 payload 在哪一步炸，普查补正）：
 
 - **提交后**的 `session/event` 观察者**不能**否决一次 append：`invokeContainedSessionObservers` 是 try/catch + `logger.warn`（`packages/core/session/src/index.ts:403-419`）。最坏是记一条警告并留下卡住的状态，**不会**让 append 失败。
