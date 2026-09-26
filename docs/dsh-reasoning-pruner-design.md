@@ -141,7 +141,7 @@ interface ReasoningPrunePayload {
 
 只移除内容里的推理块**不够**，它会撞上一条静默的降级路径。两个适配器都校验「耐久 replay 信封」与「消息内容」**逐位对齐**：
 
-- pi-ai：`if (state.blocks.length !== message.content.length) return invalidReplay('block count does not match assistant content')`，随后逐位要求 `replay.type === block.type`（`packages/llm/llm-pi-ai/src/replay.ts:190-192`）。
+- pi-ai：`if (state.blocks.length !== message.content.length) return invalidReplay('block count does not match assistant content')`，随后逐位要求 `replay.type === block.type`（`packages/llm/llm-pi-ai/src/replay.ts:192-195`）。
 - DeepSeek Messages：`if (!Array.isArray(envelope.blocks) || envelope.blocks.length !== message.content.length) return fail('block count mismatch')`（`packages/llm/llm-deepseek/src/replay.ts:55`）。
 
 不对齐时抛的是 `INVALID_REPLAY_STATE`，而**两端都把它吞掉**：pi-ai 的 `toPiAssistant` 捕获后调 `onDegrade` 再返回 `foreignAssistant(message)`（`packages/llm/llm-pi-ai/src/replay.ts:249-260`），Messages 侧同理返回 `undefined` 信封（`llm-deepseek/src/replay.ts:39-45`）。后果是**整条消息**（连同一个不该丢的文本签名与工具调用签名）跌落到 provider-neutral 重建：不报错、不失败、只是丢掉签名。
