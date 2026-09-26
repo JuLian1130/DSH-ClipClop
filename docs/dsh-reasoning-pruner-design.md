@@ -171,7 +171,8 @@ interface ReasoningPrunePayload {
 - 入口是一个插件自有命令（如 `/prune-reasoning`），**不劫持 `/compact`**：命令表按名字插入，重名直接抛（`packages/core/scope/src/store.ts:43-46`），且劫持会把内建命令的文案与错误映射复制一份。
 - 主界面开关需要一个**双面包**（这是本设计里唯一的额外交付物）：
   - host 半：`Config` 里的布尔字段，命名空间即 patch 行的 `id`，字段必须标 `.volatile()`（settings 的写入路径拒绝非 volatile 路径）。
-  - 浏览器半：`dsh.client { platform: 'web' }` + `exports["./client"]` 产物，把开关注册为 `settings.general.item` 这一行（契约 `packages/client/ui-settings/src/client/contract/slots.ts:92`：**单个偏好**的 additive seat，文案、当前值、写入路径都归注册者），经 `ctx.configForms` 写回命名空间。
+  - 浏览器半：`dsh.client { platform: 'web' }` + `exports["./client"]` 产物，把开关注册为 `settings.general.item` 这一行（契约 `packages/client/ui-settings/src/client/contract/slots.ts:80-97`：**单个偏好**的 additive seat；该 seat 只堆行，**行自己画内部包括 label**，owner **不收到任何 props**（`children?: never`），文案、当前值、写入路径全归注册者）。注册形状的真实先例：`ctx.slots.inject('settings.general.item', () => ctx.slots.register({ name, id, order, locale, inject }, Row))`（`packages/client/ui-settings-general/src/client/index.ts:76-89`，其中 `current-version` 占 `order: 100` 并注明「每个功能注册的偏好行都在 100 以下」）；行的实现先例见 `DeveloperToolsRow.tsx`（`Switch` + `busy`/`failed` 两态 + `role="alert"`）。
+  - 读走 `ctx.configForms.get('<Host plugin entry id>')` —— 它的 `namespace` 就是 entry id（`packages/client/ui-settings/src/client/config-form.ts:290-301`），`getSnapshot()` 读、`set(field, value)` 写（`:114`）；**并且注册必须包在 `whileServed([...])` 里**（`:311-337`）：该守卫让「宿主从未 compose 该命名空间」的部署不显示这一行，否则会出现一个没有写入目标的死行。
   - **没有**「声明 Config 就自动长出 UI」的通路：`autoGenerate` 在客户端零消费者，出厂的插件清单页是只读的。所以浏览器半是必需的，不是优化。
 - **置灰按保守闸门**：判不准就不给。可用的现成事实只有两个——`ctx.remote.llm.listConfigurableProviders()` 给出的 `settingsNs`（`llm-deepseek` 确定是 Messages，可确定置灰）与显式 route 级 `api`（`packages/llm/llm-pi-ai/src/config.ts:329`，读得到的就是确定的）。从 catalog 继承协议的 pi-ai 路由**判不准**，保守闸门把它当未知置灰，代价是可能误伤一条本可受益的路由；它会在该路由跑过一个步骤后用 replay 信封自愈。
 - 服务端另有硬强制作：裁剪只作用于**裁剪资格成立**的历史步骤（逐步骤读 replay 信封），资格不成立的步骤原样保留。界面的置灰只是提前告知，不是安全保证。
