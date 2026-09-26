@@ -67,8 +67,11 @@ export function replayEnvelopeAlignsWithContent(message: AssistantMessage): bool
  * `id`/`name`/`arguments` 一律不变。消息本身是公开的不可变副本，不改动传入对象。
  * @param message - 一条已记录的 assistant 消息。
  * @returns 裁剪后的不可变副本；没有推理块可移除时原样返回同一条消息。
- * @throws 信封不是「块数与内容相等、逐位同类型」时——这是调用方的前置条件；投影在调它之前先按
- *   {@link replayEnvelopeAlignsWithContent} 跳过不可用的信封，所以这条抛错不会让日志读不出来。
+ * @throws 信封缺 `blocks`，或信封块数与内容块数不等时。
+ *
+ * **逐位类型对齐不由本函数校验**：它是调用方的前置条件，传进来就必须已经成立。投影在调它之前先按
+ * {@link replayEnvelopeAlignsWithContent} 跳过不可用的信封，所以本函数不重复比一遍逐位 `type`；直调
+ * 本函数的调用方必须自己先过那个谓词。
  */
 export function pruneReasoning(message: AssistantMessage): AssistantMessage {
   const state = message.source.replayState
