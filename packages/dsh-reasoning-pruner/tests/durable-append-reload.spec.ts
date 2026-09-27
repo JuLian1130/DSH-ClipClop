@@ -13,7 +13,7 @@
  * 8. 裁剪资格不成立时不写入。
  *
  * 事件日志的读取只发生在用例侧：`ownEvents()` / `snapshotEvents()` 带 `@deprecated`，Agent Note 明写
- * 生产源码不得调用、只放行仓库测试文件；插件的生产源码一个都不读。
+ * 生产源码不得调用、只放行仓库测试文件；本文件因此只用它读事件，生产侧唯一破例见 `src/persist.ts`。
  *
  * 生命周期一律显式 `dispose()`（重挂载要等前一个 context 把写句柄排空关闭），所以本文件不设兜底
  * 释放——多一个「可能已经被释放过」的隐式路径只会让失败点变模糊。
@@ -81,8 +81,8 @@ function assistantSeqs(session: Session): number[] {
 }
 
 /** 推完 {@link SCRIPT} 的会话。 */
-async function drivenSession(id: string, text = 'go') {
-  const lc = await lifecycle(SCRIPT)
+async function drivenSession(id: string, text = 'go', script: readonly ScriptedStep[] = SCRIPT) {
+  const lc = await lifecycle(script)
   registerTool(lc.ctx, 'noop')
   const created = await lc.createSession(id)
   await lc.step(created.agent, text)
@@ -291,9 +291,7 @@ describe('票 02 · 第 8 条：裁剪资格不成立时不写入', () => {
     const before = session.ownEvents().length
     const contentBefore = session.surface.contentGeneration
 
-    // 无资格的历史步骤：本适配器造出的步骤都是 `openai-completions`，所以拿几条**非 assistant/message**
-    // 的 seq 当候选——资格判定对它们给不出可裁结论，与「信封不是 pi-ai」落在同一个分支的同一侧。信封那
-    // 一侧的全部反例由 `qualification.spec.ts` 正面构造，本票断的是「这个结论有没有转成一次落盘」。
+    // 这一支压的是「候选不是已记录的 assistant/message」，走 `recorded.get(target) === undefined`。
     const nonAssistant = session.snapshotEvents()
       .filter(event => event.type !== 'assistant/message')
       .map(event => event.seq)
@@ -305,6 +303,25 @@ describe('票 02 · 第 8 条：裁剪资格不成立时不写入', () => {
     expect(session.ownEvents().some(event => event.type === CARRIER_EVENT_TYPE)).toBe(false)
     // 表面也没动：空记录会污染日志并让闸门 C 的降级判据难以判断。
     expect(session.surface.contentGeneration).toBe(contentBefore)
+    await lc.dispose()
+  })
+
+  it('全部历史步骤的信封都无资格时不落任何事件', async () => {
+    // 票面写死的构造：历史步骤**已记录**、但信封声明的传输不是 `openai-completions`。它与上一条走的是
+    // 不同的判定入口（`isReasoningPrunable(message) === false`，不是 `recorded.get` 落空），所以必须
+    // 单独构造——两条任何一条缺失，`persist.ts` 的资格过滤被删掉时都可能无人发现。
+    const { lc, session } = await drivenSession('ineligible-envelope', 'go', [
+      { reasoning: 'thinking elsewhere', text: 'done', api: 'anthropic-messages' },
+    ])
+
+    const before = session.ownEvents().length
+    const seqs = assistantSeqs(session)
+    expect(seqs.length).toBeGreaterThan(0)
+
+    expect(persistReasoningPrune(session, seqs.map(seq => SessionSeq(seq)))).toBeUndefined()
+
+    expect(session.ownEvents().length).toBe(before)
+    expect(session.ownEvents().some(event => event.type === CARRIER_EVENT_TYPE)).toBe(false)
     await lc.dispose()
   })
 

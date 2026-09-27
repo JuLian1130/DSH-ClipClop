@@ -39,9 +39,14 @@ export interface ScriptedStep {
   readonly text: string
   /** 要发起的工具调用；非空时该步的 turn 不结束。 */
   readonly calls?: readonly { readonly name: string, readonly arguments: string }[]
+  /**
+   * 该步 replay 信封声明的传输。缺省 `openai-completions`（唯一有裁剪资格的传输）；给别的值就造出一条
+   * **信封无资格**的历史步骤——那是「无资格不写入」唯一能正面构造的输入。
+   */
+  readonly api?: string
 }
 
-/** 假传输名。资格判定不解析它，只要求信封带 `api: 'openai-completions'`。 */
+/** 信封里 `api` 的缺省值，也就是唯一有裁剪资格的传输。 */
 const API = 'openai-completions'
 
 /** 本文件创建过的落盘根；`cleanupRoots` 统一删除。 */
@@ -102,7 +107,7 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
         response: {
           kind: 'pi-ai',
           version: 2,
-          api: API,
+          api: step.api ?? API,
           provider: options.provider,
           model: options.model,
           stopReason: 'stop',
