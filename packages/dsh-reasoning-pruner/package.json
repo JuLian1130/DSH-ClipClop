@@ -9,11 +9,17 @@
     ".": {
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
     }
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   },
   "files": [
@@ -21,7 +27,7 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit"
   },
@@ -37,18 +43,63 @@
     "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/dsh-agent": "0.1.7-rc.2",
     "@deepseek-ai/dsh-agent-loop-testkit": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-api-remotes": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-api-session-controller": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-app-boot": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-modules": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-store": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-model-selection": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-session": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-command-compact": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-commands": "0.1.7-rc.2",
     "@deepseek-ai/dsh-compaction-basic": "0.1.7-rc.2",
     "@deepseek-ai/dsh-compaction-tool-result-pruner": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-config-editor": "0.1.7-rc.2",
     "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
     "@deepseek-ai/dsh-llm-deepseek": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-llm-deepseek-api-key": "0.1.7-rc.2",
     "@deepseek-ai/dsh-llm-pi-ai": "0.1.7-rc.2",
     "@deepseek-ai/dsh-session": "0.1.7-rc.2",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-settings": "0.1.7-rc.2",
     "@deepseek-ai/dsh-token-meter": "0.1.7-rc.2",
     "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-util-code-language": "0.1.7-rc.2",
     "@deepseek-ai/dsh-web-search-deepseek": "0.1.7-rc.2",
+    "@shikijs/langs": "4.3.1",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
     "@types/node": "^22.20.3",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "anser": "2.3.5",
+    "clsx": "2.1.1",
+    "diff": "9.0.0",
+    "esbuild": "^0.28.2",
+    "immer": "10.1.1",
+    "jsdom": "27.0.0",
+    "katex": "0.16.47",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm": "3.1.0",
+    "mdast-util-math": "3.0.0",
+    "micromark-core-commonmark": "2.0.3",
+    "micromark-extension-gfm": "3.0.0",
+    "micromark-extension-math": "3.1.0",
+    "micromark-factory-space": "2.0.1",
+    "micromark-util-character": "2.1.1",
+    "micromark-util-classify-character": "2.0.1",
+    "micromark-util-sanitize-uri": "2.0.1",
+    "micromark-util-symbol": "2.0.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "shiki": "4.3.1",
+    "simple-icons": "16.31.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "zustand": "4.4.7"
   }
 }

@@ -22,6 +22,7 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
+import type { Fiber } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
@@ -32,6 +33,7 @@ import { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-sessio
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
 import * as plugin from '../../src/index.ts'
 import { CARRIER_EVENT_TYPE } from '../../src/types.ts'
 import type { Config } from '../../src/types.ts'
@@ -238,6 +240,35 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
   }
 }
 
+/**
+ * `steps` 步的脚本：每一步都发起一次工具调用，收尾交给适配器的 `toolsThrough = steps - 1`，于是这个 turn
+ * 恰好走 `steps` 个步骤、留下 `steps` 条可裁的 assistant 消息。
+ * @param steps - 步数。
+ * @returns 逐步脚本。
+ */
+export function toolCallScript(steps: number): ScriptedStep[] {
+  return Array.from({ length: steps }, (_unused, index) => ({
+    reasoning: `r${index}`,
+    text: `t${index}`,
+    calls: [{ name: 'noop', arguments: '{}' }],
+  }))
+}
+
+/**
+ * 注册 {@link toolCallScript} 用到的那条工具，让脚本里的工具调用能派发。
+ * @param ctx - 夹具的根 context。
+ * @param name - 工具名（脚本里写的是 `noop`）。
+ */
+export function registerTool(ctx: Context, name: string): void {
+  ctx.tools.register({
+    name,
+    description: `${name} tool`,
+    parameters: { type: 'object', properties: {} },
+    output: { schema: {}, render: () => [{ type: 'text', text: 'ok' }] },
+    execute: async () => ({}),
+  })
+}
+
 /** 一条消息内容里可读文本的长度之和（文本块与推理块各算自己的 `text`）。 */
 function textLengthOf(content: readonly ContentBlock[]): number {
   return content.reduce((total, block) => {
@@ -276,6 +307,8 @@ export interface PersistentLifecycle {
   coldRead(id: string): Promise<ColdLog>
   /** 每一次模型调用前记录的一行，按调用顺序（见 {@link LlmCall}）；摘要调用靠 `purpose` 辨认。 */
   readonly calls: readonly LlmCall[]
+  /** 本插件那一行的 fiber（`withPlugin: false` 时为 `undefined`）；06 的「宿主半仍 ACTIVE」读它。 */
+  readonly pluginFiber: Fiber | undefined
   /** 排空写句柄并释放整个 context；**不删落盘根**（重挂载与读原始落盘文本都还要用它）。 */
   dispose(): Promise<void>
 }
@@ -293,8 +326,11 @@ export interface LifecycleOptions {
   readonly toolsThrough?: number
   /** 复用已有落盘根（重挂载时给）。 */
   readonly root?: string
-  /** 传给本插件的配置；缺省走 `Config` 的默认值。 */
-  readonly config?: Partial<Config>
+  /**
+   * 传给本插件的配置；缺省走 `Config` 的默认值。取的是 **schema 的输入类型**（profile patch 里写的形状）：
+   * `volatile` 字段读入普通值、读出稳定引用，两者不是同一个类型。
+   */
+  readonly config?: Schemastery.TypeS<typeof Config>
   /**
    * 在插件装载**之后**、驱动之前被调一次。
    *
@@ -389,6 +425,8 @@ export async function lifecycle(
   // 计量器是 DSH 的正常装配项（compaction-basic 的 `inject` 里就有它），挂上它之后「未注入的插件不激活」
   // 这条原生语义在夹具里才与真实环境一致；本插件自己不读它（② 的节奏由步数决定）。
   await ctx.plugin(TokenMeter)
+  // 06 起本插件的 host 半 inject 了 `commands`（④ 的命令只能在 host 半注册），所以夹具必须挂真的命令表。
+  await ctx.plugin(CommandRuntime)
   const adapter = new ScriptedReasoningAdapter(
     options.ineligible === true
       ? script.map(step => ({ ...step, api: 'anthropic-messages' }))
@@ -415,7 +453,8 @@ export async function lifecycle(
   }
   if (options.toolResultPruner === true) await ctx.plugin(ToolResultPruner)
   if (options.compaction !== undefined) await ctx.plugin(BasicCompactionEngine, { auto: true, ...options.compaction })
-  if (options.withPlugin ?? true) await ctx.plugin(plugin, options.config ?? {})
+  const pluginFiber = (options.withPlugin ?? true) ? ctx.plugin(plugin, options.config ?? {}) : undefined
+  if (pluginFiber !== undefined) await pluginFiber
   options.prepend?.(ctx)
   // 观察面注册在插件**之后**：本插件 prepend，所以本监听器排在它之后跑，取样点即「本步骤的决策已落盘」。
   if (options.onPreStep !== undefined) {
@@ -436,6 +475,7 @@ export async function lifecycle(
   return {
     ctx,
     root,
+    pluginFiber,
     get calls() {
       return adapter.calls
     },

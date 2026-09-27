@@ -1,11 +1,13 @@
 {
-  // 构建配置（tsconfig.json）的 `include` 只有 `src`；类型检查门禁必须同时覆盖 `tests`，否则测试代码
-  // 的漂移不在任何门禁里。包脚本 `typecheck` 指向本文件。
+  // 构建配置（tsconfig.json）的 `include` 只有 `src`、且排除了浏览器半（它由 esbuild 打包）；类型检查门禁
+  // 必须同时覆盖 `src/client` 与 `tests`，否则这两处的漂移不在任何门禁里。包脚本 `typecheck` 指向本文件。
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true,
+    "jsx": "react-jsx",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts"],
+  "exclude": []
 }

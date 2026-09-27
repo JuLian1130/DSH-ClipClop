@@ -5,6 +5,7 @@
  */
 
 import z from '@deepseek-ai/schemastery'
+import type { Volatile } from '@deepseek-ai/cordis'
 import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
 
 /**
@@ -47,10 +48,25 @@ export interface Config {
   everySteps?: number
   /** 最近多少个步骤原样保留、不裁；由闸门 D（任务质量）背书。 */
   keepRecentSteps?: number
+  /**
+   * ④ 手动入口是否可用，默认给出（`交付约束与范围`：手动入口默认给出，由开关控制是否可用）。
+   *
+   * `volatile` 是 settings 写回路径的硬要求（写入拒绝非 volatile 路径），也是浏览器半读当前值的通路。
+   * 它**只管 ④**：① 与 ② 是默认开启的自动路径，不由本字段控制。
+   */
+  manualPrune?: Volatile<boolean>
 }
 
-/** 配置 schema：字段全部可选并在装载时解析成默认值，非法值在装载阶段大声失败。 */
-export const Config: z<Config, Required<Config>> = z.object({
+/**
+ * 配置 schema：字段全部可选并在装载时解析成默认值，非法值在装载阶段大声失败。
+ *
+ * **不写 `z<Config, Required<Config>>` 注解**：`volatile` 字段读入的是普通值（profile patch 里写
+ * `manualPrune: false`），读出的是稳定引用（`apply` 里 `config.manualPrune.get()`），两者是不同类型；照
+ * 出厂先例（`packages/client/ui-settings/src/index.ts`）让 schema 自己推断，`Config` 接口只描述 `apply`
+ * 收到的形状。
+ */
+export const Config = z.object({
   everySteps: z.number().step(1).min(1).default(50),
   keepRecentSteps: z.number().step(1).min(0).default(10),
+  manualPrune: z.boolean().default(true).volatile(),
 })

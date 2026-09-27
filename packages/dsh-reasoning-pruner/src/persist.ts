@@ -25,6 +25,12 @@ import { isReasoningPrunable } from './replay.ts'
 import { CARRIER_EVENT_TYPE } from './types.ts'
 import type { Config, ReasoningPrunePayload } from './types.ts'
 
+/**
+ * 选区与节流只读这两个数值参数：④ 的开关（`manualPrune`）与它们无关，所以这里的入参不要求调用方凑齐整个
+ * 配置——`apply` 收到的完整配置结构上满足它。
+ */
+type PruneParameters = Pick<Required<Config>, 'everySteps' | 'keepRecentSteps'>
+
 /** 一条已记录的 `assistant/message` 的 seq 与消息，按 seq 增序。 */
 function recordedAssistantMessages(session: Session): Map<SessionSeq, AssistantMessage> {
   const recorded = new Map<SessionSeq, AssistantMessage>()
@@ -119,11 +125,37 @@ function sessionStepNumber(session: Session): number {
  * @param config - 已解析的配置。
  * @returns 本批应裁的 seq，按 seq 升序；没有可推进的步骤时为空数组。
  */
-export function pruneTargetsAtStep(session: Session, config: Required<Config>): SessionSeq[] {
+export function pruneTargetsAtStep(session: Session, config: PruneParameters): SessionSeq[] {
+  return candidateTargets(session, config.keepRecentSteps)
+}
+
+/**
+ * 激活点④ 的选区：与 ② 同一条候选口径，但**不设保留窗口**。
+ *
+ * `K`（最近几个步骤不裁）是 ② 的参数（规格把它与 `M` 一起定义在 ② 名下）；④ 是用户当场要求的动作，不再
+ * 按步数打折。资格判定不在选区内，仍由 {@link persistReasoningPrune} 逐步骤强制。
+ * @param session - 会话。
+ * @returns 本批应裁的 seq，按 seq 升序；没有可裁步骤时为空数组。
+ */
+export function pruneTargetsAtCommand(session: Session): SessionSeq[] {
+  return candidateTargets(session, 0)
+}
+
+/**
+ * 两个激活点共用的候选口径：已记录步骤里第 `keep` 个之前、仍是当前表面节点、且尚未裁过的那些。
+ *
+ * 已裁过的不再返回（单向性的实现面，`边界只能向新推进`）；已不是当前表面节点的也不再返回——被摘要
+ * （`surfaceOp: 'replace'`）遮蔽过的步骤若进了 `targets`，投影校验会在 `append` 时当场抛
+ * （`target seq N is not a current surface node`）。
+ * @param session - 会话。
+ * @param keep - 保留窗口 `K`；`0` 表示不设窗口。
+ * @returns 本批应裁的 seq，按 seq 升序。
+ */
+function candidateTargets(session: Session, keep: number): SessionSeq[] {
   const recorded = [...recordedAssistantMessages(session).keys()].sort((a, b) => a - b)
   const pruned = readPrunedSteps(session)
   const nodes = new Set<SessionSeq>(session.surface.nodes)
-  const firstKept = firstKeptIndex(recorded.length, config.keepRecentSteps)
+  const firstKept = firstKeptIndex(recorded.length, keep)
   return recorded.filter((seq, index) => index < firstKept && nodes.has(seq) && !pruned.has(seq))
 }
 
@@ -140,7 +172,7 @@ export function pruneTargetsAtStep(session: Session, config: Required<Config>): 
 function advanceBoundary(
   session: Session,
   signal: AbortSignal,
-  config: Required<Config>,
+  config: PruneParameters,
 ): SessionSeq | undefined {
   if (signal.aborted) return undefined
   return persistReasoningPrune(session, pruneTargetsAtStep(session, config))
@@ -161,7 +193,7 @@ function advanceBoundary(
 export function pruneAtStepBoundary(
   session: Session,
   signal: AbortSignal,
-  config: Required<Config>,
+  config: PruneParameters,
 ): SessionSeq | undefined {
   if (sessionStepNumber(session) % config.everySteps !== 0) return undefined
   return advanceBoundary(session, signal, config)
@@ -181,7 +213,7 @@ export function pruneAtStepBoundary(
 export function pruneAtRequestError(
   session: Session,
   signal: AbortSignal,
-  config: Required<Config>,
+  config: PruneParameters,
 ): SessionSeq | undefined {
   return advanceBoundary(session, signal, config)
 }

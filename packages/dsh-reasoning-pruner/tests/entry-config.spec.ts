@@ -12,6 +12,7 @@
 import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, ValidationError } from '@deepseek-ai/cordis'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
 import SessionStore from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import { Config, inject, name, reasoningPrunerProjection } from '../src/index.ts'
@@ -26,11 +27,12 @@ afterEach(async () => {
   await Promise.all(contexts.splice(0).map(async (ctx) => { await ctx.fiber.dispose() }))
 })
 
-/** 挂真实 `SessionStore`：投影注册走真实服务，装载结果用公开面读。 */
+/** 挂真实 `SessionStore` 与命令表：投影注册与 ④ 的命令注册都走真实服务，装载结果用公开面读。 */
 async function mountSessionStore(): Promise<Context> {
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(SessionStore)
+  await ctx.plugin(CommandRuntime)
   return ctx
 }
 
@@ -40,7 +42,7 @@ async function mountSessionStore(): Promise<Context> {
  * @param config - 装载配置。
  * @returns fiber 与 rejection 的原因；装载成功时原因为 `undefined`。
  */
-async function load(ctx: Context, config: Config) {
+async function load(ctx: Context, config: Schemastery.TypeS<typeof Config>) {
   const fiber = ctx.plugin(plugin, config)
   const error = await fiber.then(() => undefined, (reason: unknown) => reason)
   return { fiber, error }
@@ -52,6 +54,8 @@ describe('插件入口', () => {
     expect(typeof plugin.apply).toBe('function')
     expect(Config).toBeDefined()
     expect(inject).toContain('sessions')
+    // ④ 的命令只能在 host 半注册（承载事件要落进会话日志）：未 inject 就读 `ctx.commands` 会抛。
+    expect(inject).toContain('commands')
   })
 })
 
@@ -64,10 +68,17 @@ describe('配置契约', () => {
     expect(ctx.sessions.messageProjections).toEqual([reasoningPrunerProjection])
   })
 
-  it('显式取值可覆盖默认值', async () => {
+  it('显式取值可覆盖默认值，且 ④ 的开关默认给出', async () => {
     const ctx = await mountSessionStore()
     const { fiber } = await load(ctx, { everySteps: 7, keepRecentSteps: 3 })
-    expect(fiber.config).toEqual({ everySteps: 7, keepRecentSteps: 3 })
+    expect(fiber.config).toMatchObject({ everySteps: 7, keepRecentSteps: 3 })
+    expect(fiber.config?.manualPrune.get()).toBe(true)
+  })
+
+  it('④ 的开关可以显式关掉（volatile 引用，装载后按它读）', async () => {
+    const ctx = await mountSessionStore()
+    const { fiber } = await load(ctx, { manualPrune: false })
+    expect(fiber.config?.manualPrune.get()).toBe(false)
   })
 
   it('M 为 0 时在装载阶段失败，不静默回落到默认值', async () => {
@@ -91,10 +102,12 @@ describe('配置契约', () => {
   it('直接调用 apply 时的重复校验同样大声失败', () => {
     const ctx = new Context()
     contexts.push(ctx)
-    expect(() => plugin.apply(ctx, { everySteps: 0, keepRecentSteps: 10 })).toThrow(
+    // 直接调用要传 loader 解析后的形状；这两次都在读到开关之前就抛，所以引用给一个恒真的替身即可。
+    const manualPrune = { get: () => true }
+    expect(() => plugin.apply(ctx, { everySteps: 0, keepRecentSteps: 10, manualPrune })).toThrow(
       /dsh-reasoning-pruner: everySteps must be an integer >= 1, got 0/,
     )
-    expect(() => plugin.apply(ctx, { everySteps: 50, keepRecentSteps: -1 })).toThrow(
+    expect(() => plugin.apply(ctx, { everySteps: 50, keepRecentSteps: -1, manualPrune })).toThrow(
       /dsh-reasoning-pruner: keepRecentSteps must be an integer >= 0, got -1/,
     )
   })

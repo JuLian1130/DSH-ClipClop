@@ -14,6 +14,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -70,6 +71,8 @@ describe('宿主事件安全穿过投影，但它推进 contentGeneration 的代
     contexts.push(ctx)
     await mountAgentLoopTestDependencies(ctx)
     ctx.llm.registerAdapter(['mock'], new TextAdapter())
+    // 06 起 host 半还 inject 了 `commands`（④ 的命令），装上它插件才会激活、投影才会注册。
+    await ctx.plugin(CommandRuntime)
     await ctx.plugin(plugin, { everySteps: 50, keepRecentSteps: 10 })
     const harness = await mountAgentLoopTestHarness(ctx)
     const agent = await harness.create(SessionId('host-event-passthrough'), { provider: 'mock', model: 'mock' })

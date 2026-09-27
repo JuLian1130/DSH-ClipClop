@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore from '@deepseek-ai/dsh-session'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
@@ -431,10 +432,14 @@ describe('票 03 · 第 9 条：M/K 的保守默认、可装载、可覆盖', ()
     // 走**真的装载路径**：`Config` schema 在服务就绪时解析出默认值，`fiber.config` 是装载后的取值。
     const ctx = new Context()
     await ctx.plugin(SessionStore)
+    // 06 起 host 半还 inject 了 `commands`（④ 的命令），装载路径上少一个服务它就不激活。
+    await ctx.plugin(CommandRuntime)
     const fiber = ctx.plugin(plugin, {})
     await fiber
     // 默认值必须**偏大**（少干活、少伤质量），且本次实现选定的具体数字要写出来：07 的实测据此收紧。
-    expect(fiber.config).toEqual({ everySteps: 50, keepRecentSteps: 10 })
+    expect(fiber.config).toMatchObject({ everySteps: 50, keepRecentSteps: 10 })
+    // ④ 的开关默认给出（`交付约束与范围`：手动入口默认给出，由开关控制是否可用）。
+    expect(fiber.config?.manualPrune.get()).toBe(true)
     // 不变式：第 M 步时已有 M-1 条已记录步骤，减掉保留窗口 K 必须为正，也就是 M ≥ K + 2。
     expect(fiber.config.everySteps).toBeGreaterThanOrEqual(fiber.config.keepRecentSteps + 2)
     await ctx.fiber.dispose()

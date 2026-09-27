@@ -4,5 +4,8 @@
     "outDir": "lib",
     "rootDir": "src"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // 浏览器半由 esbuild 打成一个闭包工厂产物（`scripts/build-client.mjs`），不走 tsc 直出 `lib/`；它的类型由
+  // `tsconfig.typecheck.json` 覆盖。
+  "exclude": ["src/client/**"]
 }

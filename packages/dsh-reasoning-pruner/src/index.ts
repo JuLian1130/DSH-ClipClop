@@ -2,11 +2,12 @@
  * dsh-reasoning-pruner 的 Cordis 插件入口：具名导出 `name`、`inject`、`Config`、`apply`，按 DSH 原生
  * 插件写法由 profile 的 `cordis.patch.yml` 装载。
  *
- * 本插件当前交付 01（基座）、02（落盘通路与投影消费）、03（激活点②：按步数节流批量推进）与 05（激活
- * 点①：溢出救援）。装载后的动作是三件：为承载类型注册消息投影，在 `agent/pre-step` 上按**会话级步数**
- * （日志里的 `step/start` 条数，不是载荷 `step`——后者每 turn 从 1 重数）的 `M` 的整数倍推进一次裁剪
- * 边界，以及在 `agent/request-error` 上对 `CONTEXT_WINDOW_EXCEEDED` 做一次溢出救援。④（命令与开关）在
- * 后续票据里追加。
+ * 本插件当前交付 01（基座）、02（落盘通路与投影消费）、03（激活点②：按步数节流批量推进）、05（激活
+ * 点①：溢出救援）与 06（激活点④：手动命令入口与主界面开关）。装载后的动作是四件：为承载类型注册消息
+ * 投影，在 `agent/pre-step` 上按**会话级步数**（日志里的 `step/start` 条数，不是载荷 `step`——后者每
+ * turn 从 1 重数）的 `M` 的整数倍推进一次裁剪边界，在 `agent/request-error` 上对
+ * `CONTEXT_WINDOW_EXCEEDED` 做一次溢出救援，以及注册 ④ 的插件自有命令。主界面开关是 ④ 的另一半，
+ * 在浏览器半（`src/client/`）——它只控制这个命令的可用性，不参与 ①/②。
  *
  * 注册投影有一条不可避免的代价，记在这里以免被当成缺陷：投影命中就推进 `contentGeneration`
  * （与投影返回什么无关），而承载类型是宿主自己也在写的类型，所以**宿主每产生一条该类型事件**，下一步
@@ -15,17 +16,19 @@
  *
  * **裁剪不降低 `tokenMeter.measure()` 的读数**：计量器按原始表面事件定价、不读投影，表现是「省了钱、
  * 界面上的上下文占比不动」。② 的节奏因此只能由本插件自己的步数口径决定，见 `pruneAtStepBoundary`；
- * ① 没有节奏问题（失败本身就是触发器），但它同样不改变这个读数。
+ * ① 与 ④ 没有节奏问题，但它们同样不改变这个读数。
  *
  * @module
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { PreStepDecision, RequestErrorAction } from '@deepseek-ai/dsh-agent'
+import type { CommandResult } from '@deepseek-ai/dsh-commands'
 import { CONTEXT_WINDOW_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
-// 显式引入服务包，让本文件的 `ctx.sessions` 类型不依赖 projection.ts 的偶然 import 链。
+// 显式引入服务包，让本文件的 `ctx.sessions` / `ctx.commands` 类型不依赖 projection.ts 的偶然 import 链。
 import type {} from '@deepseek-ai/dsh-session'
-import { pruneAtRequestError, pruneAtStepBoundary } from './persist.ts'
+import type {} from '@deepseek-ai/dsh-commands'
+import { persistReasoningPrune, pruneAtRequestError, pruneAtStepBoundary, pruneTargetsAtCommand } from './persist.ts'
 import { reasoningPrunerProjection } from './projection.ts'
 import type { Config } from './types.ts'
 
@@ -36,13 +39,25 @@ export * from './persist.ts'
 
 export const name = 'dsh-reasoning-pruner'
 
-/**
- * 消息投影注册与步进触发所需的唯一服务。后续票据只**追加**自己需要的服务，不改本票已定的这一项。
- */
-export const inject = ['sessions']
+/** ④ 的命令名（不带斜杠）。与内建 `/compact` 不同名，也不得同名——见设计文档「激活点 ④」。 */
+export const MANUAL_COMMAND_NAME = 'prune-reasoning'
+
+/** 开关关闭时命令的拒绝文案：入口已被用户关掉，所以命令拒绝执行（一个事件都不落）。 */
+const MANUAL_DISABLED = 'Manual reasoning pruning is turned off by the main-interface switch.'
+
+/** 没有任何历史步骤通过裁剪资格时命令的答复（与「开关关闭」不同：这是正常结局）。 */
+const MANUAL_NOTHING = 'No historical step qualified for reasoning pruning.'
 
 /**
- * 校验配置、注册裁剪投影，并把 ② 挂到 `agent/pre-step`、① 挂到 `agent/request-error` 上。
+ * 消息投影注册、步进触发与 ④ 命令所需的全部服务。
+ *
+ * `commands` 是核心 host 服务，且 ④ 的命令只能在 host 半注册（承载事件要落进会话日志）：未 inject 就
+ * 读 `ctx.commands` 会抛 `cannot get property … without inject`。
+ */
+export const inject = ['sessions', 'commands']
+
+/**
+ * 校验配置、注册裁剪投影，把 ② 挂到 `agent/pre-step`、① 挂到 `agent/request-error` 上，并注册 ④ 的命令。
  *
  * 两处的 `prepend` 都是判据的全部内容：裁剪必须在 compaction-basic 自己测量/选区**之前**落盘，否则被裁
  * 的区间可能已经被摘要遮蔽。`{ prepend: true }` 走 `unshift`（`@deepseek-ai/cordis` 的
@@ -50,7 +65,7 @@ export const inject = ['sessions']
  *
  * 三处挂点都复用同一套选区与写入（`persist.ts`），配置边界在这里重复一次（与 `Config` schema 同一套）：
  * schema 只在装载路径上生效，绕过 loader 直接调用 `apply` 的路径同样必须大声失败，不做静默回退。
- * @param ctx - 插件的 context；`sessions` 已就绪。
+ * @param ctx - 插件的 context；`sessions` 与 `commands` 已就绪。
  * @param config - 解析后的配置。
  * @throws 配置越界时，错误信息点名越界的字段与取值。
  */
@@ -73,6 +88,20 @@ export function apply(ctx: Context, config: Required<Config>): void {
     if (failure.code === CONTEXT_WINDOW_EXCEEDED_CODE) pruneAtRequestError(agent.session, signal, config)
     return next()
   }, { prepend: true })
+  // ④ 手动入口：立刻对本会话做一次裁剪。选区不设保留窗口（`K` 是 ② 的参数），资格判定仍由
+  // `persistReasoningPrune` 逐步骤强制——界面开关只管这个入口可不可用，不是安全保证。
+  // 名称与内建 `/compact` 不同：命令表按名字插入、重名直接抛，劫持还要复制它的文案与错误映射。
+  ctx.effect(() => ctx.commands.register({
+    name: MANUAL_COMMAND_NAME,
+    description: 'Prune reasoning blocks from this session\'s historical steps',
+    handler: ({ agent }): CommandResult => {
+      if (!config.manualPrune.get()) return { kind: 'error', text: MANUAL_DISABLED }
+      const seq = persistReasoningPrune(agent.session, pruneTargetsAtCommand(agent.session))
+      return seq === undefined
+        ? { kind: 'success', text: MANUAL_NOTHING }
+        : { kind: 'success', text: 'Pruned reasoning from this session\'s historical steps.', sourceEventSeq: seq }
+    },
+  }), 'dsh-reasoning-pruner: manual command')
 }
 
 /**
