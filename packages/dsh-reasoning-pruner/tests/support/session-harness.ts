@@ -68,16 +68,21 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
   /**
    * @param script - 逐步脚本；最后一段在脚本用完后重复。
    * @param toolsThrough - 前多少次模型调用发起工具调用；之后一律纯文本收尾，让 turn 有界。
+   * @param stepApi - 按模型调用下标逐次覆盖信封声明的传输；最后一个元素在数组用完后重复。用来在**同一个
+   *   会话**里混用有资格与无资格的传输——`ineligible` 只能把每一步都改成无资格，造不出「中途换模型」。
    */
   constructor(
     private readonly script: readonly ScriptedStep[],
     private readonly toolsThrough?: number,
+    private readonly stepApi?: readonly string[],
   ) {
     super()
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     let step = this.script[Math.min(this.call, this.script.length - 1)]
+    const api = this.stepApi?.[Math.min(this.call, this.stepApi.length - 1)]
+    if (api !== undefined) step = { ...step, api }
     this.call += 1
     // 有界 turn：第 `toolsThrough` 次模型调用之后不再发起工具调用，于是该 turn 在
     // `toolsThrough + 1` 步收尾。这是「驱动到恰好第 N 步」唯一不依赖时序的写法——`agent/pre-step`
@@ -206,6 +211,12 @@ export interface LifecycleOptions {
    */
   readonly ineligible?: boolean
   /**
+   * 按模型调用下标逐次覆盖信封声明的传输（见 {@link ScriptedReasoningAdapter} 的 `stepApi`）。
+   *
+   * 「中途换模型只裁有资格的那些步骤」唯一能正面构造的输入：`ineligible` 是全有或全无。
+   */
+  readonly stepApi?: readonly string[]
+  /**
    * 每个 `agent/pre-step` 载荷的观察面，在**本插件的监听器跑完之后**被调一次。
    *
    * 这是「恰好在第 N 步落盘」唯一可判断的取样点：本插件以 `prepend` 注册，所以本回调注册得比它晚、在
@@ -239,6 +250,7 @@ export async function lifecycle(
       ? script.map(step => ({ ...step, api: 'anthropic-messages' }))
       : script,
     options.toolsThrough,
+    options.stepApi,
   ))
   if (options.beforePlugin !== undefined) await options.beforePlugin(ctx)
   if (options.withPlugin ?? true) await ctx.plugin(plugin, options.config ?? {})
