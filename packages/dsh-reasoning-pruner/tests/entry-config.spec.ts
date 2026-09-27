@@ -105,4 +105,14 @@ describe('前置：承载类型的宿主包可解析', () => {
     const require = createRequire(import.meta.url)
     expect(require.resolve('@deepseek-ai/dsh-web-search-deepseek/package.json')).toMatch(/dsh-web-search-deepseek/)
   })
+
+  it('@deepseek-ai/dsh-compaction-basic 与 @deepseek-ai/dsh-token-meter 从本包解析得到（03 第 7 条观测顺序的前置）', () => {
+    // 本仓根**没有** `node_modules/@deepseek-ai/` 这一层：这些包只作为 `dsh` / `dsh-web-app` / `dsh-base`
+    // 的传递依赖存在于 `node_modules/.pnpm/**` 下，而 hoist 目录 `.pnpm/node_modules/` 不在本包的模块解析
+    // 路径上——从 `packages/` 下实测 `require.resolve('@deepseek-ai/dsh-compaction-basic/package.json')`
+    // 为 MISS。所以它必须是本包显式的 devDependency，否则第 7 条只剩「注册成功」可断。
+    const require = createRequire(import.meta.url)
+    expect(require.resolve('@deepseek-ai/dsh-compaction-basic/package.json')).toMatch(/dsh-compaction-basic/)
+    expect(require.resolve('@deepseek-ai/dsh-token-meter/package.json')).toMatch(/dsh-token-meter/)
+  })
 })

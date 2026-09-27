@@ -24,12 +24,15 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { createUserMessage, LlmAdapter, ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
-import { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import { createUserMessage, LlmAdapter, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { AssistantMessage, ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import * as plugin from '../../src/index.ts'
+import { CARRIER_EVENT_TYPE } from '../../src/types.ts'
+import type { Config } from '../../src/types.ts'
 
 /** 脚本每一步的产出；`calls` 为空时该步以纯文本收尾。 */
 export interface ScriptedStep {
@@ -62,14 +65,26 @@ const createdRoots: string[] = []
 export class ScriptedReasoningAdapter extends LlmAdapter {
   private call = 0
 
-  /** @param script - 逐步脚本；最后一段在脚本用完后重复。 */
-  constructor(private readonly script: readonly ScriptedStep[]) {
+  /**
+   * @param script - 逐步脚本；最后一段在脚本用完后重复。
+   * @param toolsThrough - 前多少次模型调用发起工具调用；之后一律纯文本收尾，让 turn 有界。
+   */
+  constructor(
+    private readonly script: readonly ScriptedStep[],
+    private readonly toolsThrough?: number,
+  ) {
     super()
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    const step = this.script[Math.min(this.call, this.script.length - 1)]
+    let step = this.script[Math.min(this.call, this.script.length - 1)]
     this.call += 1
+    // 有界 turn：第 `toolsThrough` 次模型调用之后不再发起工具调用，于是该 turn 在
+    // `toolsThrough + 1` 步收尾。这是「驱动到恰好第 N 步」唯一不依赖时序的写法——`agent/pre-step`
+    // 正好在第 N 次请求之前发出，而该请求就是收尾那一次。
+    if (this.toolsThrough !== undefined && this.call > this.toolsThrough) {
+      step = { ...step, calls: [] }
+    }
 
     const blocks: ContentBlock[] = []
     if (step.reasoning !== undefined) blocks.push({ type: 'reasoning', text: step.reasoning })
@@ -138,7 +153,13 @@ export interface PersistentLifecycle {
   /** 该生命周期的落盘根；`remount` 用它换取一次真的重挂载。 */
   readonly root: string
   /** 建一条真实会话；`id` 是它在落盘根里的身份，也是重挂载时的入口。 */
-  createSession(id: string): Promise<{ agent: Agent, session: Session }>
+  /**
+   * 建一条会话；`id` 是它在落盘根里的身份。同一落盘根里 `id` 只能用一次。
+   *
+   * `resume` 为真时走 `ctx.agents.resume`，把**已落盘的同名会话装回来**再驱动（
+   * `agentLoop.create` 对已有同 id 的工件会抛 `SessionAlreadyExistsError`，不是恢复入口）。
+   */
+  createSession(id: string, options?: { readonly resume?: boolean }): Promise<{ agent: Agent, session: Session }>
   /** 推进一个 turn（一条真实用户消息 + 等它收尾）。 */
   step(agent: Agent, text: string): Promise<void>
   /** 冷读落盘的日志；未装载插件时也走这条路径。 */
@@ -147,24 +168,80 @@ export interface PersistentLifecycle {
   dispose(): Promise<void>
 }
 
+/** {@link lifecycle} 的可选项。 */
+export interface LifecycleOptions {
+  /** 关闭本插件，用来构造「未装载插件的读者」。 */
+  readonly withPlugin?: boolean
+  /**
+   * 前多少次模型调用发起工具调用；之后一律纯文本收尾，于是该 turn 在 `toolsThrough + 1` 步结束。
+   *
+   * 「驱动到恰好第 N 步」的判据就是这个：第 N 次 `agent/pre-step` 正好在第 N 次请求之前，而第 N 次请求
+   * 就是收尾那一次。不设时脚本的 `calls` 说了算（与 02 的夹具一致）。
+   */
+  readonly toolsThrough?: number
+  /** 复用已有落盘根（重挂载时给）。 */
+  readonly root?: string
+  /** 传给本插件的配置；缺省走 `Config` 的默认值。 */
+  readonly config?: Partial<Config>
+  /**
+   * 在插件装载**之后**、驱动之前被调一次，用来注册 `prepend` 观察面。
+   *
+   * 位置是有意的：`ctx.on` 的 `{prepend: true}` 走 `unshift`，**后注册的排在队首**，所以在这里注册的
+   * 监听器会跑在本插件与 compaction-basic 之前——这正是「本插件处理之前」的取样点。
+   */
+  readonly prepend?: (ctx: Context) => void
+  /**
+   * 让每一步的信封都声明一个**没有裁剪资格**的传输（`api !== 'openai-completions'`）。
+   *
+   * 这是「到点但无可裁步骤 ⇒ 零写入」唯一能正面构造的输入：触发节奏照旧，只是写入侧的资格闸门把每一批
+   * 都拦成空集。
+   */
+  readonly ineligible?: boolean
+  /**
+   * 每个 `agent/pre-step` 载荷的观察面，在**本插件的监听器跑完之后**被调一次。
+   *
+   * 这是「恰好在第 N 步落盘」唯一可判断的取样点：本插件以 `prepend` 注册，所以本回调注册得比它晚、在
+   * 它之后跑；而它又比后续（非 prepend）的同侪早，因此观察到的正是「本步骤的裁剪决策已落盘、批次事件尚未
+   * 出现」那一刻。给的是载荷本身，用例自己决定记什么。
+   */
+  readonly onPreStep?: (payload: { step: number, turn: number, session: Session }) => void
+}
+
 /**
  * 创建独立落盘根并挂载一整条真实链路。
  *
  * `withPlugin` 为 false 时**不装载本插件**，用来构造「未装载插件的读者」。
  * @param script - 适配器的脚本。
- * @param options - `withPlugin` 关闭本插件；`root` 复用已有落盘根（重挂载时给）。
+ * @param options - 见 {@link LifecycleOptions}。
  * @returns 该生命周期的能力对象。
  */
 export async function lifecycle(
   script: readonly ScriptedStep[],
-  options: { readonly withPlugin?: boolean, readonly root?: string } = {},
+  options: LifecycleOptions = {},
 ): Promise<PersistentLifecycle> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), 'dsh-reasoning-pruner-'))
   createdRoots.push(root)
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
-  ctx.llm.registerAdapter(['mock'], new ScriptedReasoningAdapter(script))
-  if (options.withPlugin ?? true) await ctx.plugin(plugin, {})
+  // 计量器是 DSH 的正常装配项（compaction-basic 的 `inject` 里就有它），挂上它之后「未注入的插件不激活」
+  // 这条原生语义在夹具里才与真实环境一致；本插件自己不读它（② 的节奏由步数决定）。
+  await ctx.plugin(TokenMeter)
+  ctx.llm.registerAdapter(['mock'], new ScriptedReasoningAdapter(
+    options.ineligible === true
+      ? script.map(step => ({ ...step, api: 'anthropic-messages' }))
+      : script,
+    options.toolsThrough,
+  ))
+  if (options.withPlugin ?? true) await ctx.plugin(plugin, options.config ?? {})
+  options.prepend?.(ctx)
+  // 观察面注册在插件**之后**：本插件 prepend，所以本监听器排在它之后跑，取样点即「本步骤的决策已落盘」。
+  if (options.onPreStep !== undefined) {
+    const observe = options.onPreStep
+    ctx.on('agent/pre-step', ({ agent, step, turn }, next) => {
+      observe({ step, turn, session: agent.session })
+      return next()
+    })
+  }
   // 后端必须**先于 loop** 挂载：活会话的写缓冲只在后端自己的 teardown effect 里排空（`session/disposed`
   // 只丢路由、不排空），而 Cordis 按挂载顺序的逆序拆卸。后端先挂 ⇒ loop 先退场 ⇒ 后端排空时写句柄
   // 还在。反过来挂会**静默丢盘**：loop 先退场关掉会话，后端再排空时路由已经没了。
@@ -176,7 +253,15 @@ export async function lifecycle(
   return {
     ctx,
     root,
-    async createSession(id) {
+    async createSession(id, sessionOptions) {
+      if (sessionOptions?.resume === true) {
+        const handle = await ctx.agents.resume({
+          resumeSessionId: SessionId(id),
+          agentOptions: { provider: 'mock', model: 'mock' },
+        })
+        sessions.push(handle.agent.session)
+        return { agent: handle.agent, session: handle.agent.session }
+      }
       const agent = await harness.create(SessionId(id), { provider: 'mock', model: 'mock' })
       sessions.push(agent.session)
       return { agent, session: agent.session }
@@ -223,7 +308,7 @@ export async function cleanupRoots(): Promise<void> {
 export function remount(
   root: string,
   script: readonly ScriptedStep[],
-  options: { readonly withPlugin?: boolean } = {},
+  options: LifecycleOptions = {},
 ): Promise<PersistentLifecycle> {
   return lifecycle(script, { ...options, root })
 }
@@ -254,6 +339,128 @@ export function reasoningTexts(session: Session): string[] {
         .map(block => block.text)
       : [],
   )
+}
+
+/** 一条已记录的 `assistant/message` 的 seq 与它携带的推理块文本。 */
+export interface RecordedAssistant {
+  readonly seq: number
+  readonly reasoning: string
+}
+
+/**
+ * 已记录的 `assistant/message`，按 seq 升序，带各自的推理块文本。
+ *
+ * 读的是**日志里的消息**（不是模型可见历史）——用例要靠它算出「本批应裁哪些 seq」，拿被投影改过的历史
+ * 去算就成循环论证了。
+ * @param session - 会话。
+ * @returns 每条已记录 assistant 消息的 seq 与推理文本（无推理块时为空串）。
+ */
+export function recordedAssistants(session: Session): RecordedAssistant[] {
+  return session.snapshotEvents()
+    .filter((event): event is SessionEvent<'assistant/message'> => event.type === 'assistant/message')
+    .map(event => ({
+      seq: event.seq,
+      reasoning: event.data.message.content
+        .filter((block): block is Extract<ContentBlock, { type: 'reasoning' }> => block.type === 'reasoning')
+        .map(block => block.text)
+        .join(''),
+    }))
+}
+
+/** 一条已落盘的裁剪决策。 */
+export interface PersistedPrune {
+  /** 承载事件自己的 seq。 */
+  readonly seq: number
+  /** 该决策声明要裁剪的历史步骤，按 seq 升序。 */
+  readonly targets: readonly number[]
+}
+
+/**
+ * 本插件已落盘的裁剪决策，按事件 seq 升序。
+ *
+ * 只认顶层带 `clipclop` 键的事件——宿主自己的同类型事件必须不出现在这里（那正是 02 的判别规则）。
+ * @param session - 会话。
+ * @returns 每条决策的承载事件 seq 与 `targets`。
+ */
+export function persistedPrunes(session: Session): PersistedPrune[] {
+  return session.snapshotEvents()
+    .filter(event => event.type === CARRIER_EVENT_TYPE)
+    .map(event => ({ seq: event.seq, data: event.data as unknown }))
+    .filter(entry => typeof entry.data === 'object' && entry.data !== null && 'clipclop' in entry.data)
+    .map((entry) => {
+      const envelope = (entry.data as { clipclop: { targets: number[] } }).clipclop
+      return { seq: entry.seq, targets: envelope.targets }
+    })
+}
+
+/**
+ * 只满足触发选区所需的**最小会话面**（`snapshotEvents` / `ownEvents` / `inheritedEventCount` /
+ * `append`）。
+ *
+ * 它让「已裁集合从日志重建」与「保留窗口」这类**线性推进**可以在没有 agent loop 的情况下直接构造：真夹具
+ * 里走到第 12 步要真的驱动 12 步，而这几条判据的对象是纯函数。造出来的 assistant 消息带 `pi-ai` +
+ * `openai-completions` 信封，也就是唯一有裁剪资格的输入。
+ */
+export interface FakeSession {
+  readonly events: SessionEvent[]
+  snapshotEvents(from?: number, toExclusive?: number): readonly SessionEvent[]
+  ownEvents(): readonly SessionEvent[]
+  readonly inheritedEventCount: number
+  append(type: string, data: unknown): { readonly seq: number }
+}
+
+/**
+ * 造一个最小会话，内含 `steps.length` 条有裁剪资格的已记录 `assistant/message`。
+ * @param steps - 每步的推理与文本。
+ * @returns 最小会话面；需要真 `Session` 时由用例自己断言转换。
+ */
+export function fakeSession(steps: readonly { readonly reasoning: string, readonly text: string }[]): FakeSession {
+  const events: SessionEvent[] = []
+  let seq = 0
+  for (const step of steps) {
+    const content: ContentBlock[] = [
+      { type: 'reasoning', text: step.reasoning },
+      { type: 'text', text: step.text },
+    ]
+    const message: AssistantMessage = {
+      id: MessageId(`assistant-${seq}`),
+      role: 'assistant',
+      content,
+      source: {
+        kind: 'model',
+        provider: 'deepseek',
+        model: 'deepseek-v4-flash',
+        replayState: {
+          response: { kind: 'pi-ai', version: 2, api: 'openai-completions', provider: 'deepseek', model: 'deepseek-v4-flash', stopReason: 'stop' },
+          blocks: [{ type: 'reasoning', thinkingSignature: 'sig-think' }, { type: 'text', textSignature: 'sig-text' }],
+        },
+      },
+    }
+    events.push({
+      type: 'assistant/message',
+      seq: SessionSeq(seq),
+      time: 0,
+      data: { turn: 1, step: seq + 1, message, stream: [] },
+      surfaceOp: 'append',
+    } as SessionEvent)
+    seq += 1
+  }
+  return {
+    events,
+    snapshotEvents(from = 0, toExclusive = events.length) {
+      return events.slice(from, toExclusive)
+    },
+    ownEvents() {
+      return events
+    },
+    inheritedEventCount: SessionLogOffset(0),
+    append(type: string, data: unknown) {
+      const event = { type, seq: SessionSeq(seq), time: 0, data } as SessionEvent
+      events.push(event)
+      seq += 1
+      return event
+    },
+  }
 }
 
 /**

@@ -2,20 +2,26 @@
  * dsh-reasoning-pruner 的 Cordis 插件入口：具名导出 `name`、`inject`、`Config`、`apply`，按 DSH 原生
  * 插件写法由 profile 的 `cordis.patch.yml` 装载。
  *
- * 本票只交付基座（资格判定、裁剪算子、投影、配置），**不接任何激活点**：装载后唯一的动作是为承载类型
- * 注册消息投影，因此单独 demo 不出用户可见的裁剪行为。触发、落盘与命令入口在后续票据里追加。
+ * 本插件当前交付 01（基座）、02（落盘通路与投影消费）与 03（激活点②：按步数节流批量推进）。装载后的
+ * 动作是两件：为承载类型注册消息投影，以及在 `agent/pre-step` 上按 `M` 的整数倍推进一次裁剪边界。①（溢出
+ * 救援）、④（命令与开关）在后续票据里追加。
  *
  * 注册投影有一条不可避免的代价，记在这里以免被当成缺陷：投影命中就推进 `contentGeneration`
  * （与投影返回什么无关），而承载类型是宿主自己也在写的类型，所以**宿主每产生一条该类型事件**，下一步
  * 请求都会落一条 `request/header`（`reason: 'series'` 或 `change` + `startsSeries`）并重置工具基线。
  * 机制、量级与观察面见设计文档「注意投影拦截的副作用」。
  *
+ * **裁剪不降低 `tokenMeter.measure()` 的读数**：计量器按原始表面事件定价、不读投影，表现是「省了钱、
+ * 界面上的上下文占比不动」。② 的节奏因此只能由本插件自己的步数口径决定，见 `pruneAtStepBoundary`。
+ *
  * @module
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 // 显式引入服务包，让本文件的 `ctx.sessions` 类型不依赖 projection.ts 的偶然 import 链。
 import type {} from '@deepseek-ai/dsh-session'
+import { pruneAtStepBoundary } from './persist.ts'
 import { reasoningPrunerProjection } from './projection.ts'
 import type { Config } from './types.ts'
 
@@ -27,12 +33,15 @@ export * from './persist.ts'
 export const name = 'dsh-reasoning-pruner'
 
 /**
- * 消息投影注册所需的唯一服务。后续票据只**追加**自己需要的服务，不改本票已定的这一项。
+ * 消息投影注册与步进触发所需的唯一服务。后续票据只**追加**自己需要的服务，不改本票已定的这一项。
  */
 export const inject = ['sessions']
 
 /**
- * 校验配置并注册裁剪投影。
+ * 校验配置、注册裁剪投影，并把 ② 挂到 `agent/pre-step` 上。
+ *
+ * `prepend` 是这条判据的全部内容：裁剪必须在 compaction-basic 自己测量/选区**之前**落盘，否则被裁的
+ * 区间可能已经被摘要遮蔽。`{ prepend: true }` 走 `unshift`（`vendor/cordis/src/events.ts:255`）。
  *
  * 这里重复一次配置边界（与 `Config` schema 同一套）：schema 只在装载路径上生效，绕过 loader 直接调用
  * `apply` 的路径同样必须大声失败，不做静默回退。
@@ -43,6 +52,13 @@ export const inject = ['sessions']
 export function apply(ctx: Context, config: Required<Config>): void {
   assertConfig(config)
   ctx.sessions.registerMessageProjection(reasoningPrunerProjection)
+  // 这一步就是 ② 的全部行为。**不对称地对待失败**：写入侧的校验是提交前的，坏 payload 会让 `append`
+  // 当场抛，所以失败是响亮且不留坏记录的；这里**不**把它降级成日志——静默吞掉会让「重复声明同一批」这类
+  // 不变量破坏变成一行 warn（02 第 5 条与 03 第 6 条的判据都建在「它必须响亮」上）。
+  ctx.on('agent/pre-step', ({ agent, step, signal }, next): Promise<PreStepDecision> => {
+    pruneAtStepBoundary(agent.session, step, signal, config)
+    return next()
+  }, { prepend: true })
 }
 
 /**

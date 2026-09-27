@@ -35,7 +35,13 @@ export interface ReasoningPrunePayload {
   }
 }
 
-/** 本插件的配置。两个参数都取保守默认（偏大＝少干活、少伤质量），实测后收紧。 */
+/**
+ * 本插件的配置。两个参数都取保守默认（偏大＝少干活、少伤质量），实测后收紧。
+ *
+ * **默认值必须保持 `everySteps ≥ keepRecentSteps + 2`**：第 `M` 步的 pre-step 上只有 `M - 1` 条已记录
+ * 步骤，减掉保留窗口 `K` 必须为正，否则每次到点都是空批量、而写入侧禁止落一条 `targets` 为空的事件
+ * （07 回填 `M`/`K` 时必须保持这条不变式；规格闸门 D 的「冲突时 `K` 取更大值」正会踩到它）。
+ */
 export interface Config {
   /** 每完成多少个步骤允许推进一次裁剪；由闸门 B（成本摊薄）背书。 */
   everySteps?: number
