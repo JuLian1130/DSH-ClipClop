@@ -220,8 +220,11 @@ describe('票 04 · 第 6 条：fork 后的子会话与父会话在裁剪点一�
 
 describe('票 04 · 第 7 条：重载与降级必须可判断（两个方向）', () => {
   it('① 装载本插件的读者重载后得到与运行期一致的裁剪版历史', async () => {
-    // 判据对象是「在真实会话（真实适配器驱动的落盘历史）上这两个方向仍成立」；02 已在它自己的夹具上断过
-    // 一次，本用例的端口不同（这里的裁剪由 ② 的触发真实产生，不是测试直接 append 决策）。
+    // 判据对象是「重载与降级两方向在**由 ② 的真实触发产生裁剪**的会话上仍成立」——本用例与 02 的差别只在
+    // **触发端口**（02 直接 append 决策，这里由 ② 的节流触发产生）。会话与 02 **共用**同一套夹具：
+    // `ScriptedReasoningAdapter` 注册在 `'mock'` 路由（`session-harness.ts` 的 `registerAdapter`），
+    // **不是真实适配器驱动的落盘历史**——真实适配器只服务第 1–3 条，因为 `onReplayDegrade` 只在真实
+    // 适配器 config 上。因此「真实适配器写出的耐久信封在重载/降级路径上的行为」不在本用例的观测面内。
     const { lc, session } = await drive(2)
     expect(persistedPrunes(session).length).toBeGreaterThan(0)
     const runtime = session.deriveMessages()
