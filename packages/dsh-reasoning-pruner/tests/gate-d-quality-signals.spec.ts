@@ -196,7 +196,12 @@ describe('票 07 · 闸门 D · K 由本闸门背书', () => {
     })
     // 每一档都必须真的裁掉了东西，否则这一档什么都没测——`K` 大到窗口覆盖全部步数时就是这种空档，
     // 它返回的「没有恶化」是**测不出来**，不得据此回填 `K`。
-    for (const shelf of shelves) expect(shelf.pruned).toBe(true)
+    // **两面都断**（票面第 41 条）：`pruned` 只证明落盘了 `targets`，`visibleRemoved` 才证明裁剪真的
+    // 进了模型可见历史。只断前者时，「裁了但没生效」那一档会以「测过的安全档」通过。
+    for (const shelf of shelves) {
+      expect(shelf.pruned).toBe(true)
+      expect(shelf.visibleRemoved).toBeGreaterThan(0)
+    }
 
     // 恶化出现在**小 K** 一侧（裁得越狠、模型越回头重查）。
     const worst = shelves.find(shelf => shelf.k === 0)!
@@ -209,8 +214,9 @@ describe('票 07 · 闸门 D · K 由本闸门背书', () => {
     // 下限是**紧**的：`K = 9`（它的前一个整数值）仍在恶化，所以下限不是 9 也不是更低。
     expect(shelves.find(shelf => shelf.k === 9)!.repeatedProbesDelta).toBeGreaterThan(0)
     expect(shelves.find(shelf => shelf.k === 8)!.stepsDelta).toBeGreaterThan(0)
-    // 该档同时**真的裁了东西**——这两条一起排除「拿一个没测到东西的档当安全档」。
+    // 该档同时**真的裁了东西**，且**两面都成立**——这几条一起排除「拿一个没测到东西的档当安全档」。
     expect(firstClean.pruned).toBe(true)
+    expect(firstClean.visibleRemoved).toBeGreaterThan(0)
   }, 300000)
 
   it('固定脚本驱动的两臂五个信号恒等——这正是它不能背书 K 的原因', async () => {

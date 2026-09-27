@@ -211,6 +211,13 @@ describe('票 07 · 闸门 B · 批量推进是主要杠杆', () => {
     // 只断 n 下降时，「tail 不计入批量自身」的实现也全绿——所以两项都断。
     expect(nLarge).toBeLessThan(nSmall)
     expect(large.tail).toBeGreaterThan(small.tail)
+    // 两档的四个读数逐值钉住：记录里 `M` 的背书结论（回填 03）引用的就是它们，只断方向时
+    // 它们可以同向漂移而全绿，票面数字会与实测静默分叉（`M = 3` 档的 `55` / `5` 已在上面
+    // 那条 token 判据用例里钉住，这里补齐 `M = 8` 档）。
+    expect([small.tail, small.r, large.tail, large.r]).toEqual([55, 5, 175, 30])
+    expect(nSmall).toBeCloseTo(539, 5)
+    // 记录里写的 `286` 是四舍五入值（与 `M = 3` 档的 `539` 同一形态）。
+    expect(nLarge).toBeCloseTo(285.83, 2)
   }, 120000)
 
   it('tail 从最老的那一个被新裁步骤起算、包含这批步骤自身', async () => {

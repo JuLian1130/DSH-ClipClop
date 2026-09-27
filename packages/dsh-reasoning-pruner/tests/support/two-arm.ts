@@ -17,7 +17,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { LifecycleOptions, PersistentLifecycle, ScriptedStep } from './session-harness.ts'
 import { cleanupRoots, lifecycle, persistedPrunes, registerTool } from './session-harness.ts'
-import { proxySignals } from './gate-readings.ts'
+import { proxySignals, visibleReasoning } from './gate-readings.ts'
 
 /** 一臂的现场。 */
 export interface Arm {
@@ -137,6 +137,18 @@ export interface KSweepShelf {
   readonly repeatedProbesDelta: number
   /** 裁剪臂在该档是否真的裁掉了东西（`K` 过大时空批量 ⇒ 这一档什么都没测）。 */
   readonly pruned: boolean
+  /**
+   * 控制臂可见历史里有、裁剪臂可见历史里**没有**的推理文本条数（去重后计）。
+   *
+   * 「裁剪确实发生在模型可见历史里」的读数（票面第 41 条）：`> 0` 即裁掉的推理真的不在模型可见输入里了。
+   * 与 {@link KSweepShelf.pruned} 是两面——`pruned` 只证明落盘了 `targets`，信封退化时整条消息静默跌落
+   * provider-neutral 重建，那时落盘为真、可见历史却没变，这一档的「没有恶化」就与「该档等价于控制臂」
+   * 不可区分（即把「测不出来」记成「没有恶化」）。
+   *
+   * **不取两臂可见历史的长度差**：两臂的步数本就不同（裁剪会改变模型的后续行为），长度差会把「行为差异」
+   * 读成「裁剪量」，且某档裁剪只换掉一条推理时长度差还能是 0（实测 `K = 9` 就是这种形态）。
+   */
+  readonly visibleRemoved: number
 }
 
 /**
@@ -146,6 +158,9 @@ export interface KSweepShelf {
  *
  * 驱动面是**反应式**的（`decide` 按模型可见历史决定回复）：被裁历史让本次改为回头重查。固定脚本驱动不出
  * 这个反应（两臂输出逐条相同、信号恒等），那正是「不得据固定脚本回填 `K`」的原因。
+ *
+ * 每档同时给出**两面**读数（见 {@link KSweepShelf}）：`pruned` 断落盘、`visibleRemoved` 断可见历史——票面
+ * 第 41 条要求两面都断，只断落盘时「裁了但没生效」的档会被当成「测过的安全档」。
  *
  * `K` 必须保持 03 的不变式 `M ≥ K + 2`——首次触发的批量非空。`M` 因此随档取 `K + 2`。
  * @param options - 同步长、档位、驱动文本与反应式驱动。
@@ -173,6 +188,8 @@ export async function kSweep(options: {
       stepsDelta: pruned.steps - control.steps,
       repeatedProbesDelta: pruned.repeatedProbes - control.repeatedProbes,
       pruned: persistedPrunes(compared.pruned.session).length > 0,
+      visibleRemoved: visibleReasoning(compared.control.session)
+        .filter(text => !visibleReasoning(compared.pruned.session).includes(text)).length,
     })
     await disposeCompared(compared)
   }
