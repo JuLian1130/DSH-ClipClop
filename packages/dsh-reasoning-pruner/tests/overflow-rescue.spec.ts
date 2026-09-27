@@ -340,8 +340,8 @@ describe('票 05 · 第 4 条：裁剪不算进展（replaceGeneration 不变）
   })
 })
 
-describe('票 05 · 第 5 条：搭车的可观察收益（重试成功，且裁剪让这次重试的输入更小）', () => {
-  it('同一场景两臂对照：挂裁剪那臂的摘要输入严格小于不裁那臂，两臂都搭同一次车', async () => {
+describe('票 05 · 第 5 条：搭车的可观察收益（重试成功；跨臂读数落在摘要输入上）', () => {
+  it('重试请求小于被它取代的失败请求；跨臂对照则是摘要输入严格小于不裁那臂', async () => {
     // 两臂的差别只有一个：保留窗口。`keepRecentSteps` 放到大于历史条数时本批为空、写入侧零落盘，于是
     // 「不裁」那臂既不写承载事件、也没有投影变更——两臂都搭同一次车。
     const pruned = await driveOverflow()
@@ -353,18 +353,22 @@ describe('票 05 · 第 5 条：搭车的可观察收益（重试成功，且裁
     expect(persistedPrunes(pruned.session)).toHaveLength(1)
     expect(persistedPrunes(untouched.session)).toEqual([])
 
-    // 判据实测到的因果链：重试请求 = 系统提示 + **摘要产物**，而摘要产物由脚本化适配器按调用下标给出
-    // （与喂进去的输入无关），所以两臂的重试请求本身等长（实测同为 3 条消息 / 406 字符）。被裁推理省下的
-    // 是**喂给摘要的那份输入**——它正是这次重试的输入来源。因此可观察的收益读数落在摘要调用自己的输入上；
-    // 只比较重试请求会退化成一个常量断言。这里连同两臂重试请求等长一起记下来。
+    // ① 本臂内部的真实对照（判据非空）：被取代的那次失败请求带着全部历史，重试请求被摘要取代了一大段，
+    //    所以它严格更小。先断「失败请求确实带着完整历史」，否则下面那条在失败请求本就很小时也成立。
+    const failedRequest = pruned.lc.calls[pruned.secondTurnFrom]!
+    expect(failedRequest.purpose).toBeUndefined()
+    expect(failedRequest.messages).toBeGreaterThan(FIRST_TURN_STEPS)
+    expect(prunedPair.retry.messages).toBeLessThan(failedRequest.messages)
+
+    // ② 跨臂读数的口径（写实、不写成重言式）：重试请求 = 系统提示 + **摘要产物**，而摘要产物由脚本化适配器
+    //    按调用下标给出（与喂进去的输入无关），所以两臂的重试请求本身等长（实测同为 3 条消息 / 406 字符，
+    //    这一条因此**不**作为判据）。被裁推理省下的是**喂给摘要的那份输入**——它正是这次重试的输入来源，
+    //    所以可观察的跨臂收益落在摘要调用自己的输入上（实测 1916 < 1936 字符）。
     expect(prunedPair.summary.chars).toBeLessThan(untouchedPair.summary.chars)
     expect(prunedPair.summary.messages).toBeLessThanOrEqual(untouchedPair.summary.messages)
-    expect(prunedPair.retry.messages).toBe(untouchedPair.retry.messages)
     // 而且重试成功（收到 `assistant/message` 而不是再次失败）。
     expect(pruned.secondTurnCommitted).toBe(true)
     expect(untouched.secondTurnCommitted).toBe(true)
-    // 重试确实发生在摘要之后：两臂里 compaction-basic 都是「先摘要、再重试」两次调用。
-    expect(prunedPair.retry.messages).toBeLessThan(prunedPair.summary.messages)
 
     await pruned.lc.dispose()
     await untouched.lc.dispose()
@@ -436,10 +440,12 @@ describe('票 05 · 第 7 条：摘要照跑时记录该次摘要调用自身', 
     expect(persistedPrunes(session)).toHaveLength(1)
 
     // 后半个合取项：摘要调用自身的两个读数存在。`purpose === 'compaction'` 是认出它的唯一方式。
+    // 只断「有读数」而不是断具体数值：夹具的 `usage` 是常量，写死等值只会把「读数存在」退化成
+    // 「夹具常量被抄了一遍」——`undefined`（该次调用没带上 usage）仍会让这里红。
     const summaryCall = lc.calls.slice(secondTurnFrom).find(call => call.purpose === 'compaction')
     expect(summaryCall).toBeDefined()
-    expect(summaryCall!.inputTokens).toBe(100)
-    expect(summaryCall!.cacheReadTokens).toBe(0)
+    expect(summaryCall!.inputTokens).toBeTypeOf('number')
+    expect(summaryCall!.cacheReadTokens).toBeTypeOf('number')
     // 定价不落在本票的判据里（`h` 的外部声明与代入归 07）：这里只记录这一次摘要调用自身的读数。
     await lc.dispose()
   })
