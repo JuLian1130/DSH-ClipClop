@@ -39,6 +39,12 @@
 
 规格和任务使用仓库内 `.scratch/` 目录中的本地 Markdown。详见 `docs/agents/issue-tracker.md`。
 
+**提交归属：`.scratch/` 是它自己的 git 仓库**（主仓库的 `.git/info/exclude` 排除了整个 `.scratch/`，主仓库历史里从没有票据文件）。因此：
+
+- 改动 `.scratch/` 内任何文件（票据、规格、探针、复核记录）后，**在 `.scratch/` 目录里** `git add` / `git commit`；提交信息照该仓库的既有格式写「票NN …」的中文短句。
+- **不要**把 `.scratch/` 的改动提交到主仓库（在主仓库里它是被排除的未跟踪路径，`git add -f` 会打破这个安排）。
+- 主仓库只收代码、测试与 `docs/` 下的改动；两边的改动各自提交，不混进同一个提交。
+
 ### Domain docs
 
 本仓库使用根目录 `CONTEXT.md` 的单一上下文结构。详见 `docs/agents/domain.md`。
