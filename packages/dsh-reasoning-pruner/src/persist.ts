@@ -128,6 +128,25 @@ export function pruneTargetsAtStep(session: Session, config: Required<Config>): 
 }
 
 /**
+ * 两个激活点共用的推进尾：信号已中止时不动作，否则按选区落盘一批。
+ *
+ * 两个触发点的差别**只在便宜的门禁**上——② 多一道步数节流，① 没有门禁（失败本身就是触发器）；选区与
+ * 写入完全同一条路径。
+ * @param session - 活跃会话。
+ * @param signal - 该请求/该步的取消信号。
+ * @param config - 已解析的配置。
+ * @returns 落盘的事件序号；无可裁步骤或信号已中止时为 `undefined`。
+ */
+function advanceBoundary(
+  session: Session,
+  signal: AbortSignal,
+  config: Required<Config>,
+): SessionSeq | undefined {
+  if (signal.aborted) return undefined
+  return persistReasoningPrune(session, pruneTargetsAtStep(session, config))
+}
+
+/**
  * 激活点② 的触发：会话级步数到达 `M` 的整数倍时批量推进一次边界。
  *
  * **节奏只由本函数自己的步数口径决定**（日志里的 `step/start` 条数，见 `sessionStepNumber`），与上下文
@@ -144,20 +163,16 @@ export function pruneAtStepBoundary(
   signal: AbortSignal,
   config: Required<Config>,
 ): SessionSeq | undefined {
-  if (signal.aborted) return undefined
   if (sessionStepNumber(session) % config.everySteps !== 0) return undefined
-  return persistReasoningPrune(session, pruneTargetsAtStep(session, config))
+  return advanceBoundary(session, signal, config)
 }
 
 /**
- * 激活点① 的触发：请求**已经**因 `CONTEXT_WINDOW_EXCEEDED` 失败时，把保留窗口之外的已记录步骤一次裁掉。
+ * 激活点① 的触发：请求**已经**因 `CONTEXT_WINDOW_EXCEEDED` 失败时，按与 ② 相同的选区推进一次。
  *
- * 失败本身就是触发器，这里没有任何阈值策略。裁剪只改模型可见内容（投影推进 `contentGeneration`），
- * **不推进 `replaceGeneration`**，因此它自己不会让 compaction-basic 判定为进展、也不会触发重试；搭车
- * 成立与否由 compaction-basic 决定（见设计文档「激活点 ①：溢出救援」）。
- *
- * 选区与 ② 不同：② 按 `M` 节流、只推进一批；① 是补救，失败已经发生过一次，所以把当时**全部**有资格
- * 的保留窗口外步骤一次裁掉。
+ * 失败本身就是触发器，这里没有任何门禁。裁剪只改模型可见内容（投影推进 `contentGeneration`，不推进
+ * `replaceGeneration`），因此它自己不会让 compaction-basic 判定为进展；搭车成立与否由它决定
+ * （见设计文档「激活点 ①：溢出救援」）。
  * @param session - 活跃会话。
  * @param signal - 该 turn 的取消信号；已中止时不动作。
  * @param config - 已解析的配置。
@@ -168,8 +183,7 @@ export function pruneAtRequestError(
   signal: AbortSignal,
   config: Required<Config>,
 ): SessionSeq | undefined {
-  if (signal.aborted) return undefined
-  return persistReasoningPrune(session, pruneTargetsAtStep(session, config))
+  return advanceBoundary(session, signal, config)
 }
 
 /**

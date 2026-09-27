@@ -5,13 +5,15 @@
  *
  * - **失败必须是真实的**：`failWhen` 让适配器真的抛 `LlmError`，运行期把它归一化成
  *   `agent/request-error` 的 `payload.failure`；伪造一条事件绕不过 `assistant/attempt` 与终局 `throw`。
- * - **取样窗口**：本插件以 `{prepend: true}`（`unshift`）恒在 hooks 队首，夹具的 `onRequestError` 观察面
- *   以 `prepend` 注册在 compaction-basic 之前、本插件之后装载，所以链条是
+ * - **取样窗口**：本插件以 `{prepend: true}`（`unshift`）恒在 hooks 队首；夹具的 `onRequestError` 观察面
+ *   以普通 `push` 注册在 compaction-basic 之前、本插件之后装载，所以链条是
  *   `[本插件, 观察面, compaction-basic]`。观察面在委托之前先取 `atListener` 读数 = 「裁剪已落盘、
  *   compaction-basic 还没跑」；晚于 compaction-basic 注册的快照会落到它之后，把它的 `replace` 进展算到
- *   我们头上。委托之后它拿到的 `action` 是**整条链**的最终动作（本插件的 `next()` 返回的就是它）。
- * - **收益对照的两臂**：挂裁剪 vs 不裁（同一构造里把保留窗口放到极大，于是本批为空、零写入），比较**摘要
- *   调用自身**与**重试请求**的输入规模。适配器的 `usage` 是常量，所以规模从请求的消息文本量读，不读它。
+ *   我们头上。委托之后它拿到的 `action` 是**整条链**的最终动作——不是本插件自己的返回值（本插件是链上
+ *   最外层，`return next()` 时两者恒等），所以「本插件有没有自己改成 retry」只能由第 8 条钉住。
+ * - **收益对照的两臂**：挂裁剪 vs 不裁（同一构造里把保留窗口放到极大，于是本批为空、零写入）。规模一律从
+ *   请求的消息文本量读（适配器的 `usage` 是常量，读它没有区分度），而「裁剪省了什么」落在**摘要调用自身的
+ *   输入**上——见第 5 条注释里记下的因果链。
  *
  * @module
  */
@@ -88,8 +90,6 @@ interface Driven {
   readonly beforeFailure: SurfaceReading
   /** turn 1 与 turn 2 的分界：turn 2 的模型调用从 `calls` 的这个下标起。 */
   readonly secondTurnFrom: number
-  /** turn 2 里 `request/header` 的条数：agent loop 每次请求前落一条，是「发起了几次请求」的读数。 */
-  readonly secondTurnHeaders: number
   /** turn 2 结束时是否留下了成功的 `assistant/message`（重试成功的观察面）。 */
   readonly secondTurnCommitted: boolean
 }
@@ -107,7 +107,7 @@ async function driveOverflow(options: {
   readonly keepRecentSteps?: number
   readonly secondTurnText?: string
   readonly mountToolResultPruner?: boolean
-  readonly compactionConfig?: Record<string, unknown>
+  readonly compaction?: Record<string, unknown>
   readonly beforePlugin?: LifecycleOptions['beforePlugin']
 } = {}): Promise<Driven> {
   const observed: Observed[] = []
@@ -125,9 +125,8 @@ async function driveOverflow(options: {
   const lc = await lifecycle(SCRIPT, {
     config: { everySteps: M, keepRecentSteps: options.keepRecentSteps ?? K },
     // 同侪挂真的 compaction-basic（走它自己的默认阈值）；第 6 条另挂 tool-result pruner。
-    autoCompaction: true,
+    compaction: options.compaction ?? {},
     ...options.mountToolResultPruner === true ? { toolResultPruner: true } : {},
-    ...options.compactionConfig === undefined ? {} : { compactionConfig: options.compactionConfig },
     ...options.beforePlugin === undefined ? {} : { beforePlugin: options.beforePlugin },
     failWhen,
     onRequestError: ({ failure, action, atListener }) => {
@@ -140,7 +139,6 @@ async function driveOverflow(options: {
   await lc.step(agent, 'first turn')
   const beforeFailure = surfaceReading(session)
   const secondTurnFrom = lc.calls.length
-  const headerBefore = countEvents(session, 'request/header')
   const messageBefore = countEvents(session, 'assistant/message')
   armed = true
   agent.followup(createUserMessage({ content: [{ type: 'text', text: secondTurnText }], source: { kind: 'user' } }))
@@ -152,7 +150,6 @@ async function driveOverflow(options: {
     observed,
     beforeFailure,
     secondTurnFrom,
-    secondTurnHeaders: countEvents(session, 'request/header') - headerBefore,
     secondTurnCommitted: countEvents(session, 'assistant/message') > messageBefore,
   }
 }
@@ -245,7 +242,8 @@ describe('票 05 · 第 2 条：prepend 让裁剪排在 compaction-basic 之前'
   it('compaction-basic 的每一次测量都看得到本批裁剪（同侪自己的动作给出的读数）', async () => {
     // 顺序是这条判据的全部内容，所以观察面选**同侪自己的动作**：compaction-basic 的测量与选区都走
     // `ctx.tokenMeter.measure()`，所以「它测量那一刻我们的裁剪在不在日志里」直接回答「裁剪排在它之前
-    // 还是之后」。撤掉本插件的 `{prepend: true}` 时它会排到 compaction-basic 之后，溢出那一次的读数为 0。
+    // 还是之后」。已实测：把本插件的 `{prepend: true}` 撤掉（它随即排到 compaction-basic 之后），溢出
+    // 那一次的读数是 0，本用例整条变红——顺序正是它测到的东西。
     //
     // 另一端的对照在同一数组里：到点之前那几次测量读数是 0（那时真没有裁剪），溢出那一次之后恒为 1——
     // 于是「读到 1」不可能来自别处的偶然。
@@ -277,13 +275,14 @@ describe('票 05 · 第 3 条：搭车——裁剪自己不会触发重试', () 
   it('本插件只委托；重试由 compaction-basic 决定，且真的发生了（重试请求在摘要之后）', async () => {
     const { lc, session, observed, secondTurnFrom, secondTurnCommitted } = await driveOverflow()
 
-    // ① 裁剪在本次 failure 处理中落盘。
-    expect(persistedPrunes(session)).toHaveLength(1)
-    // ② 本插件的监听器**不返回** `{kind:'retry'}`，它 `return next()` 委托：观察面排在本插件之后、
-    //    compaction-basic 之前，它记下的 `action` 是整条链的最终动作，且那一刻裁剪已经在日志里
-    //    （`atListener.prunes === 1`）——也就是说这份 `{kind:'retry'}` 是在我们落盘**之后**由同侪给出的。
+    // ① 裁剪在本次 failure 处理中落盘，而且落盘早于同侪的决定：观察面夹在本插件与 compaction-basic 之间，
+    //    它被调到的那一刻（`atListener`）裁剪已经在日志里，链的最终动作在那之后才产生。
     const observedOnce = observed[0]!
     expect(observedOnce.atListener.prunes).toBe(1)
+    // ② 链的最终动作是 `{kind:'retry'}`，它**来自 compaction-basic**，不是本插件给的：本插件的
+    //    `agent/request-error` 监听器体里只有 `pruneAtRequestError(...)` 与 `return next()`（第 8 条用源码
+    //    断言钉住这件事）。这条判据能证明的部分到此为止——本插件是链上最外层，链的返回值在结构上就是
+    //    `next()` 的返回值，所以「本插件自己又把它改成 retry」这种形态无法从返回值上分辨，见第 8 条。
     expect(observedOnce.action).toEqual({ kind: 'retry' })
     // 判据非空：compaction-basic 真的推进了 replace 并决定重试——这正是「搭车」本身。
     expect(countEvents(session, 'compaction/summary')).toBe(1)
@@ -296,14 +295,15 @@ describe('票 05 · 第 3 条：搭车——裁剪自己不会触发重试', () 
     await lc.dispose()
   })
 
-  it('反例（非溢出码）：本插件仍只委托，链的最终动作是 undefined（不是我们在兜）', async () => {
-    const { lc, session, observed } = await driveOverflow({ code: QUOTA_EXCEEDED_CODE })
+  it('反例（非溢出码）：本插件不动手，链的最终动作是 undefined，请求就是失败的', async () => {
+    const { lc, session, observed, secondTurnCommitted } = await driveOverflow({ code: QUOTA_EXCEEDED_CODE })
     expect(persistedPrunes(session)).toEqual([])
     // 链的最终动作不是 retry（`undefined` = 默认的终局），而且日志里没有 replace：既没有人重试，
     // 也没有人兜住这次失败。
     expect(observed[0]!.action).toBeUndefined()
-    // compaction-basic 对别的码不介入，所以它也不重试：这一次请求就是失败的（我们不救它）。
     expect(session.surface.replaceGeneration).toBe(0)
+    // 行为面：这一 turn 没有留下任何成功的 `assistant/message`——我们没有救它。
+    expect(secondTurnCommitted).toBe(false)
     await lc.dispose()
   })
 })
@@ -353,12 +353,13 @@ describe('票 05 · 第 5 条：搭车的可观察收益（重试成功，且裁
     expect(persistedPrunes(pruned.session)).toHaveLength(1)
     expect(persistedPrunes(untouched.session)).toEqual([])
 
-    // 判据：裁剪确实让**这一次重试的输入**更小。观察面只能是摘要调用自身的输入——重试请求是
-    // 「本次会话的系统提示 + 摘要产物」，摘要产物由适配器按脚本给出（与输入无关），所以**两臂的重试请求
-    // 本身等长**；被裁推理省在**喂给摘要的那份输入**上，而摘要正是这次重试的输入来源。这条口径必须写死，
-    // 否则「比较重试请求的大小」会退化成一个常量断言。
+    // 判据实测到的因果链：重试请求 = 系统提示 + **摘要产物**，而摘要产物由脚本化适配器按调用下标给出
+    // （与喂进去的输入无关），所以两臂的重试请求本身等长（实测同为 3 条消息 / 406 字符）。被裁推理省下的
+    // 是**喂给摘要的那份输入**——它正是这次重试的输入来源。因此可观察的收益读数落在摘要调用自己的输入上；
+    // 只比较重试请求会退化成一个常量断言。这里连同两臂重试请求等长一起记下来。
     expect(prunedPair.summary.chars).toBeLessThan(untouchedPair.summary.chars)
     expect(prunedPair.summary.messages).toBeLessThanOrEqual(untouchedPair.summary.messages)
+    expect(prunedPair.retry.messages).toBe(untouchedPair.retry.messages)
     // 而且重试成功（收到 `assistant/message` 而不是再次失败）。
     expect(pruned.secondTurnCommitted).toBe(true)
     expect(untouched.secondTurnCommitted).toBe(true)
@@ -373,11 +374,14 @@ describe('票 05 · 第 5 条：搭车的可观察收益（重试成功，且裁
 describe('票 05 · 第 6 条：compat 稀疏情形——不重试时只对后续步骤生效', () => {
   it('compaction-basic 不重试：本次仍失败，下一次请求（新 turn）里被裁步骤的推理块已不在', async () => {
     // 构造「它不重试」：`maxOverflowRetries: 0` 是 compaction-basic 自己的开关（测试侧配置，不改它的默认
-    // 值、也不是我们包里的配置项），于是它连选区都不做、直接 `next()`——正是稀疏情形（没有 replace，
-    // 请求照旧失败）。tool-result pruner 也挂上：它是那条路径的另一半，本票要证明它同样救不了这次请求。
+    // 值、也不是我们包里的配置项），于是它在**选区之前**就 `return next()`（`lib/index.js:868`），整个
+    // failure 处理里没有任何 replace——这正是稀疏情形：搭车不成立、请求照旧失败。
+    // 票面点名的另一半是 tool-result pruner 也没落 replace，所以这里把它也挂上并单独断言它没落 replace。
+    // 它在本构造里不会被调用（compaction-basic 根本没走到取 pruner 的那一步）——这不削弱构造：只要没有
+    // 活的选区，pruner 落不落 replace 都不改变「没有进展、请求照旧失败」这个结果。
     const { lc, agent, session, observed } = await driveOverflow({
       mountToolResultPruner: true,
-      compactionConfig: { auto: true, maxOverflowRetries: 0 },
+      compaction: { maxOverflowRetries: 0 },
     })
 
     // ① 本次 failure 处理后事件已落盘。
@@ -388,7 +392,8 @@ describe('票 05 · 第 6 条：compat 稀疏情形——不重试时只对后�
     const prunedReasoning = targets.map(target => recorded.find(entry => entry.seq === target)!.reasoning)
     expect(prunedReasoning).toHaveLength(FIRST_TURN_STEPS - K)
 
-    // ② 请求仍失败（我们不救它）：这一 turn 没有成功提交任何 `assistant/message`，也没有 replace。
+    // ② 请求仍失败（我们不救它）：这一 turn 没有成功提交任何 `assistant/message`，也没有任何 replace，
+    //    而且挂着的 tool-result pruner 确实一条 replace 都没落。
     expect(observed[0]!.action).toBeUndefined()
     expect(session.surface.replaceGeneration).toBe(0)
     const visibleAfterFailure = reasoningTexts(session)

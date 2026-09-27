@@ -159,12 +159,7 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
     // 这一次调用的观察行先占位、`usage` 发完再补齐：调用失败时两个 token 读数保持 `undefined`（那一次
     // 没有 usage 可读），用例靠 `purpose === 'compaction'` 认摘要调用。
     const observation: {
-      call: number
-      purpose: string | undefined
-      messages: number
-      chars: number
-      inputTokens: number | undefined
-      cacheReadTokens: number | undefined
+      -readonly [K in keyof LlmCall]: LlmCall[K]
     } = {
       call,
       purpose: options.purpose,
@@ -311,12 +306,12 @@ export interface LifecycleOptions {
   /**
    * 在插件装载**之前**、驱动之前被调一次（异步等待其完成）。
    *
-   * 这里注册的同侪与观察面都排在 compaction-basic **之前**（后者由 {@link LifecycleOptions.autoCompaction}
+   * 这里注册的同侪与观察面都排在 compaction-basic **之前**（后者由 {@link LifecycleOptions.compaction}
    * 在本回调之后装载），而本插件以 `{prepend: true}` 注册、恒在 hooks 队首（`unshift` 先插先跑）。
    *
    * **这里注册的 `{prepend: true}` 观察面并不在本插件之前**——两者都 `unshift`，「先注册的先跑」在内侧，
    * 但本插件后注册，所以它排在最前。要观察「本插件跑完、compaction-basic 还没跑」那一刻用
-   * {@link LifecycleOptions.onRequestError}（它在插件之后、`autoCompaction` 之前以 `push` 注册）。
+   * {@link LifecycleOptions.onRequestError}（它在插件之后、compaction-basic 之前以 `push` 注册）。
    */
   readonly beforePlugin?: (ctx: Context) => void | Promise<void>
   /**
@@ -341,31 +336,21 @@ export interface LifecycleOptions {
    */
   readonly failWhen?: (request: GenerateOptions) => LlmFailure | undefined
   /**
-   * 挂真的 `@deepseek-ai/dsh-compaction-basic`（`auto: true`，走它自己的默认阈值）。
+   * 挂真的 `@deepseek-ai/dsh-compaction-basic`，用这份配置（`auto: true` 由夹具补上）。
    *
    * 本插件以 `prepend` 注册，而它在本插件**之前**装载，所以「裁剪先落盘、它的测量与选区在后」这条顺序
-   * 就是真实的同侪形态。
+   * 就是真实的同侪形态。第 6 条用 `{ maxOverflowRetries: 0 }` 构造「它不重试」的稀疏分支。
    */
-  readonly autoCompaction?: boolean
-  /**
-   * `autoCompaction` 时传给 compaction-basic 的配置（缺省只有 `{ auto: true }`，即走它自己的阈值与
-   * `maxOverflowRetries`）。
-   *
-   * 第 6 条用它把 `maxOverflowRetries` 设成 0，构造「它不重试」的稀疏分支。
-   */
-  readonly compactionConfig?: Record<string, unknown>
+  readonly compaction?: Record<string, unknown>
   /** 挂真的 `@deepseek-ai/dsh-compaction-tool-result-pruner`（构造「pruner 没落 replace」的分支用）。 */
   readonly toolResultPruner?: boolean
   /**
-   * 在插件装载**之前**被调一次，观察面注册得比后续装载的同侪早（`push` ⇒ 不为 prepend 时排在队尾的
-   * 先注册者）。
+   * 逐 `agent/request-error` 的观察面，注册在本插件**之后**、compaction-basic **之前**（普通 `push`；
+   * 见 {@link LifecycleOptions.compaction} 的装载位置）。
    *
-   * 与 {@link LifecycleOptions.beforePlugin} 的分工：这里只用插件实例本身（`createSession` 之后才有
-   * 会话），`beforePlugin` 用来异步挂同侪。观察面必须在这里注册，才能拿到比**后注册的同侪**更早的位置。
-   *
-   * 观察面在本插件之后、compaction-basic 之前以普通 `push` 注册（顺序见上面那句注释），所以它**先于**
-   * compaction-basic 拿到 `atListener`（那一刻本插件已跑完、同侪还没跑），再在 `next()` resolve 后拿到链的
-   * 最终 `action` 与 `settled` 读数。
+   * 于是它先于同侪拿到 `atListener`（那一刻本插件已跑完、同侪还没跑），再在 `next()` resolve 后拿到
+   * **链的最终动作** `action`。注意 `action` 是链的返回值，不是本插件自己的返回值——本插件是链上最外层，
+   * 它 `return next()` 时两者恒等，所以「本插件有没有自己改成 retry」无法从 `action` 上分辨。
    */
   readonly onRequestError?: (payload: {
     readonly agent: Agent
@@ -416,7 +401,7 @@ export async function lifecycle(
   if (options.beforePlugin !== undefined) await options.beforePlugin(ctx)
   // 顺序有意：`onRequestError` 的观察面先以普通 `push` 注册（此刻队里只有它）、compaction-basic 后装载，
   // 于是它正落在两者之间；本插件以 `prepend`（`unshift`）恒在 hooks 队首。挂载顺序决定位置，
-  // `autoCompaction` 必须在 `withPlugin` 之前。
+  // `compaction` 必须在 `withPlugin` 之前。
   if (options.onRequestError !== undefined) {
     const observe = options.onRequestError
     ctx.on('agent/request-error', (payload, next) => {
@@ -429,9 +414,7 @@ export async function lifecycle(
     })
   }
   if (options.toolResultPruner === true) await ctx.plugin(ToolResultPruner)
-  if (options.autoCompaction === true) {
-    await ctx.plugin(BasicCompactionEngine, { auto: true, ...options.compactionConfig })
-  }
+  if (options.compaction !== undefined) await ctx.plugin(BasicCompactionEngine, { auto: true, ...options.compaction })
   if (options.withPlugin ?? true) await ctx.plugin(plugin, options.config ?? {})
   options.prepend?.(ctx)
   // 观察面注册在插件**之后**：本插件 prepend，所以本监听器排在它之后跑，取样点即「本步骤的决策已落盘」。

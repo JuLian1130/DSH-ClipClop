@@ -14,7 +14,8 @@
  * 机制、量级与观察面见设计文档「注意投影拦截的副作用」。
  *
  * **裁剪不降低 `tokenMeter.measure()` 的读数**：计量器按原始表面事件定价、不读投影，表现是「省了钱、
- * 界面上的上下文占比不动」。② 的节奏因此只能由本插件自己的步数口径决定，见 `pruneAtStepBoundary`。
+ * 界面上的上下文占比不动」。② 的节奏因此只能由本插件自己的步数口径决定，见 `pruneAtStepBoundary`；
+ * ① 没有节奏问题（失败本身就是触发器），但它同样不改变这个读数。
  *
  * @module
  */
@@ -41,10 +42,11 @@ export const name = 'dsh-reasoning-pruner'
 export const inject = ['sessions']
 
 /**
- * 校验配置、注册裁剪投影，并把 ② 挂到 `agent/pre-step` 上。
+ * 校验配置、注册裁剪投影，并把 ② 挂到 `agent/pre-step`、① 挂到 `agent/request-error` 上。
  *
- * `prepend` 是这条判据的全部内容：裁剪必须在 compaction-basic 自己测量/选区**之前**落盘，否则被裁的
- * 区间可能已经被摘要遮蔽。`{ prepend: true }` 走 `unshift`（`vendor/cordis/src/events.ts:255`）。
+ * 两处的 `prepend` 都是判据的全部内容：裁剪必须在 compaction-basic 自己测量/选区**之前**落盘，否则被裁
+ * 的区间可能已经被摘要遮蔽。`{ prepend: true }` 走 `unshift`（`@deepseek-ai/cordis` 的
+ * `EventHost.register`：`options.prepend ? "unshift" : "push"`）。
  *
  * 三处挂点都复用同一套选区与写入（`persist.ts`），配置边界在这里重复一次（与 `Config` schema 同一套）：
  * schema 只在装载路径上生效，绕过 loader 直接调用 `apply` 的路径同样必须大声失败，不做静默回退。
