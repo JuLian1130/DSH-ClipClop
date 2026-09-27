@@ -22,6 +22,7 @@ import type { Config } from './types.ts'
 export * from './types.ts'
 export * from './replay.ts'
 export * from './projection.ts'
+export * from './persist.ts'
 
 export const name = 'dsh-reasoning-pruner'
 
