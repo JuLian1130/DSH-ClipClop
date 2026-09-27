@@ -82,6 +82,9 @@ describe('票 07 · 闸门 D · 空转反例必须先跑', () => {
     expect(proxySignals(compared.pruned.session.snapshotEvents()))
       .toEqual(proxySignals(compared.control.session.snapshotEvents()))
     expect(compared.pruned.lc.calls.map(callInfo)).toEqual(compared.control.lc.calls.map(callInfo))
+    // usage 那一半同样要断（与上一条构造一致）：`callInfo` 刻意不含 usage，缺了这条，这条构造下两臂
+    // 派生的 `cacheReadTokens` 即使不同也全绿。
+    expect(tokenReadings(compared.pruned.session)).toEqual(tokenReadings(compared.control.session))
     await disposeCompared(compared)
   }, 120000)
 })
@@ -96,17 +99,30 @@ describe('票 07 · 闸门 D · 五个代理信号', () => {
     const signals = proxySignals(compared.pruned.session.snapshotEvents())
     // ① 步骤数：数 `assistant/message`（不含 interrupted），两条口径不等价、记录里写死这一条。
     expect(signals.steps).toBe(8)
-    expect(typeof signals.steps).toBe('number')
     // ② 失败工具调用数：排除两个取消码之后仍是数。
-    expect(typeof signals.failedToolCalls).toBe('number')
+    expect(signals.failedToolCalls).toBe(0)
     // ③ 异常收尾：`turn/end` 的 reason.kind，七个变体的取值集合。
     expect(signals.turnEnds).toEqual(['completed', 'completed'])
-    // ④ 失败请求尝试数：`assistant/attempt` 的条数。
-    expect(typeof signals.failedAttempts).toBe('number')
-    // ⑤ 重复探查。
-    expect(typeof signals.repeatedProbes).toBe('number')
+    // ④ 失败请求尝试数：`assistant/attempt` 的条数。本场景没有失败的尝试，所以是 0——**不是**「typeof 是
+    // number」这种任何取值都过的写法；具体的非零读数由下面那条最小事件用例钉住。
+    expect(signals.failedAttempts).toBe(0)
+    // ⑤ 重复探查：固定脚本下每一步的目标都不同，所以没有重复。
+    expect(signals.repeatedProbes).toBe(0)
     await disposeCompared(compared)
   }, 120000)
+
+  it('失败请求尝试数读的是 `assistant/attempt` 的条数', () => {
+    // 五个信号里 ④ 是唯一从 `assistant/attempt` 读出的量：只断「是 number」的话，读错事件、或恒读 0
+    // （真实会话里 `assistant/attempt` 确实为 0）都全绿。这里正面给出非零读数。
+    const events = [
+      event('assistant/attempt', { turn: 1, step: 1 }),
+      event('assistant/attempt', { turn: 1, step: 1 }),
+      event('assistant/message', { turn: 1, step: 1, message: {}, stream: [] }),
+    ]
+    expect(proxySignals(events).failedAttempts).toBe(2)
+    // 它不数别的类型的条数。
+    expect(proxySignals([events[2]!]).failedAttempts).toBe(0)
+  })
 
   it('失败工具调用数排除两个取消码（正常取消不算质量下降）', () => {
     const events = [
@@ -212,7 +228,12 @@ describe('票 07 · 闸门 D · 反例：「步骤更多但总花费更低」', 
   it('恶化的每一档都把「质量」与「花费」两半同时读出来，并如实给出是否为成本吸收', async () => {
     // 逐档把两半都读出来：这一档的结论必须**同时**给出「质量」与「花费」两个读数，不得只报花费那一半。
     const shelves: { readonly k: number, readonly qualityWorse: boolean, readonly costLower: boolean }[] = []
-    for (const k of [0, 6, 10]) {
+    // 逐档的原始读数：记录里点名了 `K = 0` 与 `K = 10` 两档的具体数字，那两档必须在用例里被钉住——
+    // 否则记录里的数字没有任何东西挡它漂移（这正是上一版登记写错 2846/26896/2836 却全绿的原因）。
+    const readings = new Map<number, { readonly steps: number, readonly probes: number, readonly billed: number }[]>()
+    // 扫**出现恶化的每一档**（`K = 0, 4, 6, 8`）——记录里「恶化的每一档花费也更高」这句话必须由这些档的
+    // 读数背书，只扫 `0/6/10` 会让 4、8 两档的结论没有任何读数支撑。
+    for (const k of [0, 4, 6, 8, 10]) {
       const compared = await twoArms({
         turnSteps: SWEEP_TURN_STEPS,
         turns: SWEEP_TURNS,
@@ -227,6 +248,10 @@ describe('票 07 · 闸门 D · 反例：「步骤更多但总花费更低」', 
       // 两半都必须可读——这是「不得只报告花费那一半」的落点。
       expect(controlTokens).toBeGreaterThan(0)
       expect(prunedTokens).toBeGreaterThan(0)
+      readings.set(k, [
+        { steps: controlSignals.steps, probes: controlSignals.repeatedProbes, billed: controlTokens },
+        { steps: prunedSignals.steps, probes: prunedSignals.repeatedProbes, billed: prunedTokens },
+      ])
       shelves.push({
         k,
         qualityWorse: prunedSignals.steps > controlSignals.steps
@@ -235,6 +260,17 @@ describe('票 07 · 闸门 D · 反例：「步骤更多但总花费更低」', 
       })
       await disposeCompared(compared)
     }
+
+    // `K = 0`（恶化最重）与 `K = 10`（首个不再恶化）两档的具体读数：质量、重复探查、计费三项。
+    // 这三组数字就是记录里引用的那几项，钉住它们才有「记录与实测一致」可言。
+    expect(readings.get(0)).toEqual([
+      { steps: 13, probes: 9, billed: 2878 },
+      { steps: 44, probes: 40, billed: 26990 },
+    ])
+    expect(readings.get(10)).toEqual([
+      { steps: 13, probes: 9, billed: 2878 },
+      { steps: 13, probes: 9, billed: 2868 },
+    ])
 
     // `K = 0` 是恶化的那一档：质量确实更差。
     expect(shelves.find(shelf => shelf.k === 0)!.qualityWorse).toBe(true)

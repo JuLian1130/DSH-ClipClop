@@ -21,7 +21,7 @@ import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage } from '@deepseek-ai/ds
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { LifecycleOptions, LlmCall, PersistentLifecycle, ScriptedStep } from './session-harness.ts'
-import { cleanupRoots, lifecycle, persistedPrunes, surfaceReading } from './session-harness.ts'
+import { cleanupRoots, lifecycle, surfaceReading } from './session-harness.ts'
 import type { SurfaceReading } from './session-harness.ts'
 import { proxySignals, reasoningTokens } from './gate-readings.ts'
 
@@ -78,8 +78,6 @@ export interface OverflowScenario {
    * `compaction/summary` 事件读，读不到时返回 `undefined`。
    */
   readonly summaryReasoningShare: number
-  /** 落盘的裁剪决策条数（搭车的前提：裁剪先落盘）。 */
-  readonly prunes: number
   /** 该 turn 的收尾原因（`completed` 即重试成功；但它**不是**任务达成信号）。 */
   readonly turnEnds: readonly string[]
   /** 释放整个 context（落盘根由 `cleanupRoots` 删）。 */
@@ -97,8 +95,6 @@ let sessionCounter = 0
  * @returns 现场，见 {@link OverflowScenario}。
  */
 export async function overflowScenario(options: {
-  /** 失败码；给别的码时 compaction-basic 不介入、该 turn 直接以失败收尾。 */
-  readonly code?: string
   /** 保留窗口；给大值即「裁不掉任何东西」的对照臂。 */
   readonly keepRecentSteps?: number
   /** 是否挂 tool-result pruner（构造「它落了 replace」的分支）。 */
@@ -124,7 +120,6 @@ export async function overflowScenario(options: {
   readonly largeToolResults?: boolean
 } = {}): Promise<OverflowScenario> {
   const observed: OverflowObservation[] = []
-  const code = options.code ?? OVERFLOW.code
   // 失败只发生在 turn 2 的第一条请求上：用「请求里出现 turn 2 的文本」辨认，触发一次之后就撤掉。
   let armed = false
   const failWhen: LifecycleOptions['failWhen'] = request => {
@@ -136,7 +131,7 @@ export async function overflowScenario(options: {
     if (!request.messages.some(message => message.content.some(block =>
       block.type === 'text' && block.text === SECOND_TURN_TEXT))) return undefined
     armed = false
-    return { message: OVERFLOW.message, code }
+    return { message: OVERFLOW.message, code: OVERFLOW.code }
   }
   const lc = await lifecycle(SCRIPT, {
     config: { everySteps: M, keepRecentSteps: options.keepRecentSteps ?? K },
@@ -154,7 +149,6 @@ export async function overflowScenario(options: {
   await lc.step(agent, 'first turn')
   const beforeFailure = surfaceReading(session)
   const secondTurnFrom = lc.calls.length
-  const messageBefore = countEvents(session, 'assistant/message')
   armed = true
   agent.followup(createUserMessage({ content: [{ type: 'text', text: SECOND_TURN_TEXT }], source: { kind: 'user' } }))
   await agent.whenIdle()
@@ -169,7 +163,6 @@ export async function overflowScenario(options: {
     secondTurnFrom,
     // 没有摘要调用时给 `NaN`（见字段文档）：不折成 0，让「没测到」无法被当成读数。
     summaryReasoningShare: summaryCall === undefined ? Number.NaN : reasoningShare(summaryCall),
-    prunes: persistedPrunes(session).length,
     turnEnds: proxySignals(session.snapshotEvents()).turnEnds,
     dispose: async () => {
       await lc.dispose()
@@ -190,11 +183,6 @@ function registerNoop(ctx: Context, largeResults: boolean): void {
     output: { schema: {}, render: () => [{ type: 'text', text: body }] },
     execute: async () => ({}),
   })
-}
-
-/** 日志里某类事件的条数。 */
-function countEvents(session: Session, type: string): number {
-  return session.snapshotEvents().filter(event => event.type === type).length
 }
 
 /** 摘要调用自身与随后的重试请求各一次模型调用。 */

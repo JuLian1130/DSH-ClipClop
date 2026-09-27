@@ -16,7 +16,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { LifecycleOptions, PersistentLifecycle, ScriptedStep } from './session-harness.ts'
-import { cleanupRoots, lifecycle, persistedPrunes } from './session-harness.ts'
+import { cleanupRoots, lifecycle, persistedPrunes, registerTool } from './session-harness.ts'
 import { proxySignals } from './gate-readings.ts'
 
 /** 一臂的现场。 */
@@ -118,15 +118,7 @@ async function driveArm(lc: PersistentLifecycle, turns: readonly string[], id: s
 
 /** 脚本用到的两条工具，让工具调用能派发（两臂都要，否则工具调用失败本身就会污染信号）。 */
 function registerTools(ctx: Context): void {
-  for (const name of ['noop', 'read']) {
-    ctx.tools.register({
-      name,
-      description: `${name} tool`,
-      parameters: { type: 'object', properties: {} },
-      output: { schema: {}, render: () => [{ type: 'text', text: 'ok' }] },
-      execute: async () => ({}),
-    })
-  }
+  for (const name of ['noop', 'read']) registerTool(ctx, name)
 }
 
 /** 释放一次对照里的两臂（落盘根统一由 `cleanupRoots` 删）。 */

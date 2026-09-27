@@ -19,7 +19,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { H, visibleReasoning } from './support/gate-readings.ts'
+import { H, reasoningTokens, visibleReasoning } from './support/gate-readings.ts'
 import { overflowScenario, reasoningShare, retryPair, summaryUsage } from './support/overflow-scenario.ts'
 import { cleanupRoots, persistedPrunes, recordedAssistants } from './support/session-harness.ts'
 
@@ -114,29 +114,28 @@ describe('票 07 · 闸门 B-2 · 反例：摘要照跑时 ① 可能为负', ()
     const untouchedPair = retryPair(untouched)
 
     // 摘要调用的两个读数**不在** `assistant/message` 上：摘要走 `ctx.llm.stream()`、不经 agent loop，其 usage
-    // 由 `compaction/summary` 事件承载。**读不到时不得记 0**——所以这里先断能读到。
-    const usage = summaryUsage(pruned.session)
-    expect(usage).toBeDefined()
-    // 这两个读数**进入算式**：摘要调用的计费输入就是「不裁剪时这次摘要要付的钱」，`cacheReadTokens` 是其中
-    // 已按 h 折扣的那部分。只做存在性断言会让这段定价与事件上的数完全脱钩。
-    expect(usage!.inputTokens).toBeGreaterThan(0)
-    const billed = (usage!.inputTokens ?? 0) + (usage!.cacheReadTokens ?? 0)
-    expect(billed).toBeGreaterThan(0)
+    // 由 `compaction/summary` 事件承载。**读不到时不得记 0**——所以两臂各自先断能读到。
+    // 两侧**各用自己的** usage：拿裁剪臂的读数当「不裁剪」基线会把两次请求量成同一侧。
+    const prunedUsage = summaryUsage(pruned.session)
+    const untouchedUsage = summaryUsage(untouched.session)
+    expect(prunedUsage).toBeDefined()
+    expect(untouchedUsage).toBeDefined()
 
-    // 用**同一个 h** 定价这次摘要调用：不裁剪的成本 ≈ h × S（前缀热），裁剪后 ≈ (1 − r) × S。
-    // `S` 取实测的摘要输入体积；`h × S` 里已按 h 折扣的那部分是缓存命中的输入，用事件上报的
-    // `cacheReadTokens` 交叉校验它不可能是 0 折扣（否则 `h × S` 这条口径在本场景没有依据）。
-    const s = untouchedPair.summary.requestTokens
-    const r = reasoningShare(prunedPair.summary)
-    const prunedCost = (1 - r) * s
-    const untouchedCost = H * (usage!.cacheReadTokens ?? 0) + (usage!.inputTokens ?? 0)
-    // 结论必须明确写成「更贵/更便宜」，不得只写「收益可观」：两个成本都是算出来的数。
+    // 用**同一个 h** 定价两臂各自的这次摘要调用：`h × cacheRead + input` 是它实际的计费输入。
+    const priced = (usage: { readonly inputTokens?: number, readonly cacheReadTokens?: number }): number =>
+      H * (usage.cacheReadTokens ?? 0) + (usage.inputTokens ?? 0)
+    const prunedCost = priced(prunedUsage!)
+    const untouchedCost = priced(untouchedUsage!)
+    // 结论必须明确写成「更贵/更便宜」，不得只写「收益可观」：两个成本都是算出来的数、且来自各自那一臂。
+    expect(prunedCost).toBeGreaterThan(0)
     expect(untouchedCost).toBeGreaterThan(0)
-    const cheaper = prunedCost < untouchedCost
-    // 该场景下 r 与 h 的关系给出结论：`h > 1 − r` ⟺ 先裁再摘要更便宜。这条不是代数恒等式——右边来自
-    // **同一个 h** 与**实测**的 r，左边来自两个不同的成本口径（一个用未缓存全价的 S，一个用事件上报的
-    // 三次计数），两者相等是被断言的经验事实，而不是约分出来的。
-    expect(cheaper).toBe(H > 1 - r)
+    expect(prunedCost).toBeGreaterThan(untouchedCost)
+
+    // 与规格那条边界**各自**断方向：`h > 1 − r` 是「先裁再摘要更便宜」的条件，本场景不成立。
+    // 它和上面那条**不是同一个口径**（上面按事件上报的三次计数定价，规格那条用 `h × S` 与 `(1 − r) × S`
+    // 这两个近似式），所以只各自断方向，不断两者相等——那会把两个不同的量当恒等式。
+    const r = reasoningShare(prunedPair.summary)
+    expect(H > 1 - r).toBe(false)
 
     await pruned.dispose()
     await untouched.dispose()
@@ -154,15 +153,17 @@ describe('票 07 · 闸门 B-2 · 反例：摘要照跑时 ① 可能为负', ()
     expect(prunedPair.summary.requestTokens).toBeLessThan(untouchedPair.summary.requestTokens)
     const removed = untouchedPair.summary.requestTokens - prunedPair.summary.requestTokens
     expect(removed).toBeGreaterThan(0)
-    // 逐项记录（票面第 20 条要「记录摘要调用自身的 inputTokens / cacheReadTokens」）：
-    const usage = summaryUsage(pruned.session)
-    expect(usage).toBeDefined()
-    // 这次摘要调用**自身**省下的就是 `removed` 个未缓存输入 token——它相对不裁剪时更便宜，这是可观察事实。
-    expect(prunedPair.summary.requestTokens).toBe(untouchedPair.summary.requestTokens - removed)
+    // 省下的**就是**那几步被裁推理——独立复算：取两臂摘要请求的推理文本差集、按估价器定价，与上面的差值对上。
+    // （不写成 `expect(pruned).toBe(untouched - removed)`：那只是把 `removed` 的定义代回去，恒真。）
+    const removedReasoning = untouchedPair.summary.reasoning.filter(text => !prunedPair.summary.reasoning.includes(text))
+    expect(removedReasoning.length).toBeGreaterThan(0)
+    expect(reasoningTokens(removedReasoning)).toBe(removed)
+    // 逐项记录（票面第 20 条要「记录摘要调用自身的 inputTokens / cacheReadTokens」）。
+    expect(summaryUsage(pruned.session)).toBeDefined()
 
-    // 但它**不足以**让 ① 在该请求形状上转为正收益：`removed` 只占原文输入的一个零头，而「先裁再摘要」的
-    // 代价是那条边界（`h > 1 − r`）在 `h = 0.02` 下不成立（上一条测试已断言「更贵」）。记录里如实写。
-    expect(removed / untouchedPair.summary.requestTokens).toBeLessThan(1 - H)
+    // 但它**不足以**让 ① 在该请求形状上转为正收益：`removed` 只占原文输入的一个零头（实测 0.31%），
+    // 而「先裁再摘要」的代价是那条边界（`h > 1 − r`）在 `h = 0.02` 下不成立（上一条测试已断言「更贵」）。
+    expect(removed / untouchedPair.summary.requestTokens).toBeLessThan(0.01)
     await pruned.dispose()
     await untouched.dispose()
   }, 300000)

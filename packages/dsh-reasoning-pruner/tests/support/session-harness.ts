@@ -344,10 +344,17 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
   /**
    * 由**请求内容**派生的 `usage`（本票补的第三样能力）。
    *
-   * 规则写死：本次请求与上一次请求**逐消息同字节**的前缀计 `cacheReadTokens`，其后变更的尾部计
-   * `inputTokens`；`cacheWriteTokens` 只在声明 `write` 场景的那一步等于该尾部。token 数由 DSH 自己的
-   * 固定密度估价器（`@deepseek-ai/dsh-token-meter/estimate`）算出，**脚本不写死任何 token 数**——写死的数
-   * 会让「裁了推理 ⇒ 后续请求的输入变小」这条读数恒真，也会让两臂对照的空转反例失去意义。
+   * 规则写死：本次请求与上一次请求**逐消息同字节**的前缀计 `cacheReadTokens`，其后变更的尾部按场景计
+   * `inputTokens`（`hit` / `cold`）或 `cacheWriteTokens`（`write`，该尾部是被写入缓存的那一段）。
+   *
+   * **三次计数互斥**——装入包的类型明写「`inputTokens` is uncached input only; cached input is reported
+   * separately as `cacheReadTokens`/`cacheWriteTokens`」（`@deepseek-ai/dsh-llm` 的 `TokenUsage` 文档），真实
+   * 适配器也按各自的 provider 字段分开映射（pi-ai 的 `usage.cacheWrite`）。所以 `write` 下那一段尾部只进
+   * `cacheWriteTokens`、**不再**同时进 `inputTokens`，否则 `billedInput`（三者和）会把它算两次。
+   *
+   * token 数由 DSH 自己的固定密度估价器（`@deepseek-ai/dsh-token-meter/estimate`）算出，**脚本不写死任何
+   * token 数**——写死的数会让「裁了推理 ⇒ 后续请求的输入变小」这条读数恒真，也会让两臂对照的空转反例
+   * 失去意义。
    *
    * 按**消息内容**而非整条消息比较前缀：消息身份与来源不参与模型可见输入，让它们参与前缀判定会造出
    * 「内容没变但前缀不命中」的假命中失败。裁剪改的正是内容，所以裁掉推理的请求在这里必然读到一个更短
@@ -368,12 +375,13 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
     }
     const price = (from: number): number =>
       options.messages.slice(from).reduce((total, message) => total + estimateContent(message.content) + ROLE_OVERHEAD, 0)
-    const inputTokens = price(cached)
+    const suffix = price(cached)
+    // 互斥：`write` 下这段尾部是被写入缓存的那一段，只进 `cacheWriteTokens`（见上方文档）。
     return {
-      inputTokens,
+      inputTokens: scenario === 'write' ? 0 : suffix,
       outputTokens: 10,
-      cacheReadTokens: price(0) - inputTokens,
-      cacheWriteTokens: scenario === 'write' ? inputTokens : 0,
+      cacheReadTokens: price(0) - suffix,
+      cacheWriteTokens: scenario === 'write' ? suffix : 0,
       reasoningTokens: 5,
     }
   }

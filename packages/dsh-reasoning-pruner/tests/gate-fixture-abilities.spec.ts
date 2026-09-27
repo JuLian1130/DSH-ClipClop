@@ -16,11 +16,17 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
+import { estimateContent, ROLE_OVERHEAD } from '@deepseek-ai/dsh-token-meter/estimate'
 import type { ScriptedStep } from './support/session-harness.ts'
 import { cleanupRoots, lifecycle, registerTool } from './support/session-harness.ts'
 import { tokenReadings } from './support/gate-readings.ts'
 
 afterEach(cleanupRoots)
+
+/** 复算用：把一条消息的规范化内容按 DSH 的估价器定价（与 `LlmCall.requestTokens` 同一口径）。 */
+function priceOf(content: string): number {
+  return estimateContent(JSON.parse(content) as never) + ROLE_OVERHEAD
+}
 
 /** 四步脚本：每步推理文本不同，于是「由请求内容派生」有可分辨的输入。 */
 const SCRIPT: ScriptedStep[] = Array.from({ length: 4 }, (_unused, index) => ({
@@ -73,6 +79,7 @@ describe('票 07 第 9 条：三样能力逐项到达消息层', () => {
     expect(replayState.response.api).toBe('openai-completions')
 
     // ③ `usage` 由**请求内容**派生：断言值由该次请求独立复算，不是抄适配器的常量。
+    // 复算走用例自己的读数面（`LlmCall.content` 是捕获下来的请求内容），只借估价器，不借适配器的 `deriveUsage`。
     const readings = tokenReadings(session)
     for (const [index, reading] of readings.slice(1).entries()) {
       const call = lc.calls[index + 1]!
@@ -84,9 +91,14 @@ describe('票 07 第 9 条：三样能力逐项到达消息层', () => {
       }
       // 至少一条消息相同（系统提示词），所以缓存命中非零——缓存字段不是恒零的常量。
       expect(cached).toBeGreaterThan(0)
-      expect(reading.cacheReadTokens).toBeGreaterThan(0)
+      const perMessage = call.content.map(priceOf)
+      const suffix = perMessage.slice(cached).reduce((total, price) => total + price, 0)
+      // 三次计数逐项相等——不是「大于零」这种任何实现都过的写法。
+      expect(reading.inputTokens).toBe(suffix)
+      expect(reading.cacheReadTokens).toBe(perMessage.reduce((total, price) => total + price, 0) - suffix)
+      expect(reading.cacheWriteTokens).toBe(0)
       // 未缓存输入就是变更后缀的价格，缓存命中就是其余部分：两者之和等于全量价格。
-      expect(reading.billedInput).toBeGreaterThan(reading.inputTokens)
+      expect(reading.billedInput).toBe(perMessage.reduce((total, price) => total + price, 0))
     }
 
     await lc.dispose()
@@ -107,12 +119,14 @@ describe('票 07 第 9 条：三样能力逐项到达消息层', () => {
     await cold.lc.dispose()
   }, 180000)
 
-  it('`cacheWriteTokens` 只在脚本声明 write 的步骤上非零，并等于该次的未缓存输入', async () => {
+  it('`cacheWriteTokens` 只在脚本声明 write 的步骤上非零，且该段尾部不再计入未缓存输入', async () => {
     const { lc, session } = await drive(SCRIPT.map(step => ({ ...step, cache: 'write' as const })), 'cache-write')
     const first = tokenReadings(session)[0]!
-    // 写入场景下「变更的后缀」同时计为未缓存输入与缓存写入。
+    // 写入场景下「变更的后缀」只计为缓存写入——三次计数互斥，不能再同时进 `inputTokens`，
+    // 否则 `billedInput`（三者和）会把它算两次（`TokenUsage` 文档：inputTokens 只是 uncached input）。
     expect(first.cacheWriteTokens).toBeGreaterThan(0)
-    expect(first.cacheWriteTokens).toBe(first.inputTokens)
+    expect(first.inputTokens).toBe(0)
+    expect(first.billedInput).toBe(first.cacheWriteTokens)
     await lc.dispose()
   }, 120000)
 })
