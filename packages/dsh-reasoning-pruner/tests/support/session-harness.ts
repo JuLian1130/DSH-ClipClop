@@ -28,7 +28,7 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import ToolResultPruner from '@deepseek-ai/dsh-compaction-tool-result-pruner'
 import { createUserMessage, LlmAdapter, LlmError, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { AssistantMessage, ContentBlock, GenerateOptions, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AssistantMessage, ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import { estimateContent, ROLE_OVERHEAD } from '@deepseek-ai/dsh-token-meter/estimate'
 import { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'

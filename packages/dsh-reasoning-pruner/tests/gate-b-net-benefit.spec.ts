@@ -138,10 +138,12 @@ describe('票 07 · 闸门 B · 净收益算式代入实测值', () => {
   }, 60000)
 
   it('不提供定价时的等价 token 判据：新增未缓存输入 < 后续请求数 × 被裁推理', async () => {
+    // 用**记录所引用的那一档**（`M = 3` / `K = 1`）：登记章把这条判据的读数写成 `55 < 40 × 5`，用例必须
+    // 真的产在那组配置上，否则票据记录与它所指的用例各自漂移（`M = 2` 档的读数是 `25 < 200`）。
     const compared = await twoArms({
       turnSteps: TURN_STEPS,
       turns: TURNS,
-      prunedConfig: { everySteps: 2, keepRecentSteps: 0 },
+      prunedConfig: { everySteps: 3, keepRecentSteps: 1 },
     })
     const control = compared.control.lc.calls
     const pruned = compared.pruned.lc.calls
@@ -159,9 +161,10 @@ describe('票 07 · 闸门 B · 净收益算式代入实测值', () => {
     // 这条是同一算式在 h = 0.5 附近的特例，不是一般结论——记录里必须写明用的是哪一条。
     // 明确写出结论：本场景下这条 token 判据给出**为正**（`55 < 40 × 5`）。
     expect(tokenCriterionPositive).toBe(true)
-    // 代价那一侧必须真的量得出一个正数（推进确实重算了尾部）。
-    expect(addedUncached).toBeGreaterThan(0)
-    expect(r).toBeGreaterThan(0)
+    // 代价与收益两侧就是记录里引用的那两个数（`tail = 55`、`R = 5`）：钉住它们，「记录与用例同源」才有
+    // 东西挡它漂移——只断方向时换成另一档配置也照绿。
+    expect(addedUncached).toBe(55)
+    expect(r).toBe(5)
     // 与 h = 0.5 的特例口径对齐：`n = tail / R`，所以「n 小于后续请求数」与这条 token 判据**恒等**
     // （这正是规格说它是「同一算式在 `h = 0.5` 附近的特例」的含义）。
     expect(netBenefit({ tail: addedUncached, r, h: 0.5, laterRequests: LATER_REQUESTS }).positive).toBe(tokenCriterionPositive)

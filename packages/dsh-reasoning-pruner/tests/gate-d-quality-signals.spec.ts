@@ -18,7 +18,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { proxySignals, repeatedProbes, tokenReadings } from './support/gate-readings.ts'
+import { H, proxySignals, repeatedProbes, tokenReadings } from './support/gate-readings.ts'
 import { disposeCompared, kSweep, twoArms } from './support/two-arm.ts'
 import { callInfo, cleanupRoots, persistedPrunes } from './support/session-harness.ts'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
@@ -151,14 +151,17 @@ describe('票 07 · 闸门 D · 五个代理信号', () => {
 
 describe('票 07 · 闸门 D · 重复探查归实验侧自建', () => {
   it('抓得到「中间夹着别的调用」的再次读取，且参数键序不影响配对', () => {
+    // 两次同目标 `read` **必须隔着别的调用**（这里隔着 `read B` 与 `noop`）：挨着放时「只数连续重复」
+    // 的实现也给同样的读法，这条断言对它就不可失败，而 `K` 的下限正是建立在这个统计器上。
     const calls = [
       call('read', '{"path":"A","z":1}'),
-      call('read', '{"z":1,"path":"A"}'),
       call('read', '{"path":"B"}'),
       call('noop', '{"x":1}'),
+      call('read', '{"z":1,"path":"A"}'),
     ]
     const statistic = repeatedProbes(calls)
-    // 规范化后 A 被读了两次 ⇒ 1 次重复；B 一次、noop 不是探查类工具。
+    // 规范化后 A 被读了两次（键序不同、隔着一读一 noop）⇒ 1 次重复；B 一次、noop 不是探查类工具。
+    // 连续重复器在这里给 0——这正是本条判据要能分辨的那件事。
     expect(statistic.total).toBe(1)
     expect(statistic.perTarget.filter(entry => entry.repeats > 0)).toHaveLength(1)
     expect(statistic.perTarget.find(entry => entry.repeats > 0)!.count).toBe(2)
@@ -227,13 +230,17 @@ describe('票 07 · 闸门 D · K 由本闸门背书', () => {
 describe('票 07 · 闸门 D · 反例：「步骤更多但总花费更低」', () => {
   it('恶化的每一档都把「质量」与「花费」两半同时读出来，并如实给出是否为成本吸收', async () => {
     // 逐档把两半都读出来：这一档的结论必须**同时**给出「质量」与「花费」两个读数，不得只报花费那一半。
+    // 花费 = 按外部声明的 `h` 定价（见 `sumCost`）；计费 token 另列，只作为记录里那一栏的读数。
     const shelves: { readonly k: number, readonly qualityWorse: boolean, readonly costLower: boolean }[] = []
     // 逐档的原始读数：记录里点名了 `K = 0` 与 `K = 10` 两档的具体数字，那两档必须在用例里被钉住——
     // 否则记录里的数字没有任何东西挡它漂移（这正是上一版登记写错 2846/26896/2836 却全绿的原因）。
-    const readings = new Map<number, { readonly steps: number, readonly probes: number, readonly billed: number }[]>()
-    // 扫**出现恶化的每一档**（`K = 0, 4, 6, 8`）——记录里「恶化的每一档花费也更高」这句话必须由这些档的
-    // 读数背书，只扫 `0/6/10` 会让 4、8 两档的结论没有任何读数支撑。
-    for (const k of [0, 4, 6, 8, 10]) {
+    // `billed` 是**计费输入 token**（三者和，记录里引用的就是它），`cost` 是按 `h` 定价后的**花费**：
+    // 两者在裁剪把缓存命中推成未缓存输入时会给出相反方向，所以必须分开钉、不得互相代替。
+    const readings = new Map<number, { readonly steps: number, readonly probes: number, readonly billed: number, readonly cost: number }[]>()
+    // 扫**实测为恶化的每一档**：这条 latch 是「质量下降被成本吸收」的唯一防线，档位集合必须等于
+    // 「实测恶化的档」而不是记录里随手列的几个。`K = 9` 由上面那条用例断为恶化档，因此它必须在这里
+    // 也被读到——把 `1/2/3/9` 排除在外时，那四档出现吸收也会全绿。
+    for (const k of [0, 1, 2, 3, 4, 6, 8, 9, 10]) {
       const compared = await twoArms({
         turnSteps: SWEEP_TURN_STEPS,
         turns: SWEEP_TURNS,
@@ -243,14 +250,14 @@ describe('票 07 · 闸门 D · 反例：「步骤更多但总花费更低」', 
       })
       const controlSignals = proxySignals(compared.control.session.snapshotEvents())
       const prunedSignals = proxySignals(compared.pruned.session.snapshotEvents())
-      const controlTokens = sumBilled(compared.control.session)
-      const prunedTokens = sumBilled(compared.pruned.session)
+      const controlTokens = sumCost(compared.control.session)
+      const prunedTokens = sumCost(compared.pruned.session)
       // 两半都必须可读——这是「不得只报告花费那一半」的落点。
       expect(controlTokens).toBeGreaterThan(0)
       expect(prunedTokens).toBeGreaterThan(0)
       readings.set(k, [
-        { steps: controlSignals.steps, probes: controlSignals.repeatedProbes, billed: controlTokens },
-        { steps: prunedSignals.steps, probes: prunedSignals.repeatedProbes, billed: prunedTokens },
+        { steps: controlSignals.steps, probes: controlSignals.repeatedProbes, billed: sumBilled(compared.control.session), cost: controlTokens },
+        { steps: prunedSignals.steps, probes: prunedSignals.repeatedProbes, billed: sumBilled(compared.pruned.session), cost: prunedTokens },
       ])
       shelves.push({
         k,
@@ -261,26 +268,34 @@ describe('票 07 · 闸门 D · 反例：「步骤更多但总花费更低」', 
       await disposeCompared(compared)
     }
 
-    // `K = 0`（恶化最重）与 `K = 10`（首个不再恶化）两档的具体读数：质量、重复探查、计费三项。
+    // `K = 0`（恶化最重）与 `K = 10`（首个不再恶化）两档的具体读数：质量、重复探查、计费 token 三项。
     // 这三组数字就是记录里引用的那几项，钉住它们才有「记录与实测一致」可言。
-    expect(readings.get(0)).toEqual([
+    expect(readings.get(0)!.map(entry => ({ steps: entry.steps, probes: entry.probes, billed: entry.billed }))).toEqual([
       { steps: 13, probes: 9, billed: 2878 },
       { steps: 44, probes: 40, billed: 26990 },
     ])
-    expect(readings.get(10)).toEqual([
+    expect(readings.get(10)!.map(entry => ({ steps: entry.steps, probes: entry.probes, billed: entry.billed }))).toEqual([
       { steps: 13, probes: 9, billed: 2878 },
       { steps: 13, probes: 9, billed: 2868 },
     ])
+    // **花费方向与计费 token 方向相反**（这正是本条不得用三者和当花费的理由）：`K = 10` 档计费 token
+    // 更低（2868 < 2878），按 `h = 0.02` 定价却**更贵**——裁剪把 315 token 从缓存命中推成未缓存输入，
+    // 三者和看不见这一步。记录里 `K = 10` 那一句不得写成「更省钱」。
+    const cleanTokens = readings.get(10)!
+    expect(cleanTokens[1]!.billed).toBeLessThan(cleanTokens[0]!.billed)
+    expect(cleanTokens[1]!.cost).toBeGreaterThan(cleanTokens[0]!.cost)
 
     // `K = 0` 是恶化的那一档：质量确实更差。
     expect(shelves.find(shelf => shelf.k === 0)!.qualityWorse).toBe(true)
     // **实测结论（如实记）**：本场景下没有任何一档出现「步骤更多但总花费更低」——恶化的每一档花费也更高，
     // 所以「质量下降被成本吸收」这条反例在本构造下不成立。记录照实写，不硬凑。
+    // 这里管的是**花费**（按 `h` 定价），不是计费 token：两者在 `K = 10` 档方向相反（见上一条断言）。
     expect(shelves.filter(shelf => shelf.qualityWorse).every(shelf => !shelf.costLower)).toBe(true)
-    // 而在**不**恶化的那一档上花费确实更低：两半的走向是相反的，这正是判据必须两半都读的理由。
+    // 而在**不**恶化的那一档上计费 token 确实更低——但花费更高（两条走向相反），这正是判据必须两半都读、
+    // 且必须写清用的是哪一种币种的理由。
     const clean = shelves.find(shelf => shelf.k === 10)!
     expect(clean.qualityWorse).toBe(false)
-    expect(clean.costLower).toBe(true)
+    expect(clean.costLower).toBe(false)
   }, 300000)
 })
 
@@ -295,11 +310,26 @@ function call(name: string, rawArguments: string): SessionEvent<'tool/call'> {
 }
 
 /**
- * 该会话的「总花费」那一半读数：读数层已给的计费输入之和。
+ * 该会话的**花费**读数，按本票外部声明的 `h` 定价。
  *
- * 不再自己重写三者和——`tokenReadings` 就是本票建的读数层，`billedInput` 的定义（三次计数之和）只有一处。
+ * 计价式与闸门 B-2 同源：`未缓存输入 + h × 缓存命中 + 缓存写入`（`h` 是缓存命中单价 / 未缓存输入单价）。
+ * **不得**用三次计数之和当花费：裁剪把 token 从 `inputTokens` 搬进 `cacheReadTokens` 时三者和一格不变，
+ * 于是「裁剪更省钱」这条结论会被装置预先定死——实测 `K = 10` 档正是这种形态（见下方断言）。
  * @param session - 会话。
- * @returns 全部 `assistant/message` 的计费输入之和。
+ * @returns 全部 `assistant/message` 按 `h` 定价的花费。
+ */
+function sumCost(session: Session): number {
+  return tokenReadings(session).reduce((total, reading) =>
+    total + reading.inputTokens + H * reading.cacheReadTokens + reading.cacheWriteTokens, 0)
+}
+
+/**
+ * 该会话的**计费输入 token**（三次计数之和）。
+ *
+ * 它是记录里引用的那一栏，**不是**花费：裁剪把 token 从缓存命中搬进未缓存输入时这个和不变，
+ * 所以「更省钱」这类结论只能由 {@link sumCost} 给出。
+ * @param session - 会话。
+ * @returns 全部 `assistant/message` 的计费输入 token 之和。
  */
 function sumBilled(session: Session): number {
   return tokenReadings(session).reduce((total, reading) => total + reading.billedInput, 0)
