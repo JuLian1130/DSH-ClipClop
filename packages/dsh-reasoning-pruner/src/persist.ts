@@ -150,6 +150,29 @@ export function pruneAtStepBoundary(
 }
 
 /**
+ * 激活点① 的触发：请求**已经**因 `CONTEXT_WINDOW_EXCEEDED` 失败时，把保留窗口之外的已记录步骤一次裁掉。
+ *
+ * 失败本身就是触发器，这里没有任何阈值策略。裁剪只改模型可见内容（投影推进 `contentGeneration`），
+ * **不推进 `replaceGeneration`**，因此它自己不会让 compaction-basic 判定为进展、也不会触发重试；搭车
+ * 成立与否由 compaction-basic 决定（见设计文档「激活点 ①：溢出救援」）。
+ *
+ * 选区与 ② 不同：② 按 `M` 节流、只推进一批；① 是补救，失败已经发生过一次，所以把当时**全部**有资格
+ * 的保留窗口外步骤一次裁掉。
+ * @param session - 活跃会话。
+ * @param signal - 该 turn 的取消信号；已中止时不动作。
+ * @param config - 已解析的配置。
+ * @returns 落盘的事件序号；无可裁步骤或信号已中止时为 `undefined`。
+ */
+export function pruneAtRequestError(
+  session: Session,
+  signal: AbortSignal,
+  config: Required<Config>,
+): SessionSeq | undefined {
+  if (signal.aborted) return undefined
+  return persistReasoningPrune(session, pruneTargetsAtStep(session, config))
+}
+
+/**
  * 裁剪资格成立的子集，按传入顺序，且**逐步骤**判定。
  *
  * 同一会话中途换模型会混用传输，所以这里不按会话整体判定，也不接受「会话有资格」这种整体结论。资格读的

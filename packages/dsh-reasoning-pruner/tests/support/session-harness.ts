@@ -24,7 +24,9 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
-import { createUserMessage, LlmAdapter, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
+import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
+import ToolResultPruner from '@deepseek-ai/dsh-compaction-tool-result-pruner'
+import { createUserMessage, LlmAdapter, LlmError, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
@@ -52,6 +54,67 @@ export interface ScriptedStep {
 /** 信封里 `api` 的缺省值，也就是唯一有裁剪资格的传输。 */
 const API = 'openai-completions'
 
+/**
+ * 让某一次模型调用真的以这个失败收场。
+ *
+ * `code` 走 `LlmError`（`HarnessError` 的子类）的 `code` 自有属性，因此运行期把它归一化成
+ * `finish: { kind: 'error', failure }`、`failure.code` 就是这个字符串；换成普通 `Error` 会被归一化成
+ * `UNKNOWN`，造不出 `CONTEXT_WINDOW_EXCEEDED` 这类判据要的码。
+ */
+export interface LlmFailure {
+  /** 失败正文。 */
+  readonly message: string
+  /** 提供方中立码（如 `CONTEXT_WINDOW_EXCEEDED`）。 */
+  readonly code: string
+}
+
+/** 一次模型调用的观察量：模型调用下标、用途，以及请求侧输入的规模。 */
+export interface LlmCall {
+  /** 本适配器实例的第几次调用（从 0 起）。 */
+  readonly call: number
+  /** 请求用途；`'compaction'` 即摘要调用自身。 */
+  readonly purpose: string | undefined
+  /** 请求的消息条数。 */
+  readonly messages: number
+  /** 请求全部消息的文本长度之和。 */
+  readonly chars: number
+  /** 本适配器为该次调用报告的未缓存输入 token 数；调用失败时为 `undefined`。 */
+  readonly inputTokens: number | undefined
+  /** 本适配器为该次调用报告的缓存命中 token 数；调用失败时为 `undefined`。 */
+  readonly cacheReadTokens: number | undefined
+}
+
+/**
+ * 表面在两个 generation 上的读数。
+ *
+ * `replaceGeneration` 只数 `replace`（摘要落盘会推进它），`contentGeneration` 还数插件投影变更
+ * （本插件的裁剪推进它）——「裁剪不算进展」这条判据的全部依据就是这个差值。
+ */
+export interface SurfaceReading {
+  /** 已提交的 positional replacement 数。 */
+  readonly replaceGeneration: number
+  /** 已提交的 replacement 与插件自有 message 变更之和。 */
+  readonly contentGeneration: number
+  /** 已落盘的裁剪决策条数（承载事件里顶层带 `clipclop` 的那些）。 */
+  readonly prunes: number
+  /** 那一刻模型可见历史里的推理块文本，按出现顺序。 */
+  readonly reasoning: readonly string[]
+}
+
+/**
+ * 取一次表面读数。
+ * @param session - 会话。
+ * @returns 两个 generation、裁剪决策条数与模型可见的推理文本。
+ */
+export function surfaceReading(session: Session): SurfaceReading {
+  return {
+    replaceGeneration: session.surface.replaceGeneration,
+    contentGeneration: session.surface.contentGeneration,
+    prunes: persistedPrunes(session).length,
+    reasoning: reasoningTexts(session),
+  }
+}
+
 /** 本文件创建过的落盘根；`cleanupRoots` 统一删除。 */
 const createdRoots: string[] = []
 
@@ -65,25 +128,63 @@ const createdRoots: string[] = []
 export class ScriptedReasoningAdapter extends LlmAdapter {
   private call = 0
 
+  /** 已经失败过一次（`failWhen` 命中的那一次）；重试不再失败，否则重试成功与否无法观察。 */
+  private failed = false
+
+  /** 每一次模型调用前记录的一行（见 {@link LlmCall}）；`purpose` 与输入规模都出自这一次请求。 */
+  readonly calls: LlmCall[] = []
+
   /**
    * @param script - 逐步脚本；最后一段在脚本用完后重复。
    * @param toolsThrough - 前多少次模型调用发起工具调用；之后一律纯文本收尾，让 turn 有界。
    * @param stepApi - 按模型调用下标逐次覆盖信封声明的传输；最后一个元素在数组用完后重复。用来在**同一个
    *   会话**里混用有资格与无资格的传输——`ineligible` 只能把每一步都改成无资格，造不出「中途换模型」。
+   * @param failWhen - 该次调用的请求满足它时，本次调用以 {@link LlmFailure} 失败（**只失败一次**：命中的
+   *   那一次记下来，重试不再失败）。这是「真实失败路径」的唯一入口：适配器向外抛 `LlmError`，运行期把它
+   *   归一化成 `agent/request-error` 的 `payload.failure`。用「请求里出现某段文本」这种与调用下标无关的
+   *   条件，才不会把「重试是不是真的重发」的判据建在猜测的下标上。
    */
   constructor(
     private readonly script: readonly ScriptedStep[],
     private readonly toolsThrough?: number,
     private readonly stepApi?: readonly string[],
+    private readonly failWhen?: (request: GenerateOptions) => LlmFailure | undefined,
   ) {
     super()
   }
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    let step = this.script[Math.min(this.call, this.script.length - 1)]
-    const api = this.stepApi?.[Math.min(this.call, this.stepApi.length - 1)]
-    if (api !== undefined) step = { ...step, api }
+    const call = this.call
     this.call += 1
+    // 这一次调用的观察行先占位、`usage` 发完再补齐：调用失败时两个 token 读数保持 `undefined`（那一次
+    // 没有 usage 可读），用例靠 `purpose === 'compaction'` 认摘要调用。
+    const observation: {
+      call: number
+      purpose: string | undefined
+      messages: number
+      chars: number
+      inputTokens: number | undefined
+      cacheReadTokens: number | undefined
+    } = {
+      call,
+      purpose: options.purpose,
+      messages: options.messages.length,
+      chars: options.messages.reduce((total, message) => total + textLengthOf(message.content), 0),
+      inputTokens: undefined,
+      cacheReadTokens: undefined,
+    }
+    this.calls.push(observation)
+    if (!this.failed) {
+      const failure = this.failWhen?.(options)
+      if (failure !== undefined) {
+        this.failed = true
+        throw new LlmError(failure.message, failure.code)
+      }
+    }
+
+    let step = this.script[Math.min(call, this.script.length - 1)]
+    const api = this.stepApi?.[Math.min(call, this.stepApi.length - 1)]
+    if (api !== undefined) step = { ...step, api }
     // 有界 turn：第 `toolsThrough` 次模型调用之后不再发起工具调用，于是该 turn 在
     // `toolsThrough + 1` 步收尾。这是「驱动到恰好第 N 步」唯一不依赖时序的写法——`agent/pre-step`
     // 正好在第 N 次请求之前发出，而该请求就是收尾那一次。
@@ -94,12 +195,12 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
     const blocks: ContentBlock[] = []
     if (step.reasoning !== undefined) blocks.push({ type: 'reasoning', text: step.reasoning })
     blocks.push({ type: 'text', text: step.text })
-    for (const [index, call] of (step.calls ?? []).entries()) {
+    for (const [index, invoked] of (step.calls ?? []).entries()) {
       blocks.push({
         type: 'tool-call',
-        id: ToolCallId(`${call.name}-${this.call}-${index}`),
-        name: call.name,
-        arguments: call.arguments,
+        id: ToolCallId(`${invoked.name}-${call}-${index}`),
+        name: invoked.name,
+        arguments: invoked.arguments,
       })
     }
 
@@ -110,16 +211,16 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
         : { type: 'text-delta', index, text: block.type === 'text' ? block.text : '' }
       yield { type: 'block-end', index, block }
     }
-    yield {
-      type: 'usage',
-      usage: {
-        inputTokens: 100,
-        outputTokens: 10,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        reasoningTokens: 5,
-      },
+    const usage = {
+      inputTokens: 100,
+      outputTokens: 10,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 5,
     }
+    observation.inputTokens = usage.inputTokens
+    observation.cacheReadTokens = usage.cacheReadTokens
+    yield { type: 'usage', usage }
     yield {
       type: 'finish',
       reason: blocks.some(block => block.type === 'tool-call') ? { kind: 'tool-calls' } : { kind: 'stop' },
@@ -140,6 +241,15 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
       },
     }
   }
+}
+
+/** 一条消息内容里可读文本的长度之和（文本块与推理块各算自己的 `text`）。 */
+function textLengthOf(content: readonly ContentBlock[]): number {
+  return content.reduce((total, block) => {
+    if (block.type === 'text' || block.type === 'reasoning') return total + block.text.length
+    if (block.type === 'tool-call') return total + block.arguments.length
+    return total
+  }, 0)
 }
 
 /** 落盘后的一条已读日志。 */
@@ -169,6 +279,8 @@ export interface PersistentLifecycle {
   step(agent: Agent, text: string): Promise<void>
   /** 冷读落盘的日志；未装载插件时也走这条路径。 */
   coldRead(id: string): Promise<ColdLog>
+  /** 每一次模型调用前记录的一行，按调用顺序（见 {@link LlmCall}）；摘要调用靠 `purpose` 辨认。 */
+  readonly calls: readonly LlmCall[]
   /** 排空写句柄并释放整个 context；**不删落盘根**（重挂载与读原始落盘文本都还要用它）。 */
   dispose(): Promise<void>
 }
@@ -192,15 +304,19 @@ export interface LifecycleOptions {
    * 在插件装载**之后**、驱动之前被调一次。
    *
    * 位置是有意的：`ctx.on` 的 `{prepend: true}` 走 `unshift`，**后注册的排在队首**，所以在这里注册的
-   * 监听器会跑在本插件之前。用于「只挂一个观察面」的场景（例如给 `ctx.tokenMeter` 打桩）。
+   * `{prepend: true}` 监听器会跑在本插件之前。用于「只挂一个观察面」的场景（例如给 `ctx.tokenMeter`
+   * 打桩）。
    */
   readonly prepend?: (ctx: Context) => void
   /**
    * 在插件装载**之前**、驱动之前被调一次（异步等待其完成）。
    *
-   * 「本插件的监听器排在某个同侪之前」这条判据**只能**在这里建立：只有先注册的同侪 + 一个排在本插件
-   * 之前的观察面，才能让「撤掉本插件的 `{prepend: true}`」表现为可观察的差异。注册在插件之后的观察面
-   * （{@link LifecycleOptions.prepend}）不具备这个性质——它无论如何都排在本插件之后。
+   * 这里注册的同侪与观察面都排在 compaction-basic **之前**（后者由 {@link LifecycleOptions.autoCompaction}
+   * 在本回调之后装载），而本插件以 `{prepend: true}` 注册、恒在 hooks 队首（`unshift` 先插先跑）。
+   *
+   * **这里注册的 `{prepend: true}` 观察面并不在本插件之前**——两者都 `unshift`，「先注册的先跑」在内侧，
+   * 但本插件后注册，所以它排在最前。要观察「本插件跑完、compaction-basic 还没跑」那一刻用
+   * {@link LifecycleOptions.onRequestError}（它在插件之后、`autoCompaction` 之前以 `push` 注册）。
    */
   readonly beforePlugin?: (ctx: Context) => void | Promise<void>
   /**
@@ -216,6 +332,49 @@ export interface LifecycleOptions {
    * 「中途换模型只裁有资格的那些步骤」唯一能正面构造的输入：`ineligible` 是全有或全无。
    */
   readonly stepApi?: readonly string[]
+  /**
+   * 让**第一次**满足它的模型调用以指定失败收场（见 {@link ScriptedReasoningAdapter} 的 `failWhen`）。
+   *
+   * 这是构造一次**真实** `CONTEXT_WINDOW_EXCEEDED` 失败的入口：适配器真的抛错，运行期把它归一化成
+   * `agent/request-error` 的 `payload.failure`，所以失败码、`assistant/attempt`、终局 `throw` 都由真实
+   * 代码路径产生；伪造一条 `agent/request-error` 事件绕不过这条路径。
+   */
+  readonly failWhen?: (request: GenerateOptions) => LlmFailure | undefined
+  /**
+   * 挂真的 `@deepseek-ai/dsh-compaction-basic`（`auto: true`，走它自己的默认阈值）。
+   *
+   * 本插件以 `prepend` 注册，而它在本插件**之前**装载，所以「裁剪先落盘、它的测量与选区在后」这条顺序
+   * 就是真实的同侪形态。
+   */
+  readonly autoCompaction?: boolean
+  /**
+   * `autoCompaction` 时传给 compaction-basic 的配置（缺省只有 `{ auto: true }`，即走它自己的阈值与
+   * `maxOverflowRetries`）。
+   *
+   * 第 6 条用它把 `maxOverflowRetries` 设成 0，构造「它不重试」的稀疏分支。
+   */
+  readonly compactionConfig?: Record<string, unknown>
+  /** 挂真的 `@deepseek-ai/dsh-compaction-tool-result-pruner`（构造「pruner 没落 replace」的分支用）。 */
+  readonly toolResultPruner?: boolean
+  /**
+   * 在插件装载**之前**被调一次，观察面注册得比后续装载的同侪早（`push` ⇒ 不为 prepend 时排在队尾的
+   * 先注册者）。
+   *
+   * 与 {@link LifecycleOptions.beforePlugin} 的分工：这里只用插件实例本身（`createSession` 之后才有
+   * 会话），`beforePlugin` 用来异步挂同侪。观察面必须在这里注册，才能拿到比**后注册的同侪**更早的位置。
+   *
+   * 观察面在本插件之后、compaction-basic 之前以普通 `push` 注册（顺序见上面那句注释），所以它**先于**
+   * compaction-basic 拿到 `atListener`（那一刻本插件已跑完、同侪还没跑），再在 `next()` resolve 后拿到链的
+   * 最终 `action` 与 `settled` 读数。
+   */
+  readonly onRequestError?: (payload: {
+    readonly agent: Agent
+    readonly failure: { readonly code: string }
+    /** 观察者被调到时**立刻**取到的表面读数：即「本插件已跑完、compaction-basic 还没跑」那一刻。 */
+    readonly atListener: SurfaceReading
+    /** 整条链跑完之后（`next()` resolve 时）取到的链的最终动作。 */
+    readonly action: unknown
+  }) => void
   /**
    * 每个 `agent/pre-step` 载荷的观察面，在**本插件的监听器跑完之后**被调一次。
    *
@@ -245,14 +404,34 @@ export async function lifecycle(
   // 计量器是 DSH 的正常装配项（compaction-basic 的 `inject` 里就有它），挂上它之后「未注入的插件不激活」
   // 这条原生语义在夹具里才与真实环境一致；本插件自己不读它（② 的节奏由步数决定）。
   await ctx.plugin(TokenMeter)
-  ctx.llm.registerAdapter(['mock'], new ScriptedReasoningAdapter(
+  const adapter = new ScriptedReasoningAdapter(
     options.ineligible === true
       ? script.map(step => ({ ...step, api: 'anthropic-messages' }))
       : script,
     options.toolsThrough,
     options.stepApi,
-  ))
+    options.failWhen,
+  )
+  ctx.llm.registerAdapter(['mock'], adapter)
   if (options.beforePlugin !== undefined) await options.beforePlugin(ctx)
+  // 顺序有意：`onRequestError` 的观察面先以普通 `push` 注册（此刻队里只有它）、compaction-basic 后装载，
+  // 于是它正落在两者之间；本插件以 `prepend`（`unshift`）恒在 hooks 队首。挂载顺序决定位置，
+  // `autoCompaction` 必须在 `withPlugin` 之前。
+  if (options.onRequestError !== undefined) {
+    const observe = options.onRequestError
+    ctx.on('agent/request-error', (payload, next) => {
+      // 先取一次表面读数：此刻本插件已跑完、compaction-basic 还没跑。`next()` 之后拿到链的最终动作。
+      const atListener = surfaceReading(payload.agent.session)
+      return next().then(action => {
+        observe({ ...payload, atListener, action })
+        return action
+      })
+    })
+  }
+  if (options.toolResultPruner === true) await ctx.plugin(ToolResultPruner)
+  if (options.autoCompaction === true) {
+    await ctx.plugin(BasicCompactionEngine, { auto: true, ...options.compactionConfig })
+  }
   if (options.withPlugin ?? true) await ctx.plugin(plugin, options.config ?? {})
   options.prepend?.(ctx)
   // 观察面注册在插件**之后**：本插件 prepend，所以本监听器排在它之后跑，取样点即「本步骤的决策已落盘」。
@@ -274,6 +453,9 @@ export async function lifecycle(
   return {
     ctx,
     root,
+    get calls() {
+      return adapter.calls
+    },
     async createSession(id, sessionOptions) {
       if (sessionOptions?.resume === true) {
         const handle = await ctx.agents.resume({
