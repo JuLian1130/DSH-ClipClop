@@ -80,8 +80,6 @@ export type CacheScenario = 'hit' | 'cold' | 'write'
 export interface ReactiveDecision {
   /** 本次是否回头重查。 */
   readonly probe: boolean
-  /** 重查目标的参数（原始 JSON 字符串）；缺省按步号生成，于是同一目标会被反复读。 */
-  readonly arguments?: string
 }
 
 /** 信封里 `api` 的缺省值，也就是唯一有裁剪资格的传输。 */
@@ -285,7 +283,7 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
       step = {
         ...step,
         calls: decision.probe
-          ? [{ name: 'read', arguments: decision.arguments ?? '{"path":"same"}' }]
+          ? [{ name: 'read', arguments: '{"path":"same"}' }]
           : [],
       }
     }

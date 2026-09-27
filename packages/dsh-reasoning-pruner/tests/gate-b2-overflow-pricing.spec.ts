@@ -117,18 +117,25 @@ describe('票 07 · 闸门 B-2 · 反例：摘要照跑时 ① 可能为负', ()
     // 由 `compaction/summary` 事件承载。**读不到时不得记 0**——所以这里先断能读到。
     const usage = summaryUsage(pruned.session)
     expect(usage).toBeDefined()
-    expect(usage!.inputTokens).toBeTypeOf('number')
-    expect(usage!.cacheReadTokens).toBeTypeOf('number')
+    // 这两个读数**进入算式**：摘要调用的计费输入就是「不裁剪时这次摘要要付的钱」，`cacheReadTokens` 是其中
+    // 已按 h 折扣的那部分。只做存在性断言会让这段定价与事件上的数完全脱钩。
+    expect(usage!.inputTokens).toBeGreaterThan(0)
+    const billed = (usage!.inputTokens ?? 0) + (usage!.cacheReadTokens ?? 0)
+    expect(billed).toBeGreaterThan(0)
 
     // 用**同一个 h** 定价这次摘要调用：不裁剪的成本 ≈ h × S（前缀热），裁剪后 ≈ (1 − r) × S。
+    // `S` 取实测的摘要输入体积；`h × S` 里已按 h 折扣的那部分是缓存命中的输入，用事件上报的
+    // `cacheReadTokens` 交叉校验它不可能是 0 折扣（否则 `h × S` 这条口径在本场景没有依据）。
     const s = untouchedPair.summary.requestTokens
     const r = reasoningShare(prunedPair.summary)
     const prunedCost = (1 - r) * s
-    const untouchedCost = H * s
-    // 结论必须明确写成「更贵/更便宜」，不得只写「收益可观」。
+    const untouchedCost = H * (usage!.cacheReadTokens ?? 0) + (usage!.inputTokens ?? 0)
+    // 结论必须明确写成「更贵/更便宜」，不得只写「收益可观」：两个成本都是算出来的数。
+    expect(untouchedCost).toBeGreaterThan(0)
     const cheaper = prunedCost < untouchedCost
-    expect(typeof cheaper).toBe('boolean')
-    // 该场景下 r 与 h 的关系给出结论：`h > 1 − r` ⟺ 先裁再摘要更便宜。
+    // 该场景下 r 与 h 的关系给出结论：`h > 1 − r` ⟺ 先裁再摘要更便宜。这条不是代数恒等式——右边来自
+    // **同一个 h** 与**实测**的 r，左边来自两个不同的成本口径（一个用未缓存全价的 S，一个用事件上报的
+    // 三次计数），两者相等是被断言的经验事实，而不是约分出来的。
     expect(cheaper).toBe(H > 1 - r)
 
     await pruned.dispose()

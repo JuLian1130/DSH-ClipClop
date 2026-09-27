@@ -155,8 +155,12 @@ function probeKey(name: string, rawArguments: string): string {
 /**
  * 参数的规范化：解析后深键排序再 stringify。
  *
- * 解析失败时退回原文——不同键序但同语义的两次探查因此能配成一对，这正是「中间夹着别的调用」也抓得到的
- * 原因（连续重复器抓不到这种）。
+ * 解析失败时退回原文。这条分支有真实来源：`tool/call.arguments` 是**模型产出的原始 JSON 字符串**（DSH 类型
+ * 注释写「exactly as the model produced it (unparsed)」），模型可以产出非法 JSON。仓内先例
+ * （`repeat-tool-reminder` 的 `sortJsonValue` 注释）把它写成既有输入路径：「Arguments reach the guard as the
+ * loop's `JSON.parse` output (or its raw-string fallback for malformed argument JSON)」。
+ *
+ * 键序不同但同语义的两次探查因此能配成一对，这正是「中间夹着别的调用」也抓得到的原因（连续重复器抓不到）。
  * @param rawArguments - 原始 JSON 字符串。
  * @returns 规范化后的字符串。
  */
@@ -164,6 +168,7 @@ function canonicalize(rawArguments: string): string {
   try {
     return JSON.stringify(sortJsonValue(JSON.parse(rawArguments)))
   } catch {
+    // 非法 JSON 仍是逐字节可比的：退回原文而不是抛，一次不合法的调用不该让整轮统计失败。
     return rawArguments
   }
 }

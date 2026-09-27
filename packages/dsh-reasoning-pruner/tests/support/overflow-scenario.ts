@@ -70,13 +70,13 @@ export interface OverflowScenario {
   readonly beforeFailure: SurfaceReading
   /** turn 2 的模型调用从 `lc.calls` 的这个下标起。 */
   readonly secondTurnFrom: number
-  /** turn 2 结束时是否留下了成功的 `assistant/message`（重试成功的观察面）。 */
-  readonly retryCommitted: boolean
-  /** 重试请求那一次调用的观察行；没有重试时为 `undefined`。 */
-  readonly retryCall: LlmCall | undefined
-  /** 摘要调用那一次调用的观察行；`purpose === 'compaction'` 是认出它的唯一方式。 */
-  readonly summaryCall: LlmCall | undefined
-  /** 摘要调用自身的推理占比 `r`（推理 token / 该次请求总量）。 */
+  /**
+   * 摘要调用自身的推理占比 `r`（推理 token / 该次请求总量）。
+   *
+   * 没有摘要调用时为 `NaN`——不折成 0：0 意味着「摘要里一点推理也没有」，而 `NaN` 让任何比较当场失败，
+   * 于是「没测到」不会被静默读成一个数。摘要调用的 usage 另由 {@link summaryUsage} 从
+   * `compaction/summary` 事件读，读不到时返回 `undefined`。
+   */
   readonly summaryReasoningShare: number
   /** 落盘的裁剪决策条数（搭车的前提：裁剪先落盘）。 */
   readonly prunes: number
@@ -159,11 +159,7 @@ export async function overflowScenario(options: {
   agent.followup(createUserMessage({ content: [{ type: 'text', text: SECOND_TURN_TEXT }], source: { kind: 'user' } }))
   await agent.whenIdle()
 
-  const secondTurnCalls = lc.calls.slice(secondTurnFrom)
-  const summaryCall = secondTurnCalls.find(call => call.purpose === 'compaction')
-  // 重试请求是摘要之后的那一次调用（数组顺序即时间顺序）。
-  const summaryIndex = secondTurnCalls.findIndex(call => call.purpose === 'compaction')
-  const retryCall = summaryIndex >= 0 ? secondTurnCalls[summaryIndex + 1] : undefined
+  const summaryCall = lc.calls.slice(secondTurnFrom).find(call => call.purpose === 'compaction')
   return {
     lc,
     agent,
@@ -171,12 +167,8 @@ export async function overflowScenario(options: {
     observed,
     beforeFailure,
     secondTurnFrom,
-    retryCommitted: countEvents(session, 'assistant/message') > messageBefore,
-    retryCall,
-    summaryCall,
-    summaryReasoningShare: summaryCall === undefined
-      ? 0
-      : reasoningShare(summaryCall),
+    // 没有摘要调用时给 `NaN`（见字段文档）：不折成 0，让「没测到」无法被当成读数。
+    summaryReasoningShare: summaryCall === undefined ? Number.NaN : reasoningShare(summaryCall),
     prunes: persistedPrunes(session).length,
     turnEnds: proxySignals(session.snapshotEvents()).turnEnds,
     dispose: async () => {

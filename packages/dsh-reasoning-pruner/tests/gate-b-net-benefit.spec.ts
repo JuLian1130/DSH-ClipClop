@@ -18,7 +18,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { H, H_SOURCE, netBenefit, tokenReadings } from './support/gate-readings.ts'
+import { H, H_SOURCE, netBenefit, reasoningTokens, tokenReadings } from './support/gate-readings.ts'
 import { disposeCompared, twoArms } from './support/two-arm.ts'
 import { cleanupRoots, persistedPrunes } from './support/session-harness.ts'
 import { overflowScenario } from './support/overflow-scenario.ts'
@@ -173,10 +173,12 @@ describe('票 07 · 闸门 B · 净收益算式代入实测值', () => {
 describe('票 07 · 闸门 B · 批量推进是主要杠杆', () => {
   it('大 M 的 n 更小，但 tail 同时增大（两项同时成立）', async () => {
     const shelves: { readonly m: number, readonly tail: number, readonly r: number, readonly prunes: number }[] = []
-    for (const m of [2, 8]) {
+    for (const m of [3, 8]) {
       const compared = await twoArms({
         turnSteps: TURN_STEPS,
         turns: TURNS,
+        // 两档都必须满足 03 的不变式 `M ≥ K + 2`（这里 `K = 1`，所以 `M` 至少 3）：`M = K + 1` 时首次触发
+        // 的批量恰好为空、写入侧零落盘，那一档的读数从**第二次**触发起算，与另一档不同起点、不可比。
         prunedConfig: { everySteps: m, keepRecentSteps: 1 },
       })
       const control = compared.control.lc.calls
@@ -193,7 +195,7 @@ describe('票 07 · 闸门 B · 批量推进是主要杠杆', () => {
       })
       await disposeCompared(compared)
     }
-    const small = shelves.find(shelf => shelf.m === 2)!
+    const small = shelves.find(shelf => shelf.m === 3)!
     const large = shelves.find(shelf => shelf.m === 8)!
     const nSmall = netBenefit({ tail: small.tail, r: small.r, h: H, laterRequests: LATER_REQUESTS }).n
     const nLarge = netBenefit({ tail: large.tail, r: large.r, h: H, laterRequests: LATER_REQUESTS }).n
@@ -207,28 +209,46 @@ describe('票 07 · 闸门 B · 批量推进是主要杠杆', () => {
   }, 120000)
 
   it('tail 从最老的那一个被新裁步骤起算、包含这批步骤自身', async () => {
-    const compared = await twoArms({
-      turnSteps: TURN_STEPS,
-      turns: TURNS,
-      prunedConfig: { everySteps: 2, keepRecentSteps: 0 },
-    })
-    const prunes = persistedPrunes(compared.pruned.session)
-    expect(prunes.length).toBeGreaterThanOrEqual(2)
+    // 隔离「批量自身算不计进 tail」的唯一办法是**比较两档的增量**：批量更大时，若 tail 只从上一个边界起算、
+    // 不把这批步骤自身算进去，`tail` 的增量就会**小于**该批自身的推理量。逐档量出两者再比。
+    const shelves: { readonly m: number, readonly tail: number, readonly batch: number, readonly steps: number }[] = []
+    for (const m of [4, 8]) {
+      const compared = await twoArms({
+        turnSteps: TURN_STEPS,
+        turns: TURNS,
+        // 满足 03 的不变式 `M ≥ K + 2`（`K = 1`）。
+        prunedConfig: { everySteps: m, keepRecentSteps: 1 },
+      })
+      const control = compared.control.lc.calls
+      const pruned = compared.pruned.lc.calls
+      const boundaryCall = control.findIndex((call, index) =>
+        call.reasoning.length > (pruned[index]?.reasoning.length ?? 0))
+      expect(boundaryCall).toBeGreaterThanOrEqual(0)
+      const reading = tokenReadings(compared.pruned.session)[boundaryCall]!
+      // 该批自身的推理量：同一下标上控制臂请求里有、裁剪臂请求里没有的那些推理文本。
+      const removed = control[boundaryCall]!.reasoning.filter(text => !pruned[boundaryCall]!.reasoning.includes(text))
+      expect(removed.length).toBeGreaterThan(0)
+      shelves.push({
+        m,
+        tail: reading.inputTokens + reading.cacheWriteTokens,
+        batch: reasoningTokens(removed),
+        steps: removed.length,
+      })
+      await disposeCompared(compared)
+    }
+    const small = shelves.find(shelf => shelf.m === 4)!
+    const large = shelves.find(shelf => shelf.m === 8)!
 
-    // 第二次推进的 `tail` 覆盖「第二个 seq 起」的全部内容，因此 ≥ 该批第一个被裁步骤自身的推理量。
-    const second = prunes[1]!
-    const control = compared.control.lc.calls
-    const pruned = compared.pruned.lc.calls
-    // 该批自身的推理量：取两臂最后一次请求的推理文本差。
-    const lastControl = control.at(-1)!
-    const lastPruned = pruned.at(-1)!
-    const removedInBatch = lastControl.reasoning.filter(text => !lastPruned.reasoning.includes(text))
-    expect(removedInBatch.length).toBeGreaterThan(0)
-    // 批量自身越大，tail 越大：这条钉住「tail 包含这批步骤自身」而不是「从上一个边界起算」。
-    expect(second.targets.length).toBeGreaterThanOrEqual(2)
-
-    await disposeCompared(compared)
-  }, 60000)
+    // 大档的批量确实更大（否则下面的增量比较没有意义）。
+    expect(large.steps).toBeGreaterThan(small.steps)
+    expect(large.batch).toBeGreaterThan(small.batch)
+    // **判据**：`tail` 的增量至少覆盖这批步骤自身的推理量。若实现把批量自身排除在 `tail` 之外，增量会小于
+    // 该批自身的推理量，这条当场失败——这正是「tail 不计入批量自身也全绿」那个漏洞的封堵点。
+    expect(large.tail - small.tail).toBeGreaterThanOrEqual(large.batch - small.batch)
+    // 并且 tail 恒大于单批自身的推理量（它是边界尾的全部，不只是被裁的那几步）。
+    expect(small.tail).toBeGreaterThan(small.batch)
+    expect(large.tail).toBeGreaterThan(large.batch)
+  }, 120000)
 })
 
 describe('票 07 · 闸门 B · 摘要遮蔽分支的适用边界', () => {

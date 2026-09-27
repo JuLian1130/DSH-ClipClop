@@ -32,8 +32,6 @@ export interface Compared {
   readonly control: Arm
   /** 挂裁剪投影的那一臂。 */
   readonly pruned: Arm
-  /** 两臂各自的驱动步数（逐 turn），用于断言两臂驱动**逐条相同**。 */
-  readonly turnSteps: readonly number[]
 }
 
 /** {@link twoArms} 的可选项。 */
@@ -47,8 +45,6 @@ export interface TwoArmOptions {
   readonly turnSteps: readonly number[]
   /** 逐 turn 的驱动文本（每条真实用户消息一次）；两臂逐条相同。 */
   readonly turns: readonly string[]
-  /** 推理文本的前缀，用来在断言里认出「哪一步被裁」。 */
-  readonly reasoningPrefix?: string
   /**
    * 裁剪臂的插件配置。控制臂**不挂**插件，所以「裁不掉任何东西」的空转反例由这里的配置承担
    * （`keepRecentSteps` ≥ 会话全部步数时每次到点都是空批量、零写入）。
@@ -56,14 +52,6 @@ export interface TwoArmOptions {
   readonly prunedConfig?: LifecycleOptions['config']
   /** 裁剪臂的「全部历史步骤资格不成立」开关；空转反例的另一条构造。 */
   readonly prunedIneligible?: boolean
-  /** 是否挂真的 compaction-basic（闸门 B-2 要）。 */
-  readonly compaction?: Record<string, unknown>
-  /** 是否挂 tool-result pruner。 */
-  readonly toolResultPruner?: boolean
-  /** 两臂失败入口（闸门 B-2 用）；两臂同款，按请求内容命中。 */
-  readonly failWhen?: LifecycleOptions['failWhen']
-  /** 裁剪臂的逐 `agent/pre-step` 观察面。 */
-  readonly onPreStep?: LifecycleOptions['onPreStep']
   /**
    * 两臂同款的**反应式驱动**（按模型可见历史决定回复）。闸门 D 的 `K` 背书要求这条驱动面；固定脚本下两臂
    * 信号恒等，`K` 搜索只会返回「没有 `K` 触发恶化」。
@@ -76,16 +64,15 @@ export interface TwoArmOptions {
  *
  * 这一步的形状照 03 的 `scriptOfTurns`（同一份脚本两臂共用是闸门 D 第 2 条的前提）。
  * @param turnSteps - 逐 turn 的步数。
- * @param reasoningPrefix - 推理文本前缀。
  * @returns 逐步脚本。
  */
-export function scriptOfTurns(turnSteps: readonly number[], reasoningPrefix = 'r'): ScriptedStep[] {
+export function scriptOfTurns(turnSteps: readonly number[]): ScriptedStep[] {
   const toolCalls: boolean[] = []
   for (const steps of turnSteps) {
     for (let index = 0; index < steps; index += 1) toolCalls.push(index < steps - 1)
   }
   return toolCalls.map((tool, index) => ({
-    reasoning: `${reasoningPrefix}${index}`,
+    reasoning: `r${index}`,
     text: `t${index}`,
     calls: tool ? [{ name: 'noop', arguments: `{"i":${index}}` }] : [],
   }))
@@ -100,14 +87,9 @@ export function scriptOfTurns(turnSteps: readonly number[], reasoningPrefix = 'r
  * @returns 两臂现场。
  */
 export async function twoArms(options: TwoArmOptions): Promise<Compared> {
-  const script = scriptOfTurns(options.turnSteps, options.reasoningPrefix)
-  const shared: LifecycleOptions = {
-    ...options.compaction === undefined ? {} : { compaction: options.compaction },
-    ...options.toolResultPruner === true ? { toolResultPruner: true } : {},
-    ...options.failWhen === undefined ? {} : { failWhen: options.failWhen },
-    ...options.decide === undefined ? {} : { decide: options.decide },
-    ...options.onPreStep === undefined ? {} : { onPreStep: options.onPreStep },
-  }
+  // 两臂唯一的自变量是「挂裁剪投影 / 不挂」，所以两臂的 `LifecycleOptions` 是同一份对象，只有插件与配置不同。
+  const script = scriptOfTurns(options.turnSteps)
+  const shared: LifecycleOptions = options.decide === undefined ? {} : { decide: options.decide }
   const control = await lifecycle(script, { ...shared, withPlugin: false })
   registerTools(control.ctx)
   const pruned = await lifecycle(script, {
@@ -118,7 +100,7 @@ export async function twoArms(options: TwoArmOptions): Promise<Compared> {
   registerTools(pruned.ctx)
   const controlArm = await driveArm(control, options.turns, 'arm-control')
   const prunedArm = await driveArm(pruned, options.turns, 'arm-pruned')
-  return { control: controlArm, pruned: prunedArm, turnSteps: [...options.turnSteps] }
+  return { control: controlArm, pruned: prunedArm }
 }
 
 /**
@@ -166,9 +148,9 @@ export interface KSweepShelf {
 }
 
 /**
- * **从大到小逐档扫 `K`**：`K` 是「保留最近几个步骤不裁」，所以恶化发生在 **小 `K`** 一侧——`K` 越小裁得
- * 越狠、模型越可能回头重查。因此下限是「从小到大扫，**首个不再出现恶化**的 `K`」，等价于「出现恶化的最大
- * `K` 再加一」；出现恶化的那个 `K` 本身不得写回。
+ * **从**小到大**逐档扫 `K`**：`K` 是「保留最近几个步骤不裁」，所以恶化发生在 **小 `K`** 一侧——`K` 越小裁得
+ * 越狠、模型越可能回头重查。因此下限是「**首个不再出现恶化**的 `K`」，等价于「出现恶化的最大 `K` 再加一」；
+ * 出现恶化的那个 `K` 本身不得写回。`options.ks` 按升序给，返回值逐档对应。
  *
  * 驱动面是**反应式**的（`decide` 按模型可见历史决定回复）：被裁历史让本次改为回头重查。固定脚本驱动不出
  * 这个反应（两臂输出逐条相同、信号恒等），那正是「不得据固定脚本回填 `K`」的原因。

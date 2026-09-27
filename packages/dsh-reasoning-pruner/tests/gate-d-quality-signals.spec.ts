@@ -18,10 +18,10 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { proxySignals, repeatedProbes } from './support/gate-readings.ts'
+import { proxySignals, repeatedProbes, tokenReadings } from './support/gate-readings.ts'
 import { disposeCompared, kSweep, twoArms } from './support/two-arm.ts'
 import { callInfo, cleanupRoots, persistedPrunes } from './support/session-harness.ts'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 
 afterEach(cleanupRoots)
 
@@ -64,6 +64,10 @@ describe('票 07 · 闸门 D · 空转反例必须先跑', () => {
     expect(proxySignals(compared.pruned.session.snapshotEvents()))
       .toEqual(proxySignals(compared.control.session.snapshotEvents()))
     expect(compared.pruned.lc.calls.map(callInfo)).toEqual(compared.control.lc.calls.map(callInfo))
+    // usage 那一半（票面第 10 条要求「五个代理信号**与每次请求的 usage** 逐项完全相等」）：`callInfo` 刻意
+    // 不含 usage，所以它必须**单独**断。缺了这条，两臂派生的 `cacheReadTokens` 即使不同也全绿——而
+    // 「写死的 token 数会让这条反例恒真」正是第 9 条要防的。
+    expect(tokenReadings(compared.pruned.session)).toEqual(tokenReadings(compared.control.session))
     await disposeCompared(compared)
   }, 120000)
 
@@ -144,6 +148,13 @@ describe('票 07 · 闸门 D · 重复探查归实验侧自建', () => {
     expect(statistic.perTarget.find(entry => entry.repeats > 0)!.count).toBe(2)
   })
 
+  it('模型产出的非法 JSON 参数仍可配对（退回原文，不抛）', () => {
+    // `tool/call.arguments` 是模型产出的原始字符串、可以不是合法 JSON（先例 `repeat-tool-reminder` 的
+    // `sortJsonValue` 注释把这条写成既有输入路径）。同一个非法串被再次探查时仍要配成一对。
+    const calls = [call('read', '{"path": A'), call('noop', '{}'), call('read', '{"path": A')]
+    expect(repeatedProbes(calls).total).toBe(1)
+  })
+
   it('统计器只读日志、不写入任何会话事件', async () => {
     const compared = await twoArms({ turnSteps: TURN_STEPS, turns: TURNS, prunedConfig: { everySteps: 2, keepRecentSteps: 1 } })
     const before = compared.pruned.session.snapshotEvents().length
@@ -156,7 +167,7 @@ describe('票 07 · 闸门 D · 重复探查归实验侧自建', () => {
 })
 
 describe('票 07 · 闸门 D · K 由本闸门背书', () => {
-  it('从大到小逐档扫 K：首个不再出现恶化的 K 才是下限', async () => {
+  it('从小到大逐档扫 K：首个不再出现恶化的 K 才是下限', async () => {
     // 驱动面必须是**反应式**的：固定脚本下两臂信号恒等，扫出来的「没有恶化」是测不出来而不是没恶化。
     const shelves = await kSweep({
       turnSteps: SWEEP_TURN_STEPS,
@@ -211,8 +222,8 @@ describe('票 07 · 闸门 D · 反例：「步骤更多但总花费更低」', 
       })
       const controlSignals = proxySignals(compared.control.session.snapshotEvents())
       const prunedSignals = proxySignals(compared.pruned.session.snapshotEvents())
-      const controlTokens = sumBilled(compared.control.session.snapshotEvents())
-      const prunedTokens = sumBilled(compared.pruned.session.snapshotEvents())
+      const controlTokens = sumBilled(compared.control.session)
+      const prunedTokens = sumBilled(compared.pruned.session)
       // 两半都必须可读——这是「不得只报告花费那一半」的落点。
       expect(controlTokens).toBeGreaterThan(0)
       expect(prunedTokens).toBeGreaterThan(0)
@@ -247,14 +258,15 @@ function call(name: string, rawArguments: string): SessionEvent<'tool/call'> {
   return { type: 'tool/call', seq: 1, time: 0, data: { turn: 1, step: 1, callId: 'c', name, arguments: rawArguments } } as unknown as SessionEvent<'tool/call'>
 }
 
-/** 该会话全部 `assistant/message` 的计费输入之和（「总花费」那一半读数）。 */
-function sumBilled(events: readonly SessionEvent[]): number {
-  return events
-    .filter((entry): entry is SessionEvent<'assistant/message'> => entry.type === 'assistant/message')
-    .reduce((total, entry) => {
-      const usage = entry.data.usage
-      return total + (usage?.inputTokens ?? 0) + (usage?.cacheReadTokens ?? 0) + (usage?.cacheWriteTokens ?? 0)
-    }, 0)
+/**
+ * 该会话的「总花费」那一半读数：读数层已给的计费输入之和。
+ *
+ * 不再自己重写三者和——`tokenReadings` 就是本票建的读数层，`billedInput` 的定义（三次计数之和）只有一处。
+ * @param session - 会话。
+ * @returns 全部 `assistant/message` 的计费输入之和。
+ */
+function sumBilled(session: Session): number {
+  return tokenReadings(session).reduce((total, reading) => total + reading.billedInput, 0)
 }
 
 describe('票 07 · 闸门 D · 判据的读法（不能证明什么）', () => {
