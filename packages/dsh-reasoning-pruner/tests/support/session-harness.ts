@@ -28,7 +28,9 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import ToolResultPruner from '@deepseek-ai/dsh-compaction-tool-result-pruner'
 import { createUserMessage, LlmAdapter, LlmError, MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { AssistantMessage, ContentBlock, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { AssistantMessage, ContentBlock, GenerateOptions, RequestMessage, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { TokenUsage } from '@deepseek-ai/dsh-llm'
+import { estimateContent, ROLE_OVERHEAD } from '@deepseek-ai/dsh-token-meter/estimate'
 import { SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -51,6 +53,35 @@ export interface ScriptedStep {
    * **信封无资格**的历史步骤——那是「无资格不写入」唯一能正面构造的输入。
    */
   readonly api?: string
+  /**
+   * 这一步声明的缓存场景。token 数**不**由脚本给出，由请求内容派生（见 {@link ScriptedReasoningAdapter}）：
+   *
+   * - `hit`：与前一次请求逐字节相同的前缀命中缓存，其后变更的后缀计未缓存输入。
+   * - `cold`：什么都没命中，整条请求计未缓存输入。
+   * - `write`：相同前缀命中缓存，变更的后缀被写入缓存（计 `cacheWriteTokens`）。
+   *
+   * 缺省 `hit`。三种场景互斥——它们是同一件事的三种声明，不是回退链。
+   */
+  readonly cache?: CacheScenario
+}
+
+/** 脚本声明的缓存场景；见 {@link ScriptedStep.cache}。 */
+export type CacheScenario = 'hit' | 'cold' | 'write'
+
+/**
+ * 一次**按模型可见历史**作出的回复决定（见 {@link ScriptedReasoningAdapter} 的 `decide`）。
+ *
+ * `probe` 为真表示这次要回头重查（再读一次同一个目标），于是该步发一次工具调用；为假则该步纯文本收尾。
+ * 它是「模型对被裁历史作出反应」的唯一入口，也是 `K` 下限唯一可被背书的驱动面。
+ *
+ * **实现必须自己把「一直重查」收住**（例如按调用下标设上限）：`probe` 恒真时该 turn 永不收尾，夹具会挂
+ * 起直到 worker 崩溃——这不是判据失败，而是驱动没写完。收到第二个参数 `call` 正是为了这个。
+ */
+export interface ReactiveDecision {
+  /** 本次是否回头重查。 */
+  readonly probe: boolean
+  /** 重查目标的参数（原始 JSON 字符串）；缺省按步号生成，于是同一目标会被反复读。 */
+  readonly arguments?: string
 }
 
 /** 信封里 `api` 的缺省值，也就是唯一有裁剪资格的传输。 */
@@ -84,6 +115,49 @@ export interface LlmCall {
   readonly inputTokens: number | undefined
   /** 本适配器为该次调用报告的缓存命中 token 数；调用失败时为 `undefined`。 */
   readonly cacheReadTokens: number | undefined
+  /** 本适配器为该次调用报告的缓存写入 token 数；调用失败时为 `undefined`。 */
+  readonly cacheWriteTokens: number | undefined
+  /**
+   * 该次请求的模型可见输入里的推理块文本，按出现顺序。
+   *
+   * 「裁剪确实发生在模型可见历史里」只能用这个面断——`targets` 有值只证明落盘了，裁了但没生效
+   * （信封退化时整条消息跌落重建）在这里才看得见。
+   */
+  readonly reasoning: readonly string[]
+  /**
+   * 该次请求逐消息的规范化内容（`JSON.stringify(message.content)`）。
+   *
+   * 用例靠它**自己**按派生规则从该次请求算出应有的三次计数——`usage` 必须可被独立复算，否则
+   * 「由请求内容派生」这条只能靠读适配器的源码相信。
+   */
+  readonly content: readonly string[]
+  /**
+   * 该次请求全部消息的估价 token 数（DSH 固定密度估价器）。
+   *
+   * 摘要分支的「推理占比 `r`」只能在摘要调用自身这一次请求上量：它是推理 token 与这一次请求总量之比，
+   * 而摘要调用不经 agent loop、不落 `assistant/message`，所以它的体积只能在请求侧读。
+   */
+  readonly requestTokens: number
+}
+
+/**
+ * 两臂逐调用应逐项相等的字段。
+ *
+ * 空转反例（「两臂之间除裁剪外没有别的差异」）要比的就是这些：请求的消息条数、文本量、推理块与估价
+ * token 数，加上调用下标与用途。**不**包含 `usage`——那是本票新补的派生读数，两臂的差异正是它要量的东西。
+ * @param call - 一次调用的观察行。
+ * @returns 该调用的比较面。
+ */
+export function callInfo(call: LlmCall): {
+  readonly call: number
+  readonly purpose: string | undefined
+  readonly messages: number
+  readonly chars: number
+  readonly reasoning: readonly string[]
+  readonly requestTokens: number
+} {
+  const { call: index, purpose, messages, chars, reasoning, requestTokens } = call
+  return { call: index, purpose, messages, chars, reasoning, requestTokens }
 }
 
 /**
@@ -130,8 +204,18 @@ const createdRoots: string[] = []
 export class ScriptedReasoningAdapter extends LlmAdapter {
   private call = 0
 
-  /** 已经失败过一次（`failWhen` 命中的那一次）；重试不再失败，否则重试成功与否无法观察。 */
-  private failed = false
+  /**
+   * 已经失败过的失败身份（`message` + `code`），每个身份只失败一次——重试不再失败，否则「重试成功与否」
+   * 无法观察。
+   *
+   * 按身份而不是按「总共一次」：同一次运行里可以有**两个**不同的失败（合同里的情形是摘要失败 + 溢出失败，
+   * 它们共同造出「tool-result pruner 落了 replace、摘要没成、compaction-basic 仍重试」那条分支）。
+   * 单个条件的 `failWhen` 行为不变——它第二次仍返回同一个身份，因此依旧只失败一次。
+   */
+  private readonly failed = new Set<string>()
+
+  /** 上一次请求逐消息的规范化字节串；本次的 `cacheReadTokens` 按它与本次的公共前缀判定。 */
+  private previousRequest: readonly string[] | undefined
 
   /** 每一次模型调用前记录的一行（见 {@link LlmCall}）；`purpose` 与输入规模都出自这一次请求。 */
   readonly calls: LlmCall[] = []
@@ -141,16 +225,24 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
    * @param toolsThrough - 前多少次模型调用发起工具调用；之后一律纯文本收尾，让 turn 有界。
    * @param stepApi - 按模型调用下标逐次覆盖信封声明的传输；最后一个元素在数组用完后重复。用来在**同一个
    *   会话**里混用有资格与无资格的传输——`ineligible` 只能把每一步都改成无资格，造不出「中途换模型」。
-   * @param failWhen - 该次调用的请求满足它时，本次调用以 {@link LlmFailure} 失败（**只失败一次**：命中的
-   *   那一次记下来，重试不再失败）。这是「真实失败路径」的唯一入口：适配器向外抛 `LlmError`，运行期把它
+   * @param failWhen - 该次调用的请求满足它时，本次调用以 {@link LlmFailure} 失败（**每个失败身份只失败一次**：
+   *   命中的那一次记下来，重试不再失败）。这是「真实失败路径」的唯一入口：适配器向外抛 `LlmError`，运行期把它
    *   归一化成 `agent/request-error` 的 `payload.failure`。用「请求里出现某段文本」这种与调用下标无关的
    *   条件，才不会把「重试是不是真的重发」的判据建在猜测的下标上。
+   * @param decide - **按模型可见历史决定本次回复**的驱动（闸门 D 的 `K` 背书要求这条驱动面）。
+   *   给定时它取代按调用下标取脚本的那条路：`decision` 为真表示「被裁历史让这次回复改为回头重查」，
+   *   该步就发一次工具调用（其参数由 `probe` 给出或按步号生成）；为假则该步纯文本收尾。
+   *
+   *   这与 {@link ScriptedStep} 的固定脚本**不是**同一个东西，两者也不等价：固定脚本下两臂的模型输出与
+   *   工具调用序列逐条相同、五个代理信号恒等，`K` 搜索只会返回「没有 `K` 触发恶化」——那等于把「测不出来」
+   *   记成「没有恶化」。所以 `K` 的下限只能由这条驱动面背书。
    */
   constructor(
     private readonly script: readonly ScriptedStep[],
     private readonly toolsThrough?: number,
     private readonly stepApi?: readonly string[],
     private readonly failWhen?: (request: GenerateOptions) => LlmFailure | undefined,
+    private readonly decide?: (request: GenerateOptions, call: number) => ReactiveDecision,
   ) {
     super()
   }
@@ -169,17 +261,34 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
       chars: options.messages.reduce((total, message) => total + textLengthOf(message.content), 0),
       inputTokens: undefined,
       cacheReadTokens: undefined,
+      cacheWriteTokens: undefined,
+      reasoning: options.messages.flatMap(message => message.content
+        .filter((block): block is Extract<ContentBlock, { type: 'reasoning' }> => block.type === 'reasoning')
+        .map(block => block.text)),
+      content: options.messages.map(message => JSON.stringify(message.content)),
+      requestTokens: options.messages.reduce((total, message) => total + estimateContent(message.content) + ROLE_OVERHEAD, 0),
     }
     this.calls.push(observation)
-    if (!this.failed) {
-      const failure = this.failWhen?.(options)
-      if (failure !== undefined) {
-        this.failed = true
+    const failure = this.failWhen?.(options)
+    if (failure !== undefined) {
+      const identity = `${failure.code}\u0000${failure.message}`
+      if (!this.failed.has(identity)) {
+        this.failed.add(identity)
         throw new LlmError(failure.message, failure.code)
       }
     }
 
     let step = this.script[Math.min(call, this.script.length - 1)]
+    // 反应式驱动（见构造函数的 `decide`）：它取代按调用下标回放的那条路，所以只走它自己的决定。
+    if (this.decide !== undefined) {
+      const decision = this.decide(options, call)
+      step = {
+        ...step,
+        calls: decision.probe
+          ? [{ name: 'read', arguments: decision.arguments ?? '{"path":"same"}' }]
+          : [],
+      }
+    }
     const api = this.stepApi?.[Math.min(call, this.stepApi.length - 1)]
     if (api !== undefined) step = { ...step, api }
     // 有界 turn：第 `toolsThrough` 次模型调用之后不再发起工具调用，于是该 turn 在
@@ -208,15 +317,10 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
         : { type: 'text-delta', index, text: block.type === 'text' ? block.text : '' }
       yield { type: 'block-end', index, block }
     }
-    const usage = {
-      inputTokens: 100,
-      outputTokens: 10,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      reasoningTokens: 5,
-    }
+    const usage = this.deriveUsage(options, step.cache)
     observation.inputTokens = usage.inputTokens
     observation.cacheReadTokens = usage.cacheReadTokens
+    observation.cacheWriteTokens = usage.cacheWriteTokens
     yield { type: 'usage', usage }
     yield {
       type: 'finish',
@@ -236,6 +340,43 @@ export class ScriptedReasoningAdapter extends LlmAdapter {
             ? { type: 'text', textSignature: 'sig-text' }
             : { type: 'tool-call', thoughtSignature: 'sig-tool' }),
       },
+    }
+  }
+
+  /**
+   * 由**请求内容**派生的 `usage`（本票补的第三样能力）。
+   *
+   * 规则写死：本次请求与上一次请求**逐消息同字节**的前缀计 `cacheReadTokens`，其后变更的尾部计
+   * `inputTokens`；`cacheWriteTokens` 只在声明 `write` 场景的那一步等于该尾部。token 数由 DSH 自己的
+   * 固定密度估价器（`@deepseek-ai/dsh-token-meter/estimate`）算出，**脚本不写死任何 token 数**——写死的数
+   * 会让「裁了推理 ⇒ 后续请求的输入变小」这条读数恒真，也会让两臂对照的空转反例失去意义。
+   *
+   * 按**消息内容**而非整条消息比较前缀：消息身份与来源不参与模型可见输入，让它们参与前缀判定会造出
+   * 「内容没变但前缀不命中」的假命中失败。裁剪改的正是内容，所以裁掉推理的请求在这里必然读到一个更短
+   * 的未缓存尾部。
+   * @param options - 该次调用的请求。
+   * @param scenario - 该步脚本声明的缓存场景（缺省 `hit`）。
+   * @returns 该次调用报告的用量。
+   */
+  private deriveUsage(options: GenerateOptions, scenario: CacheScenario = 'hit'): TokenUsage {
+    const request = options.messages.map(message => JSON.stringify(message.content))
+    const previous = this.previousRequest
+    this.previousRequest = request
+    let cached = 0
+    if (scenario !== 'cold' && previous !== undefined) {
+      while (cached < request.length && cached < previous.length && request[cached] === previous[cached]) {
+        cached += 1
+      }
+    }
+    const price = (from: number): number =>
+      options.messages.slice(from).reduce((total, message) => total + estimateContent(message.content) + ROLE_OVERHEAD, 0)
+    const inputTokens = price(cached)
+    return {
+      inputTokens,
+      outputTokens: 10,
+      cacheReadTokens: price(0) - inputTokens,
+      cacheWriteTokens: scenario === 'write' ? inputTokens : 0,
+      reasoningTokens: 5,
     }
   }
 }
@@ -372,6 +513,11 @@ export interface LifecycleOptions {
    */
   readonly failWhen?: (request: GenerateOptions) => LlmFailure | undefined
   /**
+   * 按模型可见历史决定本次回复（闸门 D 的 `K` 背书要的驱动面）；见 {@link ScriptedReasoningAdapter} 的
+   * `decide`。给定时它会取代按调用下标回放脚本的那条路。
+   */
+  readonly decide?: (request: GenerateOptions, call: number) => ReactiveDecision
+  /**
    * 挂真的 `@deepseek-ai/dsh-compaction-basic`，用这份配置（`auto: true` 由夹具补上）。
    *
    * 本插件以 `prepend` 注册，而它在本插件**之前**装载，所以「裁剪先落盘、它的测量与选区在后」这条顺序
@@ -434,6 +580,7 @@ export async function lifecycle(
     options.toolsThrough,
     options.stepApi,
     options.failWhen,
+    options.decide,
   )
   ctx.llm.registerAdapter(['mock'], adapter)
   if (options.beforePlugin !== undefined) await options.beforePlugin(ctx)
