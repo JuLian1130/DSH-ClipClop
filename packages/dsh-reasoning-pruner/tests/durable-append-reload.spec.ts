@@ -179,6 +179,15 @@ describe('票 02 · 第 4 条：宿主自己产出的事件安全穿过', () => 
   it('模型可见历史零影响、事件确实进了日志、且那笔不可避免的代价如实记账', async () => {
     const { lc, agent, session } = await drivenSession('host-event')
 
+    // 事件前让工具基线**已结算**、且带一条 `updates`：第一步之后再注册一个工具，并先用一条宿主事件把
+    // 声明序列推开——工具加法与其请求头在同一次落盘，基线就地结算成含新工具的集合。少了这一步，「该事件
+    // 之后 `updates` 清空」要么是恒真空转判据，要么 `tools` 还停在旧基线上（01 的同款构造）。
+    registerTool(lc.ctx, 'second')
+    session.append(CARRIER_EVENT_TYPE, HOST_PAYLOAD)
+    await lc.step(agent, 'settle tool baseline')
+    const baselineBefore = session.toolHistory()
+    expect(baselineBefore.updates.length).toBeGreaterThan(0)
+
     const messagesBefore = session.deriveMessages()
     const generationBefore = session.surface.contentGeneration
     const replaceBefore = session.surface.replaceGeneration
@@ -202,13 +211,19 @@ describe('票 02 · 第 4 条：宿主自己产出的事件安全穿过', () => 
         && (event.data.reason === 'series' || event.data.startsSeries === true),
     )
     expect(headers.length).toBeGreaterThan(0)
+
+    // 代价的第三笔：该事件之后工具基线被重置——`tools` 逐项不变、`updates` 清空。
+    const baselineAfter = session.toolHistory()
+    expect(baselineAfter.tools).toEqual(baselineBefore.tools)
+    expect(baselineAfter.updates).toEqual([])
     await lc.dispose()
 
-    // 判据非空：必须确认宿主事件真实落盘了——否则「零影响」在「事件根本没写进去」时也成立。
+    // 判据非空：必须确认**被观察的这条**宿主事件真实落盘了——否则「零影响」在「事件根本没写进去」时
+    // 也成立。
     const reloaded = await remount(lc.root, SCRIPT)
     const cold = await reloaded.coldRead('host-event')
     await reloaded.dispose()
-    const stored = cold.events.find(event => event.type === CARRIER_EVENT_TYPE)
+    const stored = cold.events.find(event => event.seq === hostSeq)
     expect(stored).toBeDefined()
     expect(stored?.data).toEqual(HOST_PAYLOAD)
   })
