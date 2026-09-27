@@ -25,6 +25,7 @@ import { CONTEXT_WINDOW_EXCEEDED_CODE, createUserMessage, QUOTA_EXCEEDED_CODE } 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { pruneAtRequestError } from '../src/persist.ts'
+import { CARRIER_EVENT_TYPE } from '../src/types.ts'
 import type { LifecycleOptions, PersistentLifecycle, ScriptedStep, SurfaceReading } from './support/session-harness.ts'
 import {
   cleanupRoots,
@@ -212,7 +213,7 @@ describe('票 05 · 第 1 条：只在 CONTEXT_WINDOW_EXCEEDED 时动作', () =>
       expect(recordedAssistants(session)).toHaveLength(FIRST_TURN_STEPS)
       expect(persistedPrunes(session)).toEqual([])
       // 观察面是**事件数不变**：整条承载事件一条都没有（不是「落了一条空记录」）。
-      expect(countEvents(session, 'web/deepseek-search-llm-request')).toBe(0)
+      expect(countEvents(session, CARRIER_EVENT_TYPE)).toBe(0)
       await lc.dispose()
     }
   })
@@ -231,6 +232,9 @@ describe('票 05 · 第 2 条：信号已中止时不动作', () => {
     expect(aborted.aborted).toBe(true)
     expect(pruneAtRequestError(session, aborted, config)).toBeUndefined()
     expect(persistedPrunes(session)).toEqual([])
+    // 票面 :9 的观察面是「事件数不变（不是落了一条空记录）」：只断 `persistedPrunes` 时，中止路径上落一条
+    // **没有 `clipclop` 信封**的承载事件仍然全绿（实测），所以这里与第 1 条反例同形，断整类事件一条都没有。
+    expect(countEvents(session, CARRIER_EVENT_TYPE)).toBe(0)
     // 判据非空：同一状态、同一参数、信号未中止时**会**写。
     expect(pruneAtRequestError(session, new AbortController().signal, config)).toBeDefined()
     expect(persistedPrunes(session)).toHaveLength(1)
