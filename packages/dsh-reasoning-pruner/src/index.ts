@@ -3,8 +3,9 @@
  * 插件写法由 profile 的 `cordis.patch.yml` 装载。
  *
  * 本插件当前交付 01（基座）、02（落盘通路与投影消费）与 03（激活点②：按步数节流批量推进）。装载后的
- * 动作是两件：为承载类型注册消息投影，以及在 `agent/pre-step` 上按 `M` 的整数倍推进一次裁剪边界。①（溢出
- * 救援）、④（命令与开关）在后续票据里追加。
+ * 动作是两件：为承载类型注册消息投影，以及在 `agent/pre-step` 上按**会话级步数**（日志里的 `step/start`
+ * 条数，不是载荷 `step`——后者每 turn 从 1 重数）的 `M` 的整数倍推进一次裁剪边界。①（溢出救援）、
+ * ④（命令与开关）在后续票据里追加。
  *
  * 注册投影有一条不可避免的代价，记在这里以免被当成缺陷：投影命中就推进 `contentGeneration`
  * （与投影返回什么无关），而承载类型是宿主自己也在写的类型，所以**宿主每产生一条该类型事件**，下一步
@@ -55,8 +56,9 @@ export function apply(ctx: Context, config: Required<Config>): void {
   // 这一步就是 ② 的全部行为。**不对称地对待失败**：写入侧的校验是提交前的，坏 payload 会让 `append`
   // 当场抛，所以失败是响亮且不留坏记录的；这里**不**把它降级成日志——静默吞掉会让「重复声明同一批」这类
   // 不变量破坏变成一行 warn（02 第 5 条与 03 第 6 条的判据都建在「它必须响亮」上）。
-  ctx.on('agent/pre-step', ({ agent, step, signal }, next): Promise<PreStepDecision> => {
-    pruneAtStepBoundary(agent.session, step, signal, config)
+  // 载荷 `step` 不参与判据：它每 turn 从 1 重数，节流用的是日志派生的会话级步号（见 `pruneAtStepBoundary`）。
+  ctx.on('agent/pre-step', ({ agent, signal }, next): Promise<PreStepDecision> => {
+    pruneAtStepBoundary(agent.session, signal, config)
     return next()
   }, { prepend: true })
 }

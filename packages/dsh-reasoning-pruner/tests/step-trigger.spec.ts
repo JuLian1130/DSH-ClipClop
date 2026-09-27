@@ -8,7 +8,9 @@
  * 两处口径必须写清楚，否则用例会自己骗自己：
  *
  * - **步号**：`agent/pre-step` 在提出该步**之前**发出，第 N 次 pre-step 时已有 N-1 条已记录的
- *   `assistant/message`；最后一步的 assistant 消息要等该步的模型调用落定才出现。
+ *   `assistant/message`；最后一步的 assistant 消息要等该步的模型调用落定才出现。节流**不**用载荷里的
+ *   `step`（它每 turn 从 1 重数，见 `persist.ts` 的 `sessionStepNumber`），用的是日志里的 `step/start`
+ *   条数，所以跨 turn 的累计步数才决定触发点。
  * - **取样点**：本插件以 `{ prepend: true }` 注册，`onPreStep` 观察面注册得比它晚（它 `unshift`、后面的
  *   按 `push` 追加），所以观察到的是「本步骤的决策已落盘、该步骤的 assistant 消息尚未出现」那一刻。
  *
@@ -23,7 +25,8 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import BasicCompactionEngine from '@deepseek-ai/dsh-compaction-basic'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
+import { SessionSeq } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import * as plugin from '../src/index.ts'
 import { persistReasoningPrune, pruneAtStepBoundary, pruneTargetsAtStep } from '../src/persist.ts'
 import type { PersistentLifecycle, ScriptedStep } from './support/session-harness.ts'
@@ -74,7 +77,10 @@ function registerTool(ctx: Context, name: string): void {
   })
 }
 
-/** 每次 pre-step 之后取样到的一行：步号 + 那一刻已落盘的裁剪决策数与本步骤已记录的 assistant 消息数。 */
+/**
+ * 每次 pre-step 之后取样到的一行：**载荷**步号（每 turn 从 1 重数）+ 那一刻已落盘的裁剪决策数与本步骤
+ * 已记录的 assistant 消息数。
+ */
 interface PreStepSample {
   readonly step: number
   readonly prunes: number
@@ -400,20 +406,20 @@ describe('票 03 · 第 7 条：本插件的监听器在 compaction-basic 之前
 
 describe('票 03 · 第 8 条：signal 已中止时不动作', () => {
   it('同一状态、同一参数下，已中止的真信号一个事件都不写', async () => {
-    // 一次真实的 6 步驱动：默认 `M = 50` 所以它自己不会触发，我们拿到的是一条**真实会话**与一份真实的
-    // 候选状态（5 条已记录、可裁的步骤）。随后用 `agent/pre-step` 载荷里那种 `AbortSignal` 的已中止形态
-    // 调一次触发，两条路径只差信号状态。
-    const { lc, session } = await drive({ steps: M, config: { everySteps: 50, keepRecentSteps: K } })
-    expect(recordedAssistants(session)).toHaveLength(M)
+    // 一次真实的 5 步驱动：默认 `M = 50` 所以它自己不会触发，我们拿到的是一条**真实会话**与一份真实的
+    // 候选状态（5 条已记录、可裁的步骤）；会话级步号这时恰好是 6 = `M`，所以直接调触发会到点。随后用
+    // `agent/pre-step` 载荷里那种 `AbortSignal` 的已中止形态调一次，两条路径只差信号状态。
+    const { lc, session } = await drive({ steps: M - 1, config: { everySteps: 50, keepRecentSteps: K } })
+    expect(recordedAssistants(session)).toHaveLength(M - 1)
     expect(persistedPrunes(session)).toEqual([])
 
     const config = { everySteps: M, keepRecentSteps: K }
     const signal = AbortSignal.abort()
     expect(signal.aborted).toBe(true)
-    expect(pruneAtStepBoundary(session, M, signal, config)).toBeUndefined()
+    expect(pruneAtStepBoundary(session, signal, config)).toBeUndefined()
     // 判据非空：同一状态、同一参数、信号未中止时**会**写——否则上面的 `undefined` 在「函数根本不写」
     // 时也成立。
-    expect(pruneAtStepBoundary(session, M, new AbortController().signal, config)).toBeDefined()
+    expect(pruneAtStepBoundary(session, new AbortController().signal, config)).toBeDefined()
     expect(persistedPrunes(session)).toHaveLength(1)
 
     await lc.dispose()
@@ -447,7 +453,10 @@ describe('票 03 · 第 9 条：M/K 的保守默认、可装载、可覆盖', ()
 })
 
 describe('票 03 · 触发判据的纯函数面（不依赖真实 loop）', () => {
-  /** 造一个「第 `step` 步的 pre-step 已发生」的会话：已记录步骤恰为 `step - 1` 条。 */
+  /**
+   * 造一个「第 `step` 步的 pre-step 已发生」的会话：已记录步骤恰为 `step - 1` 条，且每步各带一条
+   * `step/start`，所以会话级步号恰为 `step`。
+   */
   function sessionAtStep(step: number): FakeSession {
     return fakeSession(Array.from({ length: step - 1 }, (_unused, index) => ({
       reasoning: reasoningOf(index),
@@ -458,17 +467,17 @@ describe('票 03 · 触发判据的纯函数面（不依赖真实 loop）', () =
   it('到达整数倍时按「已记录步骤减保留窗口」选出该批；未到点不写', () => {
     // 第 5 步（未到点）与第 7 步（不是整数倍）都不写；第 6 步写出最早的 5-2=3 条。
     const early = sessionAtStep(5) as unknown as Session
-    expect(pruneAtStepBoundary(early, 5, new AbortController().signal, CONFIG)).toBeUndefined()
+    expect(pruneAtStepBoundary(early, new AbortController().signal, CONFIG)).toBeUndefined()
     expect(persistedPrunes(early)).toEqual([])
 
     const offBeat = sessionAtStep(7) as unknown as Session
-    expect(pruneAtStepBoundary(offBeat, 7, new AbortController().signal, CONFIG)).toBeUndefined()
+    expect(pruneAtStepBoundary(offBeat, new AbortController().signal, CONFIG)).toBeUndefined()
     expect(persistedPrunes(offBeat)).toEqual([])
 
     const onBeat = sessionAtStep(M) as unknown as Session
     const seqs = recordedAssistants(onBeat).map(entry => entry.seq)
-    expect(pruneTargetsAtStep(onBeat, M, CONFIG)).toEqual(seqs.slice(0, 3))
-    expect(pruneAtStepBoundary(onBeat, M, new AbortController().signal, CONFIG)).toBeDefined()
+    expect(pruneTargetsAtStep(onBeat, CONFIG)).toEqual(seqs.slice(0, 3))
+    expect(pruneAtStepBoundary(onBeat, new AbortController().signal, CONFIG)).toBeDefined()
     expect(persistedPrunes(onBeat)[0]!.targets).toEqual(seqs.slice(0, 3))
   })
 
@@ -477,18 +486,20 @@ describe('票 03 · 触发判据的纯函数面（不依赖真实 loop）', () =
 
     // 第 6 步：5 条已记录（本步骤的消息还没落），保留最近 2 条 → 裁那时最早的 3 条。
     const atSix = sessionAtStep(M) as unknown as Session
-    pruneAtStepBoundary(atSix, 6, signal, CONFIG)
+    pruneAtStepBoundary(atSix, signal, CONFIG)
     const first = recordedAssistants(atSix).slice(0, 3).map(entry => entry.seq)
     expect(persistedPrunes(atSix)[0]!.targets).toEqual(first)
-    // 第 7 步不是整数倍：不写，也不推进。
-    expect(pruneAtStepBoundary(atSix, 7, signal, CONFIG)).toBeUndefined()
-    expect(persistedPrunes(atSix)).toHaveLength(1)
+
+    // 不是整数倍的步骤（造到第 7 步）：不写，也不推进。
+    const offBeat = sessionAtStep(M + 1) as unknown as Session
+    expect(pruneAtStepBoundary(offBeat, signal, CONFIG)).toBeUndefined()
+    expect(persistedPrunes(offBeat)).toEqual([])
 
     // 第 12 步：11 条已记录，去掉已裁的 3 条，保留窗口是「未裁过的里面最近 2 条」（第 10、11 条），
     // 剩下第 4..9 条（索引 3..8）进本批。这是**同一条会话**上的第二次推进，所以先把第一批的日志带过去。
     const atTwelve = sessionAtStep(2 * M) as unknown as Session
     expect(persistReasoningPrune(atTwelve, first as SessionSeq[])).toBeDefined()
-    pruneAtStepBoundary(atTwelve, 12, signal, CONFIG)
+    pruneAtStepBoundary(atTwelve, signal, CONFIG)
     const all = recordedAssistants(atTwelve)
     const prunes = persistedPrunes(atTwelve)
     expect(prunes).toHaveLength(2)
@@ -500,9 +511,113 @@ describe('票 03 · 触发判据的纯函数面（不依赖真实 loop）', () =
     // `M = K + 1`：第 M 步时只有 K 条已记录，正好全是保留窗口，本批为空（这正是默认值必须满足
     // `M ≥ K + 2` 的原因）。
     const degenerate = sessionAtStep(K + 1) as unknown as Session
-    expect(pruneTargetsAtStep(degenerate, K + 1, { everySteps: K + 1, keepRecentSteps: K })).toEqual([])
+    expect(pruneTargetsAtStep(degenerate, { everySteps: K + 1, keepRecentSteps: K })).toEqual([])
     // 再多一步：`M ≥ K + 2` 下同一批就非空了。
     const healthy = sessionAtStep(K + 2) as unknown as Session
-    expect(pruneTargetsAtStep(healthy, K + 2, { everySteps: K + 2, keepRecentSteps: K })).toHaveLength(1)
+    expect(pruneTargetsAtStep(healthy, { everySteps: K + 2, keepRecentSteps: K })).toHaveLength(1)
+  })
+})
+
+/**
+ * 按**每个 turn 的步数**造脚本：每个 turn 的最后一步以纯文本收尾，于是该 turn 恰好在第 N 步结束。
+ *
+ * 跨 turn 的判据必须这么构造：适配器的脚本游标是全局的，`toolsThrough` 只适合单 turn 驱动。
+ * @param turnSteps - 每个 turn 的步数。
+ * @returns 适配器脚本。
+ */
+function scriptOfTurns(turnSteps: readonly number[]): ScriptedStep[] {
+  const toolCalls: boolean[] = []
+  for (const steps of turnSteps) {
+    for (let index = 0; index < steps; index += 1) toolCalls.push(index < steps - 1)
+  }
+  return toolCalls.map((tool, index) => ({
+    reasoning: reasoningOf(index),
+    text: `text ${index}`,
+    calls: tool ? [{ name: 'noop', arguments: '{}' }] : [],
+  }))
+}
+
+/**
+ * 依次驱动若干 turn，并逐 pre-step 取样。
+ * @param turnSteps - 每个 turn 的步数。
+ * @param config - 插件配置。
+ * @param id - 会话身份。
+ * @returns 生命周期、会话与逐 pre-step 取样。
+ */
+async function driveTurns(
+  turnSteps: readonly number[],
+  config: Partial<typeof CONFIG>,
+  id: string,
+): Promise<Driven> {
+  const samples: PreStepSample[] = []
+  const lc = await lifecycle(scriptOfTurns(turnSteps), {
+    config,
+    onPreStep: ({ step, session }) => {
+      samples.push({ step, prunes: persistedPrunes(session).length, assistants: recordedAssistants(session).length })
+    },
+  })
+  registerTool(lc.ctx, 'noop')
+  const { agent, session } = await lc.createSession(id)
+  for (let index = 0; index < turnSteps.length; index += 1) await lc.step(agent, `go ${index + 1}`)
+  return { lc, session, samples }
+}
+
+describe('票 03 · 复核修复：节流按会话级步数，跨 turn 累计', () => {
+  it('两个 turn 各 3 步：第 6 个会话级步骤落盘，targets 恰是保留窗口之外的 3 条', async () => {
+    const { lc, session, samples } = await driveTurns([3, 3], CONFIG, 'cross-turn-on-beat')
+    const recorded = recordedAssistants(session)
+    expect(recorded).toHaveLength(2 * 3)
+    // 载荷步号每个 turn 从 1 重数；到点判据不看它，所以第 6 个会话级步骤才是触发点。
+    expect(samples.map(sample => sample.step)).toEqual([1, 2, 3, 1, 2, 3])
+    expect(samples.map(sample => sample.prunes)).toEqual([0, 0, 0, 0, 0, 1])
+    const prunes = persistedPrunes(session)
+    expect(prunes).toHaveLength(1)
+    // 第 6 步的 pre-step 上只有 5 条已记录，保留最近 2 条 → 裁最早 3 条。
+    expect(prunes[0]!.targets).toEqual(recorded.slice(0, 3).map(entry => entry.seq))
+    await lc.dispose()
+  })
+
+  it('两个 turn 共 5 步（未到点）零写入', async () => {
+    const { lc, session, samples } = await driveTurns([3, 2], CONFIG, 'cross-turn-m1')
+    expect(recordedAssistants(session)).toHaveLength(5)
+    expect(samples.map(sample => sample.prunes)).toEqual([0, 0, 0, 0, 0])
+    expect(persistedPrunes(session)).toEqual([])
+    await lc.dispose()
+  })
+})
+
+describe('票 03 · 复核修复：已被遮蔽的历史步骤不进候选', () => {
+  it('压缩遮蔽过的步骤被剔除，本批照常落盘且不抛错', async () => {
+    const errors: string[] = []
+    const lc = await lifecycle(scriptOfTurns([2, 2]), { config: { everySteps: 2, keepRecentSteps: 0 } })
+    lc.ctx.on('agent/error', ({ error }: { error: unknown }) => {
+      errors.push(error instanceof Error ? error.message : String(error))
+    })
+    registerTool(lc.ctx, 'noop')
+    const { agent, session } = await lc.createSession('shadowed')
+
+    // 第一个 turn：第 2 个会话级步骤裁掉第 1 条历史步骤。
+    await lc.step(agent, 'a')
+    const recorded = recordedAssistants(session)
+    expect(recorded).toHaveLength(2)
+    expect(persistedPrunes(session)).toHaveLength(1)
+
+    // 造一次压缩式的遮蔽：把第 2 条历史步骤换成一条 user/message（`compaction-basic` 的形状）。
+    const shadowed = SessionSeq(recorded[1]!.seq)
+    session.append(
+      'user/message',
+      createUserMessage({ content: [{ type: 'text', text: 'summary' }], source: { kind: 'user' } }),
+      { surfaceOp: { op: 'replace', startSeq: shadowed, endSeq: shadowed }, sourceEventSeqs: [shadowed] },
+    )
+    expect(session.surface.nodes).not.toContain(shadowed)
+
+    // 第二个 turn：第 4 个会话级步骤的候选是第 3 条（第 1 条已裁、第 2 条已被遮蔽）。
+    await lc.step(agent, 'b')
+    expect(errors).toEqual([])
+    const prunes = persistedPrunes(session)
+    expect(prunes).toHaveLength(2)
+    expect(prunes[1]!.targets).toEqual([recordedAssistants(session)[2]!.seq])
+    expect(prunes.flatMap(prune => prune.targets)).not.toContain(shadowed)
+    await lc.dispose()
   })
 })

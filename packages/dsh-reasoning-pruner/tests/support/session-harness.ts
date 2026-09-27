@@ -403,15 +403,21 @@ export function persistedPrunes(session: Session): PersistedPrune[] {
 }
 
 /**
- * 只满足触发选区所需的**最小会话面**（`snapshotEvents` / `ownEvents` / `inheritedEventCount` /
- * `append`）。
+ * 只满足触发与选区所需的**最小会话面**（`snapshotEvents` / `ownEvents` / `inheritedEventCount` /
+ * `surface` / `append`）。
  *
- * 它让「已裁集合从日志重建」与「保留窗口」这类**线性推进**可以在没有 agent loop 的情况下直接构造：真夹具
- * 里走到第 12 步要真的驱动 12 步，而这几条判据的对象是纯函数。造出来的 assistant 消息带 `pi-ai` +
- * `openai-completions` 信封，也就是唯一有裁剪资格的输入。
+ * 它让「已裁集合从日志重建」「保留窗口」「会话级步号」这类**线性推进**可以在没有 agent loop 的情况下直接
+ * 构造：真夹具里走到第 12 步要真的驱动 12 步，而这几条判据的对象是纯函数。造出来的 assistant 消息带
+ * `pi-ai` + `openai-completions` 信封，也就是唯一有裁剪资格的输入。
  */
 export interface FakeSession {
   readonly events: SessionEvent[]
+  /** 当前表面节点：只含 `surfaceOp: 'append'` 的消息事件（`append()` 写的是 log-only 事件）。 */
+  readonly surface: {
+    readonly nodes: readonly number[]
+    readonly replaceGeneration: number
+    readonly contentGeneration: number
+  }
   snapshotEvents(from?: number, toExclusive?: number): readonly SessionEvent[]
   ownEvents(): readonly SessionEvent[]
   readonly inheritedEventCount: number
@@ -419,14 +425,22 @@ export interface FakeSession {
 }
 
 /**
- * 造一个最小会话，内含 `steps.length` 条有裁剪资格的已记录 `assistant/message`。
+ * 造一个最小会话：每一步先落一条 `step/start`，再落一条有裁剪资格的 `assistant/message`（与真 loop 的
+ * 「第 N 步的 pre-step 时已有 N-1 条 step/start」形状一致）。
  * @param steps - 每步的推理与文本。
  * @returns 最小会话面；需要真 `Session` 时由用例自己断言转换。
  */
 export function fakeSession(steps: readonly { readonly reasoning: string, readonly text: string }[]): FakeSession {
   const events: SessionEvent[] = []
   let seq = 0
-  for (const step of steps) {
+  for (const [index, step] of steps.entries()) {
+    events.push({
+      type: 'step/start',
+      seq: SessionSeq(seq),
+      time: 0,
+      data: { turn: 1, step: index + 1 },
+    } as SessionEvent)
+    seq += 1
     const content: ContentBlock[] = [
       { type: 'reasoning', text: step.reasoning },
       { type: 'text', text: step.text },
@@ -449,13 +463,20 @@ export function fakeSession(steps: readonly { readonly reasoning: string, readon
       type: 'assistant/message',
       seq: SessionSeq(seq),
       time: 0,
-      data: { turn: 1, step: seq + 1, message, stream: [] },
+      data: { turn: 1, step: index + 1, message, stream: [] },
       surfaceOp: 'append',
     } as SessionEvent)
     seq += 1
   }
   return {
     events,
+    get surface() {
+      return {
+        nodes: events.filter(event => event.surfaceOp === 'append').map(event => event.seq),
+        replaceGeneration: 0,
+        contentGeneration: 0,
+      }
+    },
     snapshotEvents(from = 0, toExclusive = events.length) {
       return events.slice(from, toExclusive)
     },

@@ -6,13 +6,14 @@
  * `reasoningPrunerProjection` 在落盘**之前**执行（`planSurfaceEvent` 由 `surfaceManager.validateNext`
  * 调用、在 `log.push` 之前），所以非法 payload 会让 `append` 本身抛出、日志不留坏记录。
  *
- * 选区与触发都建在**已提交历史**上：候选、已裁集合、保留窗口三者都从日志读，所以重载后不需要任何外部
- * 状态就能继续推进，也不会重复声明同一个 seq。
+ * 选区与触发都建在**已提交历史**上：候选、已裁集合、保留窗口、会话级步号四者都从日志读，所以重载后不需要
+ * 任何外部状态就能继续推进，也不会重复声明同一个 seq。
  *
  * ⚠️ 本文件是全插件唯一读**同步历史**（`snapshotEvents()` / `ownEvents()`，带 `@deprecated`、Agent Note
- * 明写 new calls are prohibited）的生产代码，理由见 `recordedAssistantMessages`；两处的读法都只用「事件
- * 的类型与 seq」，而且都覆盖 fork 继承的前缀（`readPrunedSteps` 直接读全量快照，`recordedAssistantMessages`
- * 读继承前缀 + `ownEvents()`）。除此之外生产源码一个被禁读取器都不碰，也不留任何事件引用。
+ * 明写 new calls are prohibited）的生产代码，理由见 `recordedAssistantMessages`；三处的读法都只用「事件
+ * 的类型与 seq」，而且都覆盖 fork 继承的前缀（`readPrunedSteps` 与 `sessionStepNumber` 直接读全量快照，
+ * `recordedAssistantMessages` 读继承前缀 + `ownEvents()`）。除此之外生产源码一个被禁读取器都不碰，也不留
+ * 任何事件引用。
  *
  * @module
  */
@@ -70,9 +71,8 @@ export function readPrunedSteps(session: Session): Set<SessionSeq> {
 /**
  * 本步骤的保留窗口从哪一条开始：保留窗口是「已记录历史里最近 `K` 个步骤」。
  *
- * 窗口的右端取「已记录条数」而不是 `step - 1`：两者在正常驱动下相等（agent loop 在提出第 N 步**之前**
- * 发出 pre-step，所以第 N 步时恰好有 N-1 条已记录，见 `agent-loop/src/agent.ts:315-316`），而以日志为准
- * 让「恢复的会话 + 新步骤」这种组合不必依赖那个等式。
+ * 窗口的右端取「已记录条数」而不是由步号推算：`agent/pre-step` 载荷里的 `step` 是 turn 内步号，恢复的
+ * 会话也会从 1 重数；以日志为准让「首个 turn」与「恢复的会话 + 新步骤」用同一条规则。
  * @param recordedCount - 已记录的 `assistant/message` 条数。
  * @param keep - 保留窗口 `K`。
  * @returns 保留窗口的第一条在已记录序列里的下标（可为负，表示全部都在窗口内）。
@@ -82,52 +82,71 @@ function firstKeptIndex(recordedCount: number, keep: number): number {
 }
 
 /**
- * 激活点② 的选区：步数到达 `M` 的整数倍时该裁哪些历史步骤。
+ * 本步骤的**会话级**步号：日志里已提交的 `step/start` 条数 + 1。
  *
- * 已记录步骤里，最近 `K` 步原样保留，其余按 seq 升序返回；**已裁过的不再返回**（单向性的实现面）。
+ * **不能用 `agent/pre-step` 载荷里的 `step`**：它是 turn 内从 1 重数的步号
+ * （`agent-loop/src/agent.ts:315` 取 `phase.step + 1`、`:377` 在每个新 turn 前把 `phase.step` 归零）。
+ * 用它取模会把「每 `M` 个步骤推进一次」退化成「每个 turn 内的每 `M` 步推进一次」——turn 长度不足 `M` 的
+ * 会话（默认 `M = 50`）一次都不推进，而 ② 是本插件唯一的常规收益路径。
  *
- * **首次触发的批量必须非空**：第 `M` 步时已有 `M - 1` 条已记录步骤，减掉保留窗口 `K`。这个不变式对默认
- * 值的要求是 `M ≥ K + 2`（`M = K + 1` 时首次触发恰好只剩保留窗口，见 `Config` 的注释）；`K ≥ M` 会让每次
- * 到点都是空批量，而 `targets` 为空的事件被投影校验与写入侧同时禁止。
+ * 日志口径同时给出重载一致性：恢复的会话带着全部历史的 `step/start`，所以下一次触发点仍是会话级步数的
+ * 下一个 `M` 的整数倍，不会因重载补打一次。
  * @param session - 会话。
- * @param step - `agent/pre-step` 载荷里的步号；**窗口以日志为准**（见 `firstKeptIndex`），本参数只用于
- *   记录与调用侧的可读性。
- * @param config - 已解析的配置。
- * @returns 本批应裁的 seq，按 seq 升序；没有可推进的步骤时为空数组。
+ * @returns 本步骤的会话级步号（会话的第一个步骤为 1）。
  */
-export function pruneTargetsAtStep(
-  session: Session,
-  step: number,
-  config: Required<Config>,
-): SessionSeq[] {
-  const recorded = [...recordedAssistantMessages(session).keys()].sort((a, b) => a - b)
-  const pruned = readPrunedSteps(session)
-  const firstKept = firstKeptIndex(recorded.length, config.keepRecentSteps)
-  return recorded.filter((seq, index) => index < firstKept && !pruned.has(seq))
+function sessionStepNumber(session: Session): number {
+  let started = 0
+  for (const event of session.snapshotEvents()) {
+    if (event.type === 'step/start') started += 1
+  }
+  return started + 1
 }
 
 /**
- * 激活点② 的触发：步数到达 `M` 的整数倍时批量推进一次边界。
+ * 激活点② 的选区：本步骤该推进到哪一批历史步骤。
  *
- * **节奏只由本函数自己的步数口径决定**，与上下文占比无关：`ctx.tokenMeter.measure()` 按**原始表面事件**
- * 定价、不读投影（`packages/llm/token-meter/src/index.ts:146-157` 的 `priceSurface(state.surface, …)`），
- * 所以裁剪省下的钱不会让读数下降，用读数判压在这里是错的。表现是「省了钱、界面上的上下文占比不动」，
- * 这是机制事实而不是缺陷。
+ * 已记录步骤里，最近 `K` 步原样保留，其余按 seq 升序返回；**已裁过的不再返回**（单向性的实现面），
+ * **已不是当前表面节点的也不再返回**（见下）。
+ *
+ * **首次触发的批量必须非空**：第 `M` 步的 pre-step 上已有 `M - 1` 条已记录步骤，减掉保留窗口 `K`。这个
+ * 不变式对默认值的要求是 `M ≥ K + 2`（`M = K + 1` 时首次触发恰好只剩保留窗口，见 `Config` 的注释）；
+ * `K ≥ M` 会让每次到点都是空批量，而 `targets` 为空的事件被投影校验与写入侧同时禁止。
+ *
+ * **候选必须与当前表面节点取交集**：`recordedAssistantMessages` 读的是全量日志，而被压缩
+ * （`surfaceOp: 'replace'`）遮蔽过的历史步骤不再是表面节点；把这样的 seq 写进 `targets` 会让投影校验
+ * （`target seq N is not a current surface node`）在 `append` 时当场抛，把一个正常的 agent 步骤打断。
+ * @param session - 会话。
+ * @param config - 已解析的配置。
+ * @returns 本批应裁的 seq，按 seq 升序；没有可推进的步骤时为空数组。
+ */
+export function pruneTargetsAtStep(session: Session, config: Required<Config>): SessionSeq[] {
+  const recorded = [...recordedAssistantMessages(session).keys()].sort((a, b) => a - b)
+  const pruned = readPrunedSteps(session)
+  const nodes = new Set<SessionSeq>(session.surface.nodes)
+  const firstKept = firstKeptIndex(recorded.length, config.keepRecentSteps)
+  return recorded.filter((seq, index) => index < firstKept && nodes.has(seq) && !pruned.has(seq))
+}
+
+/**
+ * 激活点② 的触发：会话级步数到达 `M` 的整数倍时批量推进一次边界。
+ *
+ * **节奏只由本函数自己的步数口径决定**（日志里的 `step/start` 条数，见 `sessionStepNumber`），与上下文
+ * 占比无关：`ctx.tokenMeter.measure()` 按**原始表面事件**定价、不读投影（`packages/llm/token-meter/src/index.ts:146-157`
+ * 的 `priceSurface(state.surface, …)`），所以裁剪省下的钱不会让读数下降，用读数判压在这里是错的。表现是
+ * 「省了钱、界面上的上下文占比不动」，这是机制事实而不是缺陷。
  * @param session - 活跃会话。
- * @param step - `agent/pre-step` 载荷里的步号。
  * @param signal - 该步的取消信号；已中止时不动作。
  * @param config - 已解析的配置。
  * @returns 落盘的事件序号；未到点、无可推进步骤或信号已中止时为 `undefined`。
  */
 export function pruneAtStepBoundary(
   session: Session,
-  step: number,
   signal: AbortSignal,
   config: Required<Config>,
 ): SessionSeq | undefined {
   if (signal.aborted) return undefined
-  if (step % config.everySteps !== 0) return undefined
-  return persistReasoningPrune(session, pruneTargetsAtStep(session, step, config))
+  if (sessionStepNumber(session) % config.everySteps !== 0) return undefined
+  return persistReasoningPrune(session, pruneTargetsAtStep(session, config))
 }
 
 /**
