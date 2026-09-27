@@ -216,10 +216,6 @@ describe('票 03 · 第 3 条：K 被尊重', () => {
 describe('票 03 · 第 4 条：节奏不受 token 计量读数影响', () => {
   it('读数恒为常量、且计量服务根本不被访问，仍按 M 的整数倍触发', async () => {
     // 机制：`ctx.tokenMeter.measure()` 按**原始表面事件**定价、不读投影，所以「裁了钱」不会让读数下降；
-    // ② 的节奏因此只能由步数决定。这条判据要能挡住「读一个不会下降的读数来决定节奏」的实现，所以观察面
-    // 不是「读数有没有变」，而是**计量服务压根没被碰过**：把 `ctx.tokenMeter` 换成一个读到任何属性就抛的
-    // Proxy，任何形式的判压读取都会当场炸掉这一轮。
-    // 机制：`ctx.tokenMeter.measure()` 按**原始表面事件**定价、不读投影，所以「裁了钱」不会让读数下降；
     // ② 的节奏因此只能由步数决定。这条判据要挡住「读一个不会下降的读数来决定节奏」的实现，所以观察面
     // 不是「读数有没有变」，而是**计量服务压根没被读**：把它的原型换成一个读到任何方法就抛的 Proxy，
     // 任何形式的判压读取都会当场炸掉这一轮。（换原型而不是换 `ctx.tokenMeter`：后者受 Cordis 的
@@ -235,7 +231,7 @@ describe('票 03 · 第 4 条：节奏不受 token 计量读数影响', () => {
       }))
     }
     // 在**本插件的装载路径**上换掉计量服务；`drive` 传入的 `prepend` 回调正是那个时机（它在
-    // `ctx.plugin(plugin, …)` 之前跑，且与它同属夹具 context、同一个 fiber，所以可以赋值）。
+    // `ctx.plugin(plugin, …)` **之后**跑，且与它同属夹具 context、同一个 fiber，所以可以赋值）。
     const { lc, session, samples } = await drive({ steps: M, prepend })
 
     expect(samples[4]!.prunes).toBe(0)
@@ -326,16 +322,19 @@ describe('票 03 · 第 7 条：本插件的监听器在 compaction-basic 之前
     // 回调里 `append` 承载事件，所以「某个观察者跑到时日志里有没有那条事件」直接回答「本插件的处理在它
     // 之前还是之后」。
     //
-    // 观察面成对，缺一条都会自欺：
-    // - **排在本插件之前**的观察者（`{ prepend: true }`，`unshift` 到队首）：到点那一步必须看到 0；
-    // - **链尾**的观察者（默认 `push`）：同一个位置必须看到 1，也就是本插件的写入确实排在它之前。
-    // - compaction-basic 的测量：到点之后再看，读数必须是 1（它排在本插件之后）。
+    // **同侪与观察面都注册在本插件之前**（`beforePlugin`）：它们以普通 `push` 注册，此刻队里没有别人，
+    // 因此天然排在队首；本插件只有真的以 `{prepend: true}`（`unshift`）注册才排得到它们前面。撤掉
+    // `prepend` 会让下面的断言①变红——这是「顺序才是这条判据的全部内容」唯一的可回归形态；把观察面注册
+    // 在插件之后就没有这个性质（那种观察面无论如何都排在本插件之后）。
     //
-    // 三条合起来把本插件的处理夹在「prepend 观察者」与「同侪/链尾观察者」之间——也就是票面要的那个
-    // 位置。**不**用监听器数组的下标来判：数组顺序反映的是「谁先注册」，在这里对本插件的 `prepend`
-    // 不敏感。
+    // 观察面成对，缺一条都会自欺：
+    // - **排在本插件之前**的观察者：到点那一步必须看到 0；
+    // - **链尾**的观察者（默认 `push`，注册在最后）：同一个位置必须看到 1，也就是写入确实排在它之前；
+    // - compaction-basic 的测量：到点之后再看，读数必须是 1（它排在本插件之后）。
     const carriersWhenMeasured: number[] = []
-    const prepend = (ctx: Context): void => {
+    const beforeProbe: number[] = []
+    const afterProbe: number[] = []
+    const patchMeter = (ctx: Context): void => {
       const meter = ctx.tokenMeter as unknown as { measure: (session: Session) => unknown }
       const original = meter.measure
       meter.measure = (session) => {
@@ -343,27 +342,32 @@ describe('票 03 · 第 7 条：本插件的监听器在 compaction-basic 之前
         return original.call(ctx.tokenMeter, session)
       }
     }
-    const lc = await lifecycle(SCRIPT, { config: CONFIG, toolsThrough: M - 1, prepend })
-    registerTool(lc.ctx, 'noop')
-    const beforePlugin: number[] = []
-    const afterPlugin: number[] = []
-    // `unshift` ⇒ 排在先注册的 prepend（也就是本插件）之前。
-    lc.ctx.on('agent/pre-step', ({ agent }, next) => {
-      beforePlugin.push(persistedPrunes(agent.session).length)
-      return next()
-    }, { prepend: true })
-    // `push` ⇒ 排在数组末尾，也就是本插件与 compaction-basic 之后。
-    lc.ctx.on('agent/pre-step', ({ agent }, next) => {
-      afterPlugin.push(persistedPrunes(agent.session).length)
-      return next()
+    const beforePlugin = async (ctx: Context): Promise<void> => {
+      // `push` ⇒ 队首（此刻还没有别的非 prepend 监听器）。本插件若不用 `prepend`，就会排到它之后。
+      ctx.on('agent/pre-step', ({ agent }, next) => {
+        beforeProbe.push(persistedPrunes(agent.session).length)
+        return next()
+      })
+      // 同侪必须在**驱动之前**挂上：它在构造期注册 `agent/pre-step` 监听器。阈值取得足够高，让压力分支
+      // 只做测量、不进入摘要（本票不测摘要）。
+      await ctx.plugin(BasicCompactionEngine, {
+        auto: true,
+        thresholdRatio: 0.9,
+        headroomTokens: 0,
+        maxTokens: 8192,
+      })
+    }
+    const lc = await lifecycle(SCRIPT, {
+      config: CONFIG,
+      toolsThrough: M - 1,
+      prepend: patchMeter,
+      beforePlugin,
     })
-    // 同侪必须在**驱动之前**挂上：它在构造期注册 `agent/pre-step` 监听器。阈值取得足够高，让压力分支
-    // 只做测量、不进入摘要（本票不测摘要）。
-    await lc.ctx.plugin(BasicCompactionEngine, {
-      auto: true,
-      thresholdRatio: 0.9,
-      headroomTokens: 0,
-      maxTokens: 8192,
+    registerTool(lc.ctx, 'noop')
+    // `push` ⇒ 注册在最后，因此排在所有人之后（含 compaction-basic）。
+    lc.ctx.on('agent/pre-step', ({ agent }, next) => {
+      afterProbe.push(persistedPrunes(agent.session).length)
+      return next()
     })
     const { agent, session } = await lc.createSession('listener-order')
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
@@ -371,13 +375,17 @@ describe('票 03 · 第 7 条：本插件的监听器在 compaction-basic 之前
 
     // 判据非空：到点那一步确实写了。
     expect(persistedPrunes(session)).toHaveLength(1)
-    expect(beforePlugin).toHaveLength(M)
-    expect(afterPlugin).toHaveLength(M)
-    // ① 本插件之前看到 0、链尾看到 1 ⇒ 本插件的处理夹在两者之间，且一定在 compaction-basic 之前。
-    expect(beforePlugin[M - 1]).toBe(0)
-    expect(afterPlugin[M - 1]).toBe(1)
+    expect(beforeProbe).toHaveLength(M)
+    expect(afterProbe).toHaveLength(M)
+    // ① 本插件的处理夹在两个观察面**之间**。这条不按下标推算（写入落在第几次 pre-step 由「已记录条数」
+    //    决定，写死下标会把口径错误伪装成断言失败）：取两个观察面**同时**出现承载事件的那一次分派，
+    //    它前面的观察面必须看到 0、后面的必须看到 1。撤掉 `prepend` 时本插件排到 `beforeProbe` 之后，
+    //    这一次分派里 `beforeProbe` 也会看到 1，这条当场变红。
+    const written = beforeProbe.findIndex(count => count === 1)
+    expect(written).toBeGreaterThanOrEqual(0)
+    expect(afterProbe[written]).toBe(1)
     // ② 同侪确实测过压，且它测量那一刻本批裁剪已经在日志里。它每测一次，读数都必须是 1——若它排到本插件
-    //    之前，最早那些读数会是 0。
+    //    之前（撤掉 `prepend` 时的形态），最早那些读数会是 0。
     expect(carriersWhenMeasured).toContain(1)
     // 最早几次测量发生在第 M 步之前（那时还没有承载事件，读数为 0 是应有之义）；从第一次看到承载事件起，
     // 之后再测都必须看得到它——这条正是「测量排在本插件之后」的形态；若顺序反过来，第一次出现 1 之后

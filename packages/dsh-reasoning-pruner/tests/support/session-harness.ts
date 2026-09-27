@@ -184,12 +184,20 @@ export interface LifecycleOptions {
   /** 传给本插件的配置；缺省走 `Config` 的默认值。 */
   readonly config?: Partial<Config>
   /**
-   * 在插件装载**之后**、驱动之前被调一次，用来注册 `prepend` 观察面。
+   * 在插件装载**之后**、驱动之前被调一次。
    *
    * 位置是有意的：`ctx.on` 的 `{prepend: true}` 走 `unshift`，**后注册的排在队首**，所以在这里注册的
-   * 监听器会跑在本插件与 compaction-basic 之前——这正是「本插件处理之前」的取样点。
+   * 监听器会跑在本插件之前。用于「只挂一个观察面」的场景（例如给 `ctx.tokenMeter` 打桩）。
    */
   readonly prepend?: (ctx: Context) => void
+  /**
+   * 在插件装载**之前**、驱动之前被调一次（异步等待其完成）。
+   *
+   * 「本插件的监听器排在某个同侪之前」这条判据**只能**在这里建立：只有先注册的同侪 + 一个排在本插件
+   * 之前的观察面，才能让「撤掉本插件的 `{prepend: true}`」表现为可观察的差异。注册在插件之后的观察面
+   * （{@link LifecycleOptions.prepend}）不具备这个性质——它无论如何都排在本插件之后。
+   */
+  readonly beforePlugin?: (ctx: Context) => void | Promise<void>
   /**
    * 让每一步的信封都声明一个**没有裁剪资格**的传输（`api !== 'openai-completions'`）。
    *
@@ -232,6 +240,7 @@ export async function lifecycle(
       : script,
     options.toolsThrough,
   ))
+  if (options.beforePlugin !== undefined) await options.beforePlugin(ctx)
   if (options.withPlugin ?? true) await ctx.plugin(plugin, options.config ?? {})
   options.prepend?.(ctx)
   // 观察面注册在插件**之后**：本插件 prepend，所以本监听器排在它之后跑，取样点即「本步骤的决策已落盘」。
