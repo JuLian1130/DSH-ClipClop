@@ -126,7 +126,8 @@ describe('票 07 · 闸门 B · 净收益算式代入实测值', () => {
 
     // 判据非空：`n` 是一个算出来的数、后续请求数是一个声明的数，大小关系明确写成净收益为正/为负。
     expect(benefit.n).toBeCloseTo(((1 - H) * tail) / (H * r), 5)
-    expect(typeof benefit.positive).toBe('boolean')
+    // 明确写出结论的方向，而不是「typeof 是 boolean」这种恒真断言。
+    expect(benefit.positive).toBe(false)
     // `h` 是外部输入，必须写明来源（这条在记录里出现一次，三张闸门共用同一份 h）。
     expect(H_SOURCE).toContain('cost')
     // 本例的读数：h=0.02 量级下 n 远大于该请求形状此后还会出现的次数 ⇒ 净收益为负。
@@ -155,8 +156,9 @@ describe('票 07 · 闸门 B · 净收益算式代入实测值', () => {
     const r = control[boundaryCall]!.requestTokens - pruned[boundaryCall]!.requestTokens
     const tokenCriterionPositive = addedUncached < LATER_REQUESTS * r
 
-    // 这条是同一算式在 h = 0.5 附近的特例，不是一般结论——记录里必须写明用的哪一条。
-    expect(typeof tokenCriterionPositive).toBe('boolean')
+    // 这条是同一算式在 h = 0.5 附近的特例，不是一般结论——记录里必须写明用的是哪一条。
+    // 明确写出结论：本场景下这条 token 判据给出**为正**（`55 < 40 × 5`）。
+    expect(tokenCriterionPositive).toBe(true)
     // 代价那一侧必须真的量得出一个正数（推进确实重算了尾部）。
     expect(addedUncached).toBeGreaterThan(0)
     expect(r).toBeGreaterThan(0)
@@ -269,8 +271,9 @@ describe('票 07 · 闸门 B · 摘要遮蔽分支的适用边界', () => {
     const scenario = await overflowScenario({ mountToolResultPruner: true, largeToolResults: true })
     expect(scenario.summaryReasoningShare).toBeGreaterThan(0)
     expect(scenario.summaryReasoningShare).toBeLessThan(1)
-    // 该场景下先裁再摘要是否更贵，由同一条 h × S 与 (1 − r) × S 比大小给出。
-    expect(typeof (H > 1 - scenario.summaryReasoningShare)).toBe('boolean')
+    // 该场景下先裁再摘要**更贵**：实测 r 很小（推理只占摘要输入的一小部分），所以要求 `h > 1 − r` 里那个
+    // 门槛接近 1，而外部声明的 `h = 0.02` 远低于它。
+    expect(H > 1 - scenario.summaryReasoningShare).toBe(false)
     await scenario.dispose()
   }, 120000)
 })

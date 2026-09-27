@@ -37,7 +37,7 @@ export interface TokenReading {
  * @param usage - 该事件的 `usage`；缺席时三次计数全按 0 读。
  * @returns 三次计数与计费输入。
  */
-export function tokenReading(usage: { readonly inputTokens?: number, readonly cacheReadTokens?: number, readonly cacheWriteTokens?: number } | undefined): Omit<TokenReading, 'seq'> {
+function tokenReading(usage: { readonly inputTokens?: number, readonly cacheReadTokens?: number, readonly cacheWriteTokens?: number } | undefined): Omit<TokenReading, 'seq'> {
   const inputTokens = usage?.inputTokens ?? 0
   const cacheReadTokens = usage?.cacheReadTokens ?? 0
   const cacheWriteTokens = usage?.cacheWriteTokens ?? 0

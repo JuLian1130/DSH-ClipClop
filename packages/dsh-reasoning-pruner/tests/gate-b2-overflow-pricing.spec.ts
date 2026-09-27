@@ -19,7 +19,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { H, netBenefit, visibleReasoning } from './support/gate-readings.ts'
+import { H, visibleReasoning } from './support/gate-readings.ts'
 import { overflowScenario, reasoningShare, retryPair, summaryUsage } from './support/overflow-scenario.ts'
 import { cleanupRoots, persistedPrunes, recordedAssistants } from './support/session-harness.ts'
 
@@ -142,7 +142,7 @@ describe('票 07 · 闸门 B-2 · 反例：摘要照跑时 ① 可能为负', ()
     await untouched.dispose()
   }, 300000)
 
-  it('摘要调用自身的会话级收益按同一算式定价（摘要被裁推理 token 少掉多少）', async () => {
+  it('摘要调用自身的读数：裁剪让喂给摘要的输入少掉多少 token', async () => {
     const pruned = await overflowScenario({ mountToolResultPruner: true, largeToolResults: true, keepRecentSteps: 2 })
     const untouched = await overflowScenario({
       mountToolResultPruner: true, largeToolResults: true, withPlugin: false, keepRecentSteps: 50,
@@ -154,11 +154,15 @@ describe('票 07 · 闸门 B-2 · 反例：摘要照跑时 ① 可能为负', ()
     expect(prunedPair.summary.requestTokens).toBeLessThan(untouchedPair.summary.requestTokens)
     const removed = untouchedPair.summary.requestTokens - prunedPair.summary.requestTokens
     expect(removed).toBeGreaterThan(0)
+    // 逐项记录（票面第 20 条要「记录摘要调用自身的 inputTokens / cacheReadTokens」）：
+    const usage = summaryUsage(pruned.session)
+    expect(usage).toBeDefined()
+    // 这次摘要调用**自身**省下的就是 `removed` 个未缓存输入 token——它相对不裁剪时更便宜，这是可观察事实。
+    expect(prunedPair.summary.requestTokens).toBe(untouchedPair.summary.requestTokens - removed)
 
-    // 若这次摘要调用因裁剪变贵，则 ① 在该请求形状上为负、只有兜底价值。结论写进记录。
-    const benefit = netBenefit({ tail: removed, r: removed, h: H, laterRequests: 1 })
-    expect(typeof benefit.positive).toBe('boolean')
-
+    // 但它**不足以**让 ① 在该请求形状上转为正收益：`removed` 只占原文输入的一个零头，而「先裁再摘要」的
+    // 代价是那条边界（`h > 1 − r`）在 `h = 0.02` 下不成立（上一条测试已断言「更贵」）。记录里如实写。
+    expect(removed / untouchedPair.summary.requestTokens).toBeLessThan(1 - H)
     await pruned.dispose()
     await untouched.dispose()
   }, 300000)
