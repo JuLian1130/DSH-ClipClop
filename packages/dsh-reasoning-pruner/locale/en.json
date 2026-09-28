@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Reasoning Pruner",
+    "description": "Keep the reasoning blocks of completed steps out of later requests, saving the input that would otherwise be re-paid on every request. Records stay unchanged; only the model-visible history is rewritten."
+  }
+}

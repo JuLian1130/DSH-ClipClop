@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Navigator",
+    "description": "Run an auxiliary course review from the main session's model-visible context after every N steps, then continue, adjust, or stop the main session based on the verdict."
+  }
+}
