@@ -32,6 +32,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "prepare": "pnpm run build",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit"
   },
