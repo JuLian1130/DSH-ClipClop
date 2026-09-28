@@ -27,7 +27,7 @@
 
 ## 构建
 
-装进 profile 的必须是**预先构建好的产物**：安装不执行构建脚本，所以先在仓库里构建、再打包。
+**为什么要先构建**：`lib/` 是构建产物，被本仓 `.gitignore` 排除（`.gitignore:51` 的 `lib/`），所以一份新克隆里没有它。而装载器只认 `lib/`（`package.json` 的 `main` / `exports`）——`lib/` 缺失时 `dsh plugin add` 仍会**静默成功**，直到装载才炸（`ERR_MODULE_NOT_FOUND … /lib/index.js`）。
 
 ```bash
 pnpm --pm-on-fail=ignore --dir packages/dsh-reasoning-pruner run build
@@ -41,27 +41,34 @@ pnpm --pm-on-fail=ignore --dir packages/dsh-reasoning-pruner run build
 ls -l packages/dsh-reasoning-pruner/lib/index.js packages/dsh-reasoning-pruner/lib/client.js
 ```
 
+改了 `src/` 之后要重新构建——本地安装是 `link:`，profile 里那份指向这个工作副本（见下）。
+
 ## 安装
 
-1. 打 tarball（**不要**用 `file:` 目录——tarball 固定打包那一刻的产物，`file:` 是随工作副本变化的链接副本）：
+上一步构建过 `lib/` 之后，**一条命令**即可：
 
-   ```bash
-   pnpm --pm-on-fail=ignore --dir packages/dsh-reasoning-pruner pack --pack-destination /tmp/dsh-rp
-   ```
+```bash
+dsh plugin --profile <name> add /absolute/path/to/packages/dsh-reasoning-pruner
+```
 
-   产物是 `dsh-clipclop-dsh-reasoning-pruner-0.1.0.tgz`，内含 `lib/**`（host 半 + `client.js`）与 `cordis.patch.yml`，另加 `package.json` 与本 README（npm 总是带上这两个，与 `files` 无关）。
+（`$DSH_HOME` 默认 `~/.dsh`，profile 目录是 `$DSH_HOME/profiles/<name>`；路径也可以写成相对于执行命令时的当前目录。要新建 profile 就换一个没被占用的 `<name>`，它会是 `dsh-base` 打底。）
 
-2. 装进目标 profile（`$DSH_HOME` 默认 `~/.dsh`，profile 目录是 `$DSH_HOME/profiles/<name>`）：
+这个包声明了 `dsh.bundle.patch`，所以安装会把它**自动追加**进 profile 的 `dsh.profile.bundles`，不需要手改。装完**重启 DSH**。
 
-   ```bash
-   dsh plugin --profile <name> add /tmp/dsh-rp/dsh-clipclop-dsh-reasoning-pruner-*.tgz --ignore-scripts
-   ```
+它会装成 `link:`（指向本仓的工作副本），因此改 `src/` + 重新 `build` 之后，重载即生效，不必重装。
 
-   这个包声明了 `dsh.bundle.patch`，所以安装会把它**自动追加**进 profile 的 `dsh.profile.bundles`，不需要手改。`dsh plugin` 是把参数转发给 profile 目录里的 pnpm，因此 `--ignore-scripts` 这类 pnpm flag 照常可用。
+### 想发一份固定产物给别人时
 
-3. **重启 DSH**。装入一个组合包会改变 profile 的层组合，重启是最可靠的方式。
+本地安装不需要打 tarball。要固定「打包那一刻」的产物（分发、或不想让对方依赖你的工作副本）时才用：
 
-`desktop` profile 由 Electron 独占、CLI 拒绝管理：改为在该 profile 目录里直接跑 `pnpm add <tarball> --ignore-scripts`，并手工把包名 `@dsh-clipclop/dsh-reasoning-pruner` 加进 `dsh.profile.bundles`。
+```bash
+pnpm --pm-on-fail=ignore --dir packages/dsh-reasoning-pruner pack --pack-destination /tmp/dsh-rp
+dsh plugin --profile <name> add /tmp/dsh-rp/dsh-clipclop-dsh-reasoning-pruner-*.tgz --ignore-scripts
+```
+
+`--ignore-scripts` 让安装不执行构建脚本——所以 tarball 必须是**已经构建过的**，装完不再构建。
+
+`desktop` profile 由 Electron 独占、CLI 拒绝管理：改为在该 profile 目录里直接跑 `pnpm add <路径或 tarball> --ignore-scripts`，并手工把包名 `@dsh-clipclop/dsh-reasoning-pruner` 加进 `dsh.profile.bundles`。
 
 ## 启用
 
