@@ -1,6 +1,6 @@
 # dsh-reasoning-pruner 设计
 
-状态：机制已逐条核实，**实现未开始**。耐久记录的承载类型经类型普查选定为 **`web/deepseek-search-llm-request`**（候选排序与排除清单见「待办与上游诉求」）；**闸门 A 未关闭**，方案仍可能整体作废。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
+状态：机制已逐条核实，**实现未开始**。耐久记录的承载类型经类型普查选定为 **`web/deepseek-search-llm-request`**（候选排序与排除清单见「待办与上游诉求」）；**闸门 A 已关闭**（票 08 实测：A1/A2/B1/B2/C1/C2 全通过、A2 的被计费输入下降，见 `.scratch/historical-reasoning-pruning/gate-a-record.md`；结论只在被实测的网关与 chat-completions 传输上成立）。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
 本文件引用的 DSH 扩展点按**最新版本 `0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。**最新版本是新插件的唯一基准**：不为旧版本留兼容路径、版本判断分支或降级行为（`AGENTS.md` 的「DSH 版本基准」）。用户运行环境（`~/.dsh/profiles/`）与 DSH 源码 checkout 都是 `0.1.7-rc.2`；本仓的开发依赖另见下文说明。升级后按下文「验证状态」的核对清单重跑一遍——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
@@ -217,9 +217,9 @@ interface ReasoningPrunePayload {
 4. **投影在两条折叠路径上一致**：运行期增量折叠与重载全量折叠得到逐字节相同的模型可见历史。
 5. **`contentGeneration` 确实是请求快照失效的信号**：投影落地后，下一步请求包含裁剪版消息（`agent.ts:396` 的比较）。
 6. **`ignorable` 事件的 data 在 JSONL / deepseek-log 往返后仍完整**（若最终走该路径）：`packages/session/session-log-deepseek/src/index.ts:79-110` 的 `common` 保留 `data`，但这条要端到端验。
-7. **闸门 A、闸门 B、闸门 D**：见规格。闸门 A **已拆分**（见下），B/D 尚未开始；闸门 A 的探针已就绪（`.scratch/probes/reasoning-content-empty-acceptance.mjs`，含 usage 读数）。
+7. **闸门 A、闸门 B、闸门 D**：见规格。闸门 A **已拆分并已关闭**（见下），B/D 尚未开始；闸门 A 的探针（`.scratch/probes/reasoning-content-empty-acceptance.mjs`，含 usage 读数）已按其 6 个变体跑过。
 
-**闸门 A 的拆分：接受度已有生产先例，计费下降仍待实测**
+**闸门 A 的拆分：接受度已有生产先例，计费下降已由票 08 实测**
 
 接受度这一半（「端点是否接受裁剪后的形状」）**不必等真实网关**——DSH 今天就在 DeepSeek 路由上发这个形状：
 
@@ -230,8 +230,8 @@ interface ReasoningPrunePayload {
 
 因此准确的验证状态是：
 
-- **A1（端点接受裁剪后的形状）**：从「未知」降为**有生产先例的强证据**，不再否决实现。仍需一次性确认，但**不阻塞开工**。其适用范围要写明：覆盖 **chat-completions 传输 + DeepSeek 目录判定**；**不含** `llm-deepseek` 的 Messages 传输（那条走 thinking + signature，裁剪即丢掉该块，机制更简单，且已被裁剪资格排除）。
-- **A2（`prompt_tokens` 真的下降）**：**仍未验证**，是经济前提本身。空串计入零 token 近乎同义反复，真正没证的是**服务端会不会补偿性要求回显**。
+- **A1（端点接受裁剪后的形状）**：从「未知」降为**有生产先例的强证据**，不再否决实现。一次性确认已由票 08 的 6 个变体完成（6 个变体全 200，见下），不再阻塞。其适用范围要写明：覆盖 **chat-completions 传输 + DeepSeek 目录判定**；**不含** `llm-deepseek` 的 Messages 传输（那条走 thinking + signature，裁剪即丢掉该块，机制更简单，且已被裁剪资格排除）。
+- **A2（被计费的输入真的下降）**：**已由票 08 实测**——DSH 侧两臂读 `assistant/message` 的 `usage` 三者之和，649 → 474（Δ = 175），同一命令连跑五次 Δ 全为正（151–190）；探针侧 A1↔B1 与 A2↔B2 的 `prompt_tokens` 各降 20。跑法与读数见 `.scratch/historical-reasoning-pruning/gate-a-record.md` §一 / §三。**不得外推**：结论只在该记录实测的那个网关上成立，且覆盖 chat-completions 传输——**不含** `llm-deepseek` 的 Messages 传输。
 - 附带记录本机实际路由的更省形态：`cline-pass` 的自有适配器只在推理非空时才写该字段（`~/.dsh/profiles/web/node_modules/dsh-cline-pass/lib/adapter.js:204-213` 的 `...(reasoning.length > 0 ? { reasoning_content: reasoning } : {})`），即裁剪后走的是**变体 C（字段整个省略）**，比 B 更干净。
 
 **基准：最新版本是唯一基准**
