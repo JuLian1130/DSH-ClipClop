@@ -27,7 +27,18 @@
 
 ## 构建
 
-**为什么要先构建**：`lib/` 是构建产物，被本仓 `.gitignore` 排除（`.gitignore:51` 的 `lib/`），所以一份新克隆里没有它。而装载器只认 `lib/`（`package.json` 的 `main` / `exports`）——`lib/` 缺失时 `dsh plugin add` 仍会**静默成功**，直到装载才炸（`ERR_MODULE_NOT_FOUND … /lib/index.js`）。
+**为什么要构建**：`lib/` 是构建产物，被本仓 `.gitignore` 排除（`.gitignore:51` 的 `lib/`），所以一份新克隆里没有它。而装载器只认 `lib/`（`package.json` 的 `main` / `exports`）——`lib/` 缺失时 `dsh plugin add` 仍会**静默成功**，直到装载才炸（`ERR_MODULE_NOT_FOUND … /lib/index.js`）。
+
+**正常不必手动构建**：本包声明了 `prepare`，`pnpm install` 会自动跑一次 `build`。clone 之后：
+
+```bash
+pnpm --pm-on-fail=ignore install                                    # 根 install，自动构建
+pnpm --pm-on-fail=ignore --dir packages/dsh-reasoning-pruner install --ignore-workspace
+```
+
+第二行是**本包特有**的：`pnpm-workspace.yaml` 把它排除在 workspace 之外（`dsh-navigator` 与它的 DSH 基准版本线不同，同装会互相污染），所以根 `install` 不覆盖它，要它自己跑一次 `prepare`。
+
+需要单独重建时：
 
 ```bash
 pnpm --pm-on-fail=ignore --dir packages/dsh-reasoning-pruner run build
@@ -45,7 +56,7 @@ ls -l packages/dsh-reasoning-pruner/lib/index.js packages/dsh-reasoning-pruner/l
 
 ## 安装
 
-上一步构建过 `lib/` 之后，**一条命令**即可：
+构建过 `lib/` 之后，**一条命令**即可：
 
 ```bash
 dsh plugin --profile <name> add /absolute/path/to/packages/dsh-reasoning-pruner
