@@ -271,6 +271,11 @@ export async function mountClientTab(options: {
   // 渲染机的 `t` 座位由 locale 面backing：夹具在首次渲染前装上它（真装配里也是启动期装好）。
   ctx.slots.installLocale(locale.face)
 
+  // 本插件先挂、持有者后声明 `settings.plugins.tab`——这是真装配里的另一种（更严的）顺序：宿主那一节何时
+  // 挂载不由本插件决定，所以注册只能走 `ctx.slots.inject` 等声明上账。裸 `register` 在这份夹具上会抛
+  // （未声明槽位），不会静默通过。
+  await mount(ctx, pruner)
+
   // 内置插件那一节：声明并渲染 `settings.plugins.tab` 这个 additive list seat。
   await ctx.slots.register({
     name: 'root',
@@ -278,8 +283,7 @@ export async function mountClientTab(options: {
   }, (props: ComposedProps<'root', string, 'settings.plugins.tab', undefined, object>) =>
     React.createElement('div', { 'data-fixture': 'settings-plugins' }, props.renderSlot('settings.plugins.tab', {})))
 
-  await mount(ctx, pruner)
-  // 注册包在 `whileServed` 里，所以它要等 settings 镜像真的 serve 了本插件的命名空间才出现——观察面因此
+  // 注册还包在 `whileServed` 里，所以它要等 settings 镜像真的 serve 了本插件的命名空间才出现——观察面因此
   // 是「镜像 ready 后」，不是 `apply` 同步返回时。
   await ctx.configForms.describe().ensure()
 

@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /**
- * 票 06：主界面开关的四条行为判据（`测试决策`「主界面开关」的行为侧）。
+ * 票 06：可用性开关的四条行为判据（`测试决策`「可用性开关」的行为侧）。
  *
  * 装配是「真 settings 服务 + 真 Loader + 真 provider 目录 + 真 `ui-model-selection`」，浏览器半只有服务
  * 面是替身，见 `tests/support/client-runtime.ts` 的模块头。
  *
  * 第 3 条的观察面写死为 `slots.entries('settings.plugins.tab')` 的注册条目。**座位在 2026-09-29 按用户裁决
  * 从 `settings.general.item` 一行改成「设置 → 内置插件」的一个页签**（理由与影响见票面「座位变更」一节）；
- * 该槽位把 `options.label` 投影成页签按钮上的文字，所以这一条顺带钉住「页签名随语言切换、不是写死的英文」。
+ * 该槽位把 `options.label` 投影成页签按钮上的文字（真消费点是 `ui-settings-plugins` 的 `resolveSlotLabel`），
+ * 所以这一条顺带钉住「页签名随语言切换、不是写死的英文」；投影本身由框架源码保证，本文件只直调那个 thunk。
  * 第 4 条是**成对**的两个用例；第 5 条的观察面是**重挂载后解析出的配置值**，不是「写调用发生过」；第 6 条
  * 断派发出去的写操作恰一次、路径恰一条、别的键逐一不变；第 7 条断界面失败态（`role="alert"`），因为业务
  * 拒绝捕不到 `.catch()`。
@@ -174,7 +175,7 @@ describe('票 06 第 6 条：翻转只写这一个字段', () => {
 })
 
 describe('票 06 第 7 条：写回被拒绝时界面显示失败', () => {
-  it('Host 业务拒绝（陈旧 revision）后该行出现 role="alert"，且开关不保持在新值', async () => {
+  it('Host 业务拒绝（陈旧 revision）后该页出现 role="alert"，且开关不保持在新值', async () => {
     const { host, tab, writes } = await allowed({ manualPrune: true })
     open.push({ host, tab })
     const container = await tab.render()
