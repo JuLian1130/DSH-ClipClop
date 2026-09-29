@@ -3,11 +3,11 @@
  * 插件写法由 profile 的 `cordis.patch.yml` 装载。
  *
  * 本插件当前交付 01（基座）、02（落盘通路与投影消费）、03（激活点②：按步数节流批量推进）、05（激活
- * 点①：溢出救援）与 06（激活点④：手动命令入口与主界面开关）。装载后的动作是四件：为承载类型注册消息
+ * 点①：溢出救援）与 06（激活点④：手动命令入口与可用性开关）。装载后的动作是四件：为承载类型注册消息
  * 投影，在 `agent/pre-step` 上按**会话级步数**（日志里的 `step/start` 条数，不是载荷 `step`——后者每
  * turn 从 1 重数）的 `M` 的整数倍推进一次裁剪边界，在 `agent/request-error` 上对
- * `CONTEXT_WINDOW_EXCEEDED` 做一次溢出救援，以及注册 ④ 的插件自有命令。主界面开关是 ④ 的另一半，
- * 在浏览器半（`src/client/`）——它只控制这个命令的可用性，不参与 ①/②。
+ * `CONTEXT_WINDOW_EXCEEDED` 做一次溢出救援，以及注册 ④ 的插件自有命令。开关（设置 → 内置插件的页签）
+ * 是 ④ 的另一半，在浏览器半（`src/client/`）——它只控制这个命令的可用性，不参与 ①/②。
  *
  * 注册投影有一条不可避免的代价，记在这里以免被当成缺陷：投影命中就推进 `contentGeneration`
  * （与投影返回什么无关），而承载类型是宿主自己也在写的类型，所以**宿主每产生一条该类型事件**，下一步
@@ -43,7 +43,7 @@ export const name = 'dsh-reasoning-pruner'
 export const MANUAL_COMMAND_NAME = 'prune-reasoning'
 
 /** 开关关闭时命令的拒绝文案：入口已被用户关掉，所以命令拒绝执行（一个事件都不落）。 */
-const MANUAL_DISABLED = 'Manual reasoning pruning is turned off by the main-interface switch.'
+const MANUAL_DISABLED = 'Manual reasoning pruning is turned off by the reasoning-pruning settings switch.'
 
 /** 没有任何历史步骤通过裁剪资格时命令的答复（与「开关关闭」不同：这是正常结局）。 */
 const MANUAL_NOTHING = 'No historical step qualified for reasoning pruning.'

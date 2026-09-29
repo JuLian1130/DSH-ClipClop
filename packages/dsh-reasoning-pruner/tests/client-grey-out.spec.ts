@@ -16,8 +16,8 @@
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { fireEvent, waitFor } from '@testing-library/react'
 import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
-import { catalogOf, mountClientRow, projectionOf } from './support/client-runtime.ts'
-import type { ClientRowHarness } from './support/client-runtime.ts'
+import { catalogOf, mountClientTab, projectionOf } from './support/client-runtime.ts'
+import type { ClientTabHarness } from './support/client-runtime.ts'
 import { bootSettingsHost, cleanupHosts, recordingWire, rowsWithPiAiRoutes } from './support/settings-host.ts'
 import type { RecordedWrite, SettingsHost } from './support/settings-host.ts'
 
@@ -28,12 +28,12 @@ const OTHER_ROUTE = 'fixture-anthropic'
 /** 记录派发出去的写操作。 */
 const writes: RecordedWrite[] = []
 
-const open: { host: SettingsHost, row: ClientRowHarness }[] = []
+const open: { host: SettingsHost, tab: ClientTabHarness }[] = []
 
 afterEach(async () => {
   writes.splice(0)
   for (const entry of open.splice(0)) {
-    await entry.row.dispose()
+    await entry.tab.dispose()
     await entry.host.dispose()
   }
 })
@@ -54,14 +54,14 @@ async function assemble(current: { provider: string, model: string }, deployed?:
     }),
   })
   const directory = host.providers()
-  const row = await mountClientRow({
+  const tab = await mountClientTab({
     settings: recordingWire(host.wire, writes),
     providers: directory,
     catalog: catalogOf(deployed ?? current, directory.map(entry => entry.provider)),
     projection: projectionOf(current),
   })
-  open.push({ host, row })
-  return { host, row, directory }
+  open.push({ host, tab })
+  return { host, tab, directory }
 }
 
 /** 当前路由在真目录里的条目。 */
@@ -78,16 +78,16 @@ describe('票 06 第 9 条：判不准的路由被置灰', () => {
       const directory = host.providers()
       const deepseek = entryOf(directory, 'deepseek-official')
       expect(deepseek.settingsNs).toBe('llm-deepseek')
-      const row = await mountClientRow({
+      const tab = await mountClientTab({
         settings: host.wire,
         providers: directory,
         catalog: catalogOf({ provider: deepseek.provider, model: 'model-1' }, [deepseek.provider]),
         projection: projectionOf({ provider: deepseek.provider, model: 'model-1' }),
       })
       try {
-        expect(row.injected().hooks.disabled.getSnapshot()).toBe(true)
+        expect(tab.injected().hooks.disabled.getSnapshot()).toBe(true)
       } finally {
-        await row.dispose()
+        await tab.dispose()
       }
     } finally {
       await host.dispose()
@@ -96,13 +96,13 @@ describe('票 06 第 9 条：判不准的路由被置灰', () => {
 
   it('② 命名空间是 llm-pi-ai 且 profile 带显式 api 时，按那个值判', async () => {
     const prunable = await assemble({ provider: PRUNABLE_ROUTE, model: 'm1' })
-    expect(prunable.row.injected().hooks.disabled.getSnapshot()).toBe(false)
+    expect(prunable.tab.injected().hooks.disabled.getSnapshot()).toBe(false)
     const other = await assemble({ provider: OTHER_ROUTE, model: 'm1' })
-    expect(other.row.injected().hooks.disabled.getSnapshot()).toBe(true)
+    expect(other.tab.injected().hooks.disabled.getSnapshot()).toBe(true)
   })
 
   it('③ 命名空间是 llm-pi-ai 但 profile 没有 api 键时置灰（判不准，保守闸门）', async () => {
-    const { host, row, directory } = await assemble({ provider: PRUNABLE_ROUTE, model: 'm1' })
+    const { host, tab, directory } = await assemble({ provider: PRUNABLE_ROUTE, model: 'm1' })
     // 从真目录里取一条 **catalog 自带**的路由（`declared !== true`），把它的 profile 写进 settings——只写
     // 一个 `displayName`，不写 `api`。这就是「协议来源是 catalog 而不是 profile」的那种路由。
     const catalogRoute = directory.find(entry => entry.settingsNs === 'llm-pi-ai' && entry.declared !== true)
@@ -112,11 +112,11 @@ describe('票 06 第 9 条：判不准的路由被置灰', () => {
       [{ op: 'set', path: ['providers', catalogRoute!.provider, 'displayName'], value: 'Catalog route' }],
       undefined,
     )
-    row.push('settings/document-updated')
-    await waitFor(() => { expect(row.injected().hooks.enabled.getSnapshot()).toBe(true) })
+    tab.push('settings/document-updated')
+    await waitFor(() => { expect(tab.injected().hooks.enabled.getSnapshot()).toBe(true) })
 
     const switched = await assemble({ provider: catalogRoute!.provider, model: 'model-1' })
-    expect(switched.row.injected().hooks.disabled.getSnapshot()).toBe(true)
+    expect(switched.tab.injected().hooks.disabled.getSnapshot()).toBe(true)
   })
 
   it('正例：会话中途换过路由后读到的是新路由，不是 catalog 的部署默认', async () => {
@@ -125,11 +125,11 @@ describe('票 06 第 9 条：判不准的路由被置灰', () => {
     const deepseek = entryOf(probe.providers(), 'deepseek-official')
     await probe.dispose()
 
-    const { row } = await assemble(
+    const { tab } = await assemble(
       { provider: PRUNABLE_ROUTE, model: 'm1' },
       { provider: deepseek.provider, model: 'model-1' },
     )
-    expect(row.injected().hooks.disabled.getSnapshot()).toBe(false)
+    expect(tab.injected().hooks.disabled.getSnapshot()).toBe(false)
   })
 })
 
@@ -139,21 +139,21 @@ describe('票 06 第 10 条：置灰时不派发写入', () => {
     try {
       const directory = host.providers()
       const deepseek = entryOf(directory, 'deepseek-official')
-      const row = await mountClientRow({
+      const tab = await mountClientTab({
         settings: recordingWire(host.wire, writes),
         providers: directory,
         catalog: catalogOf({ provider: deepseek.provider, model: 'model-1' }, [deepseek.provider]),
         projection: projectionOf({ provider: deepseek.provider, model: 'model-1' }),
       })
       try {
-        const container = await row.render()
-        expect(row.injected().hooks.disabled.getSnapshot()).toBe(true)
+        const container = await tab.render()
+        expect(tab.injected().hooks.disabled.getSnapshot()).toBe(true)
         // 真的点一次：控件被灰时用户点不动；「只灰样式、但仍可写」的实现会在这里把写派发出去。
         await fireEvent.click(container.querySelector('[role="switch"]')!)
         await Promise.resolve()
         expect(writes).toHaveLength(0)
       } finally {
-        await row.dispose()
+        await tab.dispose()
       }
     } finally {
       await host.dispose()

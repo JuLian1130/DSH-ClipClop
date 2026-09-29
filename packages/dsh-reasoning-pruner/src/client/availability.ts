@@ -9,9 +9,9 @@
  *    `next`、缺 `next` 时回退 catalog 的 `default`，正是「这条会话实际在用哪条路由」。**不得**改用
  *    `remote.session.modelCatalog()` 的 `default`——那是部署默认，会话中途换过路由时仍指向旧默认。
  *
- * `sessionId` 的来源：`settings.general.item` 是 root 槽位、注册期拿不到会话 id，所以取
+ * `sessionId` 的来源：`settings.plugins.tab` 是 root 槽位、注册期拿不到会话 id，所以取
  * `ctx.uiSession.adapter.current` 快照的 `.key`（即 main view 那一条）。`.key === undefined`（确实没有
- * 选中会话）按判不准置灰——这条规则只覆盖「无选中会话」，不是「root 行取不到会话」的兜底。
+ * 选中会话）按判不准置灰——这条规则只覆盖「无选中会话」，不是「root 页签取不到会话」的兜底。
  *
  * 置灰的三个分支：命名空间是 `llm-deepseek`（Messages 传输，无裁剪资格）⇒ 置灰；命名空间是 `llm-pi-ai`
  * 且 profile 有**显式** `api` ⇒ 按那个值判；命名空间是 `llm-pi-ai` 但 profile 没有 `api` 键 ⇒ 置灰。

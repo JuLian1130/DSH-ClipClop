@@ -34,7 +34,7 @@ import type { ComposedProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
-import type { ReasoningPrunerRowInjected } from '../../src/client/row.tsx'
+import type { ReasoningPrunerTabInjected } from '../../src/client/tab.tsx'
 import type { SettingsWire, WireReply } from './settings-host.ts'
 
 const nodeRequire = createRequire(import.meta.url)
@@ -138,20 +138,52 @@ function observable<T>(read: () => T): { getSnapshot: () => T, subscribe: () => 
   return { getSnapshot: read, subscribe: () => () => {} }
 }
 
-/** 一条 slot 注册条目（观察面只用它的 `options.id` 与 `inject`）。 */
+/**
+ * 客户端 locale 的替身：够本插件用（`register` + `bind`），同时它就是渲染机要的 LocaleFace。字典按命名空间
+ * 记账、`bind` 在调用时读当前语言，所以「页签名随语言切换」这条判据能在这个夹具上成立。
+ * @returns 服务面、渲染面，以及切换当前语言的动作。
+ */
+function fixtureLocale(): {
+  service: Record<string, unknown>
+  face: { getSnapshot: () => { revision: number }, subscribe: () => () => void, bind: (ns: string) => (key: string) => string }
+  setActive: (next: 'zh' | 'en') => void
+} {
+  const dictionaries = new Map<string, Record<'zh' | 'en', Record<string, string>>>()
+  let active: 'zh' | 'en' = 'en'
+  const bind = (ns: string) => (key: string) => {
+    const dicts = dictionaries.get(ns)
+    return dicts?.[active][key] ?? dicts?.en[key] ?? key
+  }
+  const face = { getSnapshot: () => ({ revision: 0 }), subscribe: () => () => {}, bind }
+  return {
+    face,
+    service: {
+      ...face,
+      register: (ns: string, dicts: Record<'zh' | 'en', Record<string, string>>) => {
+        dictionaries.set(ns, dicts)
+        return () => { dictionaries.delete(ns) }
+      },
+    },
+    setActive: (next) => { active = next },
+  }
+}
+
+/** 一条 slot 注册条目（观察面只用它的 `options.id` / `options.label` 与 `inject`）。 */
 export interface SlotEntryLike {
-  readonly options: { readonly id?: string }
+  readonly options: { readonly id?: string, readonly label?: string | (() => string) }
   readonly inject?: ((...args: never[]) => unknown) | undefined
 }
 
-/** 装好的一行。 */
-export interface ClientRowHarness {
+/** 装好的一页。 */
+export interface ClientTabHarness {
   readonly ctx: Context
   /** 该 slot 当前的注册条目。 */
   entries(): readonly SlotEntryLike[]
   /** 注册面注入的业务面。 */
-  injected(): ReasoningPrunerRowInjected
-  /** 渲染这一行并返回容器。 */
+  injected(): ReasoningPrunerTabInjected
+  /** 切到另一种界面语言（页签名的观察面用）。 */
+  setLocaleActive(next: 'zh' | 'en'): void
+  /** 渲染这一页并返回容器。 */
   render(): Promise<HTMLElement>
   /** 模拟 Host 推来的失效通知（真 wire 上 `settings/document-updated` 就是这么来的）。 */
   push(event: string): void
@@ -159,17 +191,17 @@ export interface ClientRowHarness {
 }
 
 /**
- * 在 jsdom 里装出「本插件的一行 + 它 inject 的全部客户端服务」。
+ * 在 jsdom 里装出「本插件的一页 + 它 inject 的全部客户端服务」。
  * @param options - 服务面的输入：settings 桥、真 provider 目录、catalog 形状、当前会话的耐久投影。
  * @returns 该装配的能力对象。
  */
-export async function mountClientRow(options: {
+export async function mountClientTab(options: {
   readonly settings: SettingsWire
   readonly providers: readonly LlmConfigurableProvider[]
   readonly catalog: ModelCatalog
   readonly projection?: ModelSelectionProjection | undefined
   readonly sessionId?: string | undefined
-}): Promise<ClientRowHarness> {
+}): Promise<ClientTabHarness> {
   const load = loadClientModules()
   const renderer = clientPlugin(load, '@deepseek-ai/dsh-client-ui-renderer')
   const uiSettings = clientPlugin(load, '@deepseek-ai/dsh-client-ui-settings')
@@ -204,6 +236,7 @@ export async function mountClientRow(options: {
   }
   // `remote.$on` 记下订阅者，夹具用例可以模拟一次 Host 推送（真 wire 上文档变更就是推过来的）。
   const pushes = new Map<string, Set<() => void>>()
+  const locale = fixtureLocale()
   const services: Record<string, unknown> = {
     sessions: {
       list: observable(() => listState),
@@ -229,19 +262,21 @@ export async function mountClientRow(options: {
     'remote.settings': options.settings,
     'remote.llm': llmRemote,
     'remote.session': sessionRemote,
-    locale: { register: () => () => {}, bind: () => (key: string) => key },
+    locale: locale.service,
     commandUi: { register: () => () => {} },
   }
   for (const [name, value] of Object.entries(services)) ctx.reflect.provide(name, value)
 
   for (const plugin of [renderer, uiSettings, uiSession, modelSelection]) await mount(ctx, plugin)
+  // 渲染机的 `t` 座位由 locale 面backing：夹具在首次渲染前装上它（真装配里也是启动期装好）。
+  ctx.slots.installLocale(locale.face)
 
-  // 通用设置里那一段的持有者：声明并渲染 `settings.general.item` 这个 additive list seat。
+  // 内置插件那一节：声明并渲染 `settings.plugins.tab` 这个 additive list seat。
   await ctx.slots.register({
     name: 'root',
-    children: { 'settings.general.item': { kind: 'list', scope: 'root' } },
-  }, (props: ComposedProps<'root', string, 'settings.general.item', undefined, object>) =>
-    React.createElement('div', { 'data-fixture': 'settings' }, props.renderSlot('settings.general.item', {})))
+    children: { 'settings.plugins.tab': { kind: 'list', scope: 'root' } },
+  }, (props: ComposedProps<'root', string, 'settings.plugins.tab', undefined, object>) =>
+    React.createElement('div', { 'data-fixture': 'settings-plugins' }, props.renderSlot('settings.plugins.tab', {})))
 
   await mount(ctx, pruner)
   // 注册包在 `whileServed` 里，所以它要等 settings 镜像真的 serve 了本插件的命名空间才出现——观察面因此
@@ -251,12 +286,13 @@ export async function mountClientRow(options: {
   let view: { container: HTMLElement, unmount: () => void } | undefined
   return {
     ctx,
-    entries: () => ctx.slots.entries('settings.general.item') as readonly SlotEntryLike[],
+    entries: () => ctx.slots.entries('settings.plugins.tab') as readonly SlotEntryLike[],
     injected: () => {
-      const entry = ctx.slots.entries('settings.general.item')[0] as SlotEntryLike | undefined
-      if (entry?.inject === undefined) throw new Error('fixture: the pruner row is not registered')
-      return entry.inject() as ReasoningPrunerRowInjected
+      const entry = ctx.slots.entries('settings.plugins.tab')[0] as SlotEntryLike | undefined
+      if (entry?.inject === undefined) throw new Error('fixture: the pruner tab is not registered')
+      return entry.inject() as ReasoningPrunerTabInjected
     },
+    setLocaleActive: (next) => { locale.setActive(next) },
     push: (event: string) => {
       for (const handler of [...pushes.get(event) ?? []]) handler()
     },

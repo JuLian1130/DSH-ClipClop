@@ -2,15 +2,15 @@
 
 `dsh-reasoning-pruner` 让**历史步骤的推理块**不再进入此后的模型请求，从而省下每次请求都要重付的那部分输入。记录本身不变，只有模型可见的历史被改变（术语见根目录 [`CONTEXT.md`](../../CONTEXT.md) 的「推理裁剪」）。
 
-当前目录包含配置 schema、裁剪算子、投影与可装载的插件入口（`name`、`inject`、`Config`、`apply`）。三处挂点都已落地：**② 按会话级步数节流批量推进**（`agent/pre-step`）、**① 溢出救援**（`agent/request-error`，只搭车、不自持重试）、**④ 手动命令与主界面开关**（`/prune-reasoning` + 浏览器半）。本包**不修改 DeepSeek Harness 源码**。实施票据 `01`–`08` 全部完成（`.scratch/historical-reasoning-pruning/issues/`）。
+当前目录包含配置 schema、裁剪算子、投影与可装载的插件入口（`name`、`inject`、`Config`、`apply`）。三处挂点都已落地：**② 按会话级步数节流批量推进**（`agent/pre-step`）、**① 溢出救援**（`agent/request-error`，只搭车、不自持重试）、**④ 手动命令与可用性开关**（`/prune-reasoning` + 浏览器半）。本包**不修改 DeepSeek Harness 源码**。实施票据 `01`–`08` 全部完成（`.scratch/historical-reasoning-pruning/issues/`）。
 
 ## 适用前提（先看这一节，否则装了也不会有任何效果）
 
 裁剪资格**逐步骤**判定：只有 replay 信封声明由 `api === 'openai-completions'` 传输产生的 assistant 消息才可裁（`src/replay.ts` 的 `isReasoningPrunable`）。没有 `replayState`、信封是 `deepseek-messages`、或 `api` 是别的传输，一律原样保留。
 
-因此**本插件只在 pi-ai 路由上有效，且该路由要显式声明 `api: openai-completions`**。写自有适配器、不发 replay 信封的路由（例如本机 web profile 里的 `dsh-cline-pass`）不产生可裁消息——此时插件装载成功、也不报错，但**一个块都不会被裁**，设置里的开关还会显示为置灰（`The current model route cannot benefit from reasoning pruning.`）。
+因此**本插件只在 pi-ai 路由上有效，且该路由要显式声明 `api: openai-completions`**。写自有适配器、不发 replay 信封的路由（例如本机 web profile 里的 `dsh-cline-pass`）不产生可裁消息——此时插件装载成功、也不报错，但**一个块都不会被裁**，「设置 → 内置插件」里的开关还会显示为置灰（英文界面下是 `The current model route cannot benefit from reasoning pruning.`）。
 
-不满足前提时，下面是**装载成功的读数**（都能对上，但裁剪量恒为 0）：命令 `/prune-reasoning` 存在、设置行存在、会话日志里没有带 `clipclop` 键的事件。
+不满足前提时，下面是**装载成功的读数**（都能对上，但裁剪量恒为 0）：命令 `/prune-reasoning` 存在、「设置 → 内置插件」里的页签存在、会话日志里没有带 `clipclop` 键的事件。
 
 ## 环境
 
@@ -129,10 +129,10 @@ zstdcat ~/.dsh/sessions/*/*/session.v4.jsonl.zstd | grep -c clipclop
 
 **2. 只停用 ④ 手动入口**——两种等价写法，改的是同一个字段：
 
-- 主界面 **设置 → 通用** 里的 **Prune historical reasoning** 开关（浏览器半写回 `manualPrune`）；
+- **设置 → 内置插件 → 推理裁剪（Reasoning pruning）** 页签里的开关（浏览器半写回 `manualPrune`）；
 - 或 profile patch 里 `manualPrune: false`。
 
-关掉后命令**拒绝执行**（`Manual reasoning pruning is turned off by the main-interface switch.`），一个事件都不落；**① 与 ② 不受影响**，仍在跑。
+关掉后命令**拒绝执行**（`Manual reasoning pruning is turned off by the reasoning-pruning settings switch.`），一个事件都不落；**① 与 ② 不受影响**，仍在跑。
 
 **3. 彻底移除**：
 
