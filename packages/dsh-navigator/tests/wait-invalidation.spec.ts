@@ -24,7 +24,6 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import * as navigator from '../src/index.ts'
 import {
   REVIEW_DOMAIN_NAME,
   REVIEW_TABLE,
@@ -139,12 +138,11 @@ const WINDOWS: readonly Window[] = [
   },
 ]
 
-/** 本插件写入的 user 消息（`source.kind === 'plugin'` 且插件名是本插件），按 `deriveMessages()` 顺序。 */
+/** 本插件写入的 user 消息（`source.kind === 'dsh-navigator'`），按 `deriveMessages()` 顺序。 */
 function pluginUserMessages(fixture: NavigatorLoop) {
   return fixture.agent.session.deriveMessages().filter(
     message => message.role === 'user'
-      && message.source.kind === 'plugin'
-      && message.source.plugin === navigator.name,
+      && message.source.kind === 'dsh-navigator',
   )
 }
 
@@ -152,8 +150,7 @@ function pluginUserMessages(fixture: NavigatorLoop) {
 function pluginUserMessageEvents(fixture: NavigatorLoop): number {
   return fixture.events().filter(
     event => event.type === 'user/message'
-      && event.data.source.kind === 'plugin'
-      && event.data.source.plugin === navigator.name,
+      && event.data.source.kind === 'dsh-navigator',
   ).length
 }
 

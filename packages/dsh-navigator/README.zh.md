@@ -6,7 +6,7 @@
 
 ## 安装
 
-本包**未发布到 npm registry**（`package.json` 的 `private: true`）。按仓库的下限基准（`AGENTS.md`「DSH 版本基准」）只按不低于 `0.2.0-rc.2` 的 DSH 开发与验证，更高版本乐观地先视为兼容；`package.json` 里声明的 `peerDependencies` 范围是历史依赖选择，不代表行为上限，也不用于拒绝在更新版本上继续工作。Node 取 DSH 检出根 `package.json` 的 `engines`（`^22.19.0 || >=24.0.0`），pnpm 取本仓根 `packageManager` 的 `10.12.1`。第一版只承诺「本地 profile 内的 `node_modules` 链接 + 预构建产物」这条路，依据与登记状态见设计文档的[发行与联调](../../docs/dsh-navigator-design.md#发行与联调)与[验证状态](../../docs/dsh-navigator-design.md#验证状态)。
+本包**未发布到 npm registry**（`package.json` 的 `private: true`）。按仓库的下限基准（`AGENTS.md`「DSH 版本基准」）只按不低于 `0.2.0-rc.2` 的 DSH 开发与验证，更高版本乐观地先视为兼容；`package.json` 的 `peerDependencies` 与开发依赖现在也按该下限声明（`^0.2.0-rc.2`，2026-10-01 随本仓 workspace 统一）。Node 取 DSH 检出根 `package.json` 的 `engines`（`^22.19.0 || >=24.0.0`），pnpm 取本仓根 `packageManager` 的 `10.12.1`。第一版只承诺「本地 profile 内的 `node_modules` 链接 + 预构建产物」这条路，依据与登记状态见设计文档的[发行与联调](../../docs/dsh-navigator-design.md#发行与联调)与[验证状态](../../docs/dsh-navigator-design.md#验证状态)。
 
 装进 profile 的必须是**预先构建好的产物**：安装不执行构建脚本（Desktop 的口径是 `--ignore-scripts`、不发 `prepare`），所以先在仓库里构建、再打包，装完不再构建。
 

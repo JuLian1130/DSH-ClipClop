@@ -14,8 +14,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Message } from '@deepseek-ai/dsh-llm'
-import * as navigator from '../src/index.ts'
+import type { Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import { SCRIPTED_TOOL_NAME, userMessage, type ScriptedResponse } from './support/scripted-adapter.ts'
 import { disposeTrackedContexts } from './support/mounted-contexts.ts'
 import {
@@ -80,13 +79,12 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
 /** 一条消息是不是本插件的干预消息（`form: 'notice'`）。 */
 function isNavigatorNotice(message: Message): boolean {
   return message.role === 'user'
-    && message.source.kind === 'plugin'
-    && message.source.plugin === navigator.name
+    && message.source.kind === 'dsh-navigator'
     && message.source.form === 'notice'
 }
 
 /** 一条消息的正文文本。 */
-function textOf(message: Message | undefined): string {
+function textOf(message: RequestMessage | undefined): string {
   return message?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('') ?? ''
 }
 
@@ -109,8 +107,7 @@ function reviewTriggerSteps(fixture: NavigatorLoop): readonly number[] {
   return fixture.main.calls().flatMap((call) => {
     const last = call.request.messages.at(-1)
     const carriesInstruction = last?.role === 'user'
-      && last.source.kind === 'plugin'
-      && last.source.plugin === navigator.name
+      && last?.source?.kind === 'dsh-navigator'
       && last.source.form === undefined
     return carriesInstruction ? [call.steps] : []
   })
@@ -133,12 +130,12 @@ function pendingSuggestions(fixture: NavigatorLoop): readonly Message[] {
 function deliveredMessage(fixture: NavigatorLoop, messageId: string): Message | undefined {
   return fixture.main.calls()
     .flatMap(call => call.request.messages)
-    .find(message => message.id === messageId)
+    .find((message): message is Message => message.id === messageId)
 }
 
 /** 一条干预消息的 `summary`；不是 notice 时为空串。 */
 function summaryOf(message: Message | undefined): string {
-  return message?.source.kind === 'plugin' && message.source.form === 'notice'
+  return message?.source.kind === 'dsh-navigator' && message.source.form === 'notice'
     ? message.source.summary
     : ''
 }
@@ -277,7 +274,7 @@ describe('并行模式下复核不阻塞主会话', () => {
       call => call.request.messages.some(message => message.id === arriving.id),
     )
     expect(carrying).toBeDefined()
-    const delivered = carrying?.request.messages.find(message => message.id === suggestion.id)
+    const delivered = carrying?.request.messages.find((message): message is Message => message.id === suggestion.id)
     expect(delivered).toBeDefined()
     expect(textOf(delivered)).toContain(EXPIRY_PHRASE)
   })

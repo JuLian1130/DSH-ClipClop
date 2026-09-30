@@ -1,10 +1,14 @@
 /**
- * 真实入口腿（票据 12）用的脚本化模型服务：一个 OpenAI 兼容的 chat-completions SSE 端点，按到达顺序
+ * 真实入口腿（票据 12）用的脚本化模型服务：一个 Anthropic Messages 协议的 SSE 端点，按到达顺序
  * 决定每条请求答复什么，并留下全部请求体供用例读「模型可见上下文」。
  *
+ * 帧序按 `0.2.0-rc.2` 的 `dsh-llm-deepseek` 适配器（`translate.ts`）逐条对：`message_start` →
+ * `content_block_start` / `content_block_delta` / `content_block_stop` → `message_delta`（带
+ * `stop_reason`）→ `message_stop`。该版本只走 Messages 协议，`protocol` 已不可配置
+ * （`config.ts` 见到它直接抛错）。
+ *
  * 不引 `@deepseek-ai/dsh-llm-mock-server`：那个设施的 `successText` 对每条 success 请求是同一个值，
- * 而这三条腿要按请求区分「主会话答复」「带工具调用的多步答复」与「复核结论」。SSE 帧形状取自该发布包
- * 的 success / tool_call 两个分支（`data: {...}\n\n`、终止块带 usage、`data: [DONE]`）。
+ * 而这三条腿要按请求区分「主会话答复」「带工具调用的多步答复」与「复核结论」。
  *
  * @module
  */
@@ -68,29 +72,39 @@ export function startMockModel(
       const write = (payload: unknown): void => {
         res.write(`data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`)
       }
-      const usage = { prompt_tokens: 7, completion_tokens: 5 }
-      write({ choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] })
+      // rc.2 的 DeepSeek 适配器只走 Anthropic Messages 协议：按 message_start /
+      // content_block_* / message_delta / message_stop 的帧序回，chat-completions 的
+      // choices/delta 帧它一个都不认（实测整条 turn 在第 1 步就收尾）。
+      write({
+        type: 'message_start',
+        message: {
+          id: `msg-${attempt}`,
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          usage: { input_tokens: 7, output_tokens: 0 },
+        },
+      })
       if (reply.toolCall === undefined) {
-        write({ choices: [{ index: 0, delta: { content: reply.text ?? '' }, finish_reason: null }] })
-        write({ choices: [{ index: 0, delta: { content: '' }, finish_reason: 'stop' }], usage })
+        write({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+        write({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: reply.text ?? '' } })
+        write({ type: 'content_block_stop', index: 0 })
+        write({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } })
       } else {
         write({
-          choices: [{
-            index: 0,
-            delta: {
-              tool_calls: [{
-                index: 0,
-                id: `call-${attempt}`,
-                type: 'function',
-                function: { name: reply.toolCall.name, arguments: reply.toolCall.arguments },
-              }],
-            },
-            finish_reason: null,
-          }],
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: `call-${attempt}`, name: reply.toolCall.name, input: {} },
         })
-        write({ choices: [{ index: 0, delta: { content: '' }, finish_reason: 'tool_calls' }], usage })
+        write({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: reply.toolCall.arguments },
+        })
+        write({ type: 'content_block_stop', index: 0 })
+        write({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 5 } })
       }
-      write('[DONE]')
+      write({ type: 'message_stop' })
       res.end()
     })
   })

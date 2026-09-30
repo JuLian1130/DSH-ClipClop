@@ -75,12 +75,12 @@ function composeStopNotice(triggerStep: number, reason: string): string {
 /**
  * 构造一条干预消息。`summary` 由同一处正文截断得出，不接受调用方另给一份。
  * @param text - 正文，以触发步骤开头。
- * @returns `source.kind === 'plugin'` 的 user 消息。
+ * @returns `source.kind === 'dsh-navigator'` 的 user 消息。
  */
 export function noticeMessage(text: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: name, form: 'notice', summary: boundContextSummary(text) },
+    source: { kind: 'dsh-navigator', form: 'notice', summary: boundContextSummary(text) },
   })
 }
 

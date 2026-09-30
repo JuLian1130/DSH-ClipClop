@@ -207,7 +207,7 @@ export interface NavigatorLoopOptions {
  */
 export function isReviewRequest(request: GenerateOptions): boolean {
   const last = request.messages.at(-1)
-  return last?.source.kind === 'plugin' && last.source.plugin === navigator.name
+  return last?.source?.kind === 'dsh-navigator'
 }
 
 /**

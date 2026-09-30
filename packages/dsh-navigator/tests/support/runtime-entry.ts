@@ -41,7 +41,7 @@ export function assertBuiltEntry(): void {
   }
 }
 
-/** 发布态 `@deepseek-ai/dsh` 的 bin；版本与本包 devDependencies 里钉住的 `0.1.6-alpha.1` 同源。 */
+/** 发布态 `@deepseek-ai/dsh` 的 bin；版本与本包 devDependencies 里钉住的 `0.2.0-rc.2` 同源。 */
 export function dshBinPath(): string {
   const manifest = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
   return join(dirname(manifest), 'lib/bin.js')

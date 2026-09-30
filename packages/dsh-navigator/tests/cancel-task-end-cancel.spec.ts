@@ -27,9 +27,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import * as navigator from '../src/index.ts'
 import {
   REVIEW_DOMAIN_NAME,
   REVIEW_TABLE,
@@ -90,10 +89,9 @@ const ADJUST_VERDICT: ScriptedResponse = {
 const UNPARSEABLE: ScriptedResponse = { text: '这段不是 JSON' }
 
 /** 一条消息是不是本插件的干预消息（`form: 'notice'`）；复核指令不带 `form`，不算。 */
-function isNavigatorNotice(message: Message): boolean {
+function isNavigatorNotice(message: RequestMessage): boolean {
   return message.role === 'user'
-    && message.source.kind === 'plugin'
-    && message.source.plugin === navigator.name
+    && message.source?.kind === 'dsh-navigator'
     && message.source.form === 'notice'
 }
 
@@ -115,8 +113,7 @@ function waitForFirstSuggestion(fixture: NavigatorLoop): Promise<Message> {
 function carriesReviewInstruction(call: ObservedCall): boolean {
   const last = call.request.messages.at(-1)
   return last?.role === 'user'
-    && last.source.kind === 'plugin'
-    && last.source.plugin === navigator.name
+    && last?.source?.kind === 'dsh-navigator'
     && last.source.form === undefined
 }
 

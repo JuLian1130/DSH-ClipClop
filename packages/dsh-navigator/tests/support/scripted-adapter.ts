@@ -149,11 +149,11 @@ export function userMessage(text: string): UserMessage {
  * 定义 notice 的构造口径；本票落地时若两处合流，把它收成「只给正文、内部算 summary」的单一入口。
  * @param text - 正文。
  * @param summary - 折叠行上的一行说明。
- * @returns `source.kind === 'plugin'` 的用户消息。
+ * @returns `source.kind === 'dsh-navigator'` 的用户消息。
  */
 export function navigatorMessage(text: string, summary: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin: 'dsh-navigator', form: 'notice', summary },
+    source: { kind: 'dsh-navigator', form: 'notice', summary },
   })
 }

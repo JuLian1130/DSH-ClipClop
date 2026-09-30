@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import { FIXED_INSTRUCTIONS } from '../src/review-prompt.ts'
 import { readReviewRecords } from '../src/index.ts'
 import {
@@ -67,7 +67,7 @@ function reviewSteps(fixture: NavigatorLoop): number[] {
 }
 
 /** 一条消息的正文文本。 */
-function textOf(message: Message | undefined): string {
+function textOf(message: RequestMessage | undefined): string {
   return message?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('') ?? ''
 }
 

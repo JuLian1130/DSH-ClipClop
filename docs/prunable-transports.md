@@ -19,7 +19,7 @@
 
 | 项 | 值 | 依据 |
 | --- | --- | --- |
-| DSH 基准 | `>= 0.2.0-rc.2`（下限，更高版本乐观地先视为兼容） | `AGENTS.md`「DSH 版本基准」；`package.json:44-45` 声明 `^0.2.0-rc.1`，`packages/dsh-reasoning-pruner/node_modules` 下实装的 `dsh-llm` / `dsh-llm-pi-ai` / `dsh-llm-deepseek` / `dsh-session` 均报 `0.2.0-rc.1`——这是本包开发依赖未随用户环境更新，属既有依赖选择，不改变本文的调研结论 |
+| DSH 基准 | `>= 0.2.0-rc.2`（下限，更高版本乐观地先视为兼容） | `AGENTS.md`「DSH 版本基准」；本包 `package.json:44-45` 声明 `^0.2.0-rc.1`（下限范围内的既有选择，未随本次升级改动），而两个包实装的 `dsh-llm` / `dsh-llm-pi-ai` / `dsh-llm-deepseek` / `dsh-session` **都报 `0.2.0-rc.2`**——2026-10-01 `dsh-navigator` 升到下限版本后两个包同处一个 workspace，根 lockfile 只有 `0.2.0-rc.2` 一条版本线 |
 | pi-ai | `0.85.1` | 本仓 `node_modules/.pnpm/@earendil-works+pi-ai@0.85.1*` |
 
 一处需要留意，本文已核对：

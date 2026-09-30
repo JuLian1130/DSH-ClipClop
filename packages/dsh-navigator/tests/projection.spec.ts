@@ -45,7 +45,7 @@ describe('navigatorSteps 投影', () => {
     await agent.whenIdle()
     expect(state()).toEqual({ steps: 1, anchorStep: 0 })
 
-    // 插件注入的建议是 source.kind === 'plugin'：不移动锚点；随后的真实用户消息把它推到当时的步数。
+    // 插件注入的建议是 source.kind === 'dsh-navigator'：不移动锚点；随后的真实用户消息把它推到当时的步数。
     agent.inject(navigatorMessage('建议：来自第 1 步', '第 1 步 建议'))
     agent.steer(userMessage('换方向'))
     await agent.whenIdle()

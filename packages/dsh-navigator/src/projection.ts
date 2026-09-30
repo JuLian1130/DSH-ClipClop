@@ -46,7 +46,7 @@ export const navigatorStepsProjection: ProjectionDefinition<'navigatorSteps'> = 
       case 'assistant/message':
         return event.data.interrupted === true ? state : { ...state, steps: state.steps + 1 }
       case 'user/message':
-        // 只有真实用户消息移动锚点。插件自己注入的建议与说明是 `kind: 'plugin'`，
+        // 只有真实用户消息移动锚点。插件自己注入的建议与说明是 `kind: 'dsh-navigator'`，
         // 工具结果是 `kind: 'tool'`，都不算（规格的「什么算真实用户消息」）。
         return event.data.source.kind === 'user' ? { ...state, anchorStep: state.steps } : state
       default:

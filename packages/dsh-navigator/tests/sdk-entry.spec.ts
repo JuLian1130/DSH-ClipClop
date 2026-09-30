@@ -41,7 +41,7 @@ function noticedMessages(events: readonly SessionEvent[]): { id: string, text: s
   return events
     .filter((event): event is SessionEvent<'user/message'> => event.type === 'user/message')
     .map(event => event.data)
-    .filter(message => message.source.kind === 'plugin' && message.source.form === 'notice')
+    .filter(message => message.source.kind === 'dsh-navigator' && message.source.form === 'notice')
     .map(message => ({
       id: message.id,
       text: message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join(''),

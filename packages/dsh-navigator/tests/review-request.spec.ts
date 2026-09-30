@@ -6,7 +6,8 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { ReasoningEffortId, type Message } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import { timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -32,7 +33,7 @@ const OK = { text: '收到' }
 const STEP = { toolCall: SCRIPTED_TOOL_NAME }
 
 /** 一条消息的正文文本。 */
-function textOf(message: Message | undefined): string {
+function textOf(message: RequestMessage | undefined): string {
   return message?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('') ?? ''
 }
 
@@ -46,7 +47,7 @@ function assistantIds(agent: Agent): string[] {
 /** 主会话当前对模型可见的本插件写入的消息。 */
 function pluginMessages(agent: Agent): Message[] {
   return agent.session.deriveMessages().filter(
-    message => message.source.kind === 'plugin' && message.source.plugin === navigator.name,
+    message => message.source.kind === 'dsh-navigator',
   )
 }
 
@@ -72,7 +73,9 @@ describe('复核请求的内容与形态', () => {
     // 先取快照再断请求：适配器收到复核请求时，在同一次同步回调里读一次主会话
     // `deriveMessages()`，当场拷下 id 列表。禁止在请求录完之后再抓一次快照来比对——
     // 同源同时刻的两次读取必然逐条对齐，那样的断言任何实现都会绿。
-    const frozenAtRequest: string[] = []
+    // 末尾那条复核指令是「只用于一次请求的 user 输入」、没有会话 id，所以这份读数允许 `undefined`，
+    // 与随后读 `request.messages` 得到的序列逐条对等。
+    const frozenAtRequest: (string | undefined)[] = []
     const fixture = await mountNavigatorLoop({
       config: { triggerEverySteps: 2 },
       script: [STEP, STEP, { text: CONTINUE_VERDICT }, STEP],

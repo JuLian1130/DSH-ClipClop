@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 /**
- * Web 入口腿（票据 12 第 1 条）：那条复核建议在**对话视图**里出现、展开后含正文，且**会话重载后仍在**。
+ * Web 入口腿（票据 12 第 1 条）：那条复核建议在**真实客户端视图**里作为一行出现、行上带得出正文，
+ * 且**会话重载后仍在**。
  *
  * 两半都要真：notice 由真实复核路径产生——真实 CLI profile + 本包构建产物跑一轮，落下的会话事件直接
- * 就是客户端要装配的那份历史；对话视图由自建的最小客户端夹具渲染（见
+ * 就是客户端要装配的那份历史；视图由自建的最小客户端夹具渲染（见
  * `tests/support/client-conversation.ts`，为什么不能直接用官方的客户端测试设施也写在那里）。
+ *
+ * **呈现面按 0.2.0-rc.2 走**：该版本把普通 context 行从对话视图的可见行里摘掉
+ * （`chat-visibility.ts` 只留带工具增删的那些），注入内容的呈现面改由 Trajectory 承担，所以本腿读
+ * Trajectory 的行；票据原文那句「对话视图里的折叠行」在最新版本上已不是真实呈现。
  *
  * **重载**按票面写死：重新装配后再断，不用同一份 test-owned doubles 重挂——每条断言都重新读一次持久化
  * 条目（两个各自独立的数组）、各自 `bootConversation`（新模块表、新 context、新会话绑定与事件源）。
@@ -15,7 +20,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { fireEvent } from '@testing-library/react'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 import { bootConversation, type ClientSessionEntry } from './support/client-conversation.ts'
@@ -37,34 +41,27 @@ const scope = createLegScope()
 afterEach(() => scope.dispose())
 
 /**
- * 从持久化条目装配一次并断三件事：折叠行在、展开后含正文、展开前不显示正文。
+ * 从持久化条目装配一次 Trajectory 视图，并断那条 notice 作为 context 行出现、行里有它的正文。
  *
- * `[data-disclosure-row="true"]` 不止这一行（系统提示词、推理行等都是折叠行），所以按「这一行里那条
- * notice 的 `data-context-summary` 就是它的正文」定位；定位不到就硬失败，不取任意一行。
+ * rc.2 把普通 context 行从对话视图的可见行里摘掉了（`chat-visibility.ts` 只留带工具增删的那些），注入
+ * 内容的呈现面改由 Trajectory 承担，所以本腿读的是 Trajectory 的行 `tr[data-kind="context"]`——它把
+ * 正文直接渲染在行内，所以按「这一行的文本含本条 notice 正文」定位，不取任意一行。
  * @param sessionId - 会话 id。
  * @param entries - 这次装配读入的历史条目。
  */
 async function assertNoticeRow(sessionId: string, entries: readonly ClientSessionEntry[]): Promise<void> {
   const booted = await bootConversation(sessionId, entries)
   try {
-    const row = [...booted.container.querySelectorAll<HTMLElement>('[data-disclosure-row="true"]')]
-      .find(candidate => candidate.querySelector('[data-context-summary]')?.textContent === NOTICE_TEXT)
-    if (row === undefined) throw new Error(`web leg: no notice row carrying summary ${JSON.stringify(NOTICE_TEXT)}`)
-    expect(row.getAttribute('aria-expanded')).toBe('false')
-    expect(booted.container.querySelector('[data-context-injection-body]')).toBeNull()
-
-    fireEvent.click(row)
-    expect(row.getAttribute('aria-expanded')).toBe('true')
-    const body = booted.container.querySelector('[data-context-injection-body]')
-    expect(body?.getAttribute('data-context-form')).toBe('notice')
-    expect(body?.textContent).toContain(NOTICE_TEXT)
+    const row = [...booted.container.querySelectorAll<HTMLElement>('tr[data-kind="context"]')]
+      .find(candidate => (candidate.textContent ?? '').includes(NOTICE_TEXT))
+    if (row === undefined) throw new Error(`web leg: no context row carrying ${JSON.stringify(NOTICE_TEXT)}`)
   } finally {
     await booted.dispose()
   }
 }
 
 describe('Web 入口腿', () => {
-  it('对话视图里出现那条折叠行、展开后含正文，且会话重载后仍在', async () => {
+  it('真实客户端视图里出现那条 context 行、行上带得出正文，且会话重载后仍在', async () => {
     assertBuiltEntry()
     const { home, noticesFile, patch, model } = await mountNavigatorLeg('dsh-navigator-web-', REVIEW, scope)
 
@@ -90,7 +87,7 @@ describe('Web 入口腿', () => {
     const entries = run.events.map((event): ClientSessionEntry => ({ type: 'event', event }))
     const noticeEntry = entries.find((entry): entry is ClientSessionEntry & { event: SessionEvent<'user/message'> } =>
       entry.event.type === 'user/message'
-      && entry.event.data.source.kind === 'plugin'
+      && entry.event.data.source.kind === 'dsh-navigator'
       && entry.event.data.source.form === 'notice')
     if (noticeEntry === undefined) throw new Error('web leg: the run events carry no plugin notice message')
     // 两侧都要求非空 id：线上一旦不发 id，`undefined === undefined` 会让这条等式恒真，身份核对就白断了。

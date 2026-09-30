@@ -241,7 +241,7 @@ interface ReasoningPrunePayload {
 
 - **用户运行环境**（`~/.dsh/profiles/node_modules/@deepseek-ai/`，即 GUI 真正加载插件的层）：**230 个 `dsh-*` 包全部是 `0.2.0-rc.2`**（该目录共 252 个包，其余是 vendored 的 cordis / cosmokit / schemastery 等，按各自版本走）。
 - **DSH 源码 checkout**：`0.2.0-rc.2`。
-- **本仓的开发依赖**：`packages/dsh-navigator/package.json` 仍写 `0.1.6-alpha.1`（30 处）。**这是已有插件的依赖选择，不影响本插件，也不构成拒绝或阻塞的理由**——按「已有插件是否针对最新版本开发不在本规则范围内」，不为它做升级；**新插件的依赖声明直接用不低于下限的版本（当前即 `0.2.0-rc.2`）**。
+- **本仓的开发依赖**：两个包现在都在同一个 workspace 里：`packages/dsh-navigator/package.json` 的声明与实装都是 `0.2.0-rc.2`（2026-10-01 升级；该升级是仓库卫生需要，不是本规则要求的），本包 `package.json` 仍声明 `^0.2.0-rc.1` 这一下限范围内的既有选择；根 lockfile 里没有任何 `0.1.x` 的 `dsh-*` 条目，`cordis` 统一到单实例 `4.0.4`（`pnpm peers check` 无未满足项）。**新插件的依赖声明直接用不低于下限的版本（当前即 `0.2.0-rc.2`）**。
 
 **已作废的判断**：本文件此前曾按「实装 `0.1.6-alpha.1`」记下三处「真实差异」——`TurnEndReasonMap` 无 `forked` 变体、格式世代为 v3（连带已知类型 57 条、表面类型 4 条、`assertReleasedV4Relationships` 不生效）、浏览器侧服务名为 `ctx.settingsScope` 而非 `ctx.configForms`。**这三条全部只是「开发仓依赖落后」的产物，不是设计约束**，按最新版本基准一律作废：
 

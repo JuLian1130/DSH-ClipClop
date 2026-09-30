@@ -29,9 +29,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import * as navigator from '../src/index.ts'
 import {
   REVIEW_DOMAIN_NAME,
   REVIEW_TABLE,
@@ -100,10 +99,9 @@ const PLUGIN_DISPOSED: ReviewCancelReason = 'plugin-disposed'
 const REVIEW_FAILED = '复核失败'
 
 /** 一条消息是不是本插件的干预消息（`form: 'notice'`）；复核指令不带 `form`，不算。 */
-function isNavigatorNotice(message: Message): boolean {
+function isNavigatorNotice(message: RequestMessage): boolean {
   return message.role === 'user'
-    && message.source.kind === 'plugin'
-    && message.source.plugin === navigator.name
+    && message.source?.kind === 'dsh-navigator'
     && message.source.form === 'notice'
 }
 
@@ -113,7 +111,7 @@ function pendingSuggestions(fixture: NavigatorLoop): readonly Message[] {
 }
 
 /** 一条消息的正文文本。 */
-function textOf(message: Message | undefined): string {
+function textOf(message: RequestMessage | undefined): string {
   return message?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('') ?? ''
 }
 
@@ -126,8 +124,7 @@ function textOf(message: Message | undefined): string {
 function stopNotice(fixture: NavigatorLoop): Message | undefined {
   const event = fixture.events().find(
     candidate => candidate.type === 'user/message'
-      && candidate.data.source.kind === 'plugin'
-      && candidate.data.source.plugin === navigator.name,
+      && candidate.data.source.kind === 'dsh-navigator',
   )
   const id = event?.type === 'user/message' ? event.data.id : undefined
   return fixture.agent.session.deriveMessages().find(message => message.id === id)
@@ -144,8 +141,7 @@ function hasHookAbort(fixture: NavigatorLoop): boolean {
 function carriesReviewInstruction(call: ObservedCall): boolean {
   const last = call.request.messages.at(-1)
   return last?.role === 'user'
-    && last.source.kind === 'plugin'
-    && last.source.plugin === navigator.name
+    && last?.source?.kind === 'dsh-navigator'
     && last.source.form === undefined
 }
 
@@ -397,7 +393,7 @@ describe('④ 停止流程已经开始（说明已落盘）时释放', () => {
       if (release !== undefined || subject.id !== sessionId) return
       if (event.type !== 'user/message') return
       const message = event.data
-      if (message.source.kind !== 'plugin' || message.source.plugin !== navigator.name) return
+      if (message.source.kind !== 'dsh-navigator') return
       turnEndSeenAtRelease = fixture.events().some(candidate => candidate.type === 'turn/end')
       noticeId = message.id
       noticeText = textOf(message)

@@ -11,8 +11,8 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { boundContextSummary, type Message } from '@deepseek-ai/dsh-llm'
-import * as navigator from '../src/index.ts'
+import { boundContextSummary } from '@deepseek-ai/dsh-llm'
+import type { Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import { SCRIPTED_TOOL_NAME, type ScriptedResponse } from './support/scripted-adapter.ts'
 import { disposeTrackedContexts } from './support/mounted-contexts.ts'
 import {
@@ -47,22 +47,21 @@ const STOP_VERDICT: ScriptedResponse = {
 }
 
 /** 一条消息的正文文本。 */
-function textOf(message: Message | undefined): string {
+function textOf(message: RequestMessage | undefined): string {
   return message?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('') ?? ''
 }
 
 /** 会话里本插件的干预消息（`form: 'notice'`），按落盘顺序。 */
 function notices(fixture: NavigatorLoop): Message[] {
   return fixture.agent.session.deriveMessages().filter(
-    message => message.source.kind === 'plugin'
-      && message.source.plugin === navigator.name
+    message => message.source.kind === 'dsh-navigator'
       && message.source.form === 'notice',
   )
 }
 
 /** 一条干预消息的 `summary`（字段合规的两条判据都断在真实追加路径上取回的这条消息上）。 */
 function summaryOf(message: Message | undefined): string {
-  return message?.source.kind === 'plugin' && message.source.form === 'notice' ? message.source.summary : ''
+  return message?.source.kind === 'dsh-navigator' && message.source.form === 'notice' ? message.source.summary : ''
 }
 
 /** 主会话自己的请求（复核自己那次请求不计入）。 */
@@ -94,7 +93,7 @@ describe('等待模式 adjust：注入复核建议', () => {
 
     // 第 3 条：字段合规只看消息字段，且断在真实追加路径上取回的那条消息上。
     expect(notice?.role).toBe('user')
-    expect(notice?.source.kind).toBe('plugin')
+    expect(notice?.source.kind).toBe('dsh-navigator')
     expect(summaryOf(notice).length).toBeGreaterThan(0)
     // 触发步骤写在正文开头；`summary` 是正文按上限的截断，因此也以触发步骤开头。
     expect(body.startsWith(`第 ${triggerStep} 步`)).toBe(true)
@@ -135,7 +134,7 @@ describe('等待模式 stop：追加停止说明并停止当前 turn', () => {
 
     // 第 3、4 条：字段合规、正文以触发步骤开头、正文写明本次结论的 reason。
     expect(notice?.role).toBe('user')
-    expect(notice?.source.kind).toBe('plugin')
+    expect(notice?.source.kind).toBe('dsh-navigator')
     expect(body.startsWith(`第 ${triggerStep} 步`)).toBe(true)
     expect(body).toContain(STOP_REASON)
     expect(summaryOf(notice)).toBe(boundContextSummary(body))

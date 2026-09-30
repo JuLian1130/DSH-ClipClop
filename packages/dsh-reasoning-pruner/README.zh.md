@@ -32,11 +32,8 @@
 **正常不必手动构建**：本包声明了 `prepare`，`pnpm install` 会自动跑一次 `build`。clone 之后：
 
 ```bash
-pnpm --pm-on-fail=ignore install                                    # 根 install，自动构建
-pnpm --pm-on-fail=ignore --dir packages/dsh-reasoning-pruner install --ignore-workspace
+pnpm --pm-on-fail=ignore install                                    # 根 install，两个包一起装、一起构建
 ```
-
-第二行是**本包特有**的：`pnpm-workspace.yaml` 把它排除在 workspace 之外（`dsh-navigator` 与它的 DSH 基准版本线不同，同装会互相污染），所以根 `install` 不覆盖它，要它自己跑一次 `prepare`。
 
 需要单独重建时：
 

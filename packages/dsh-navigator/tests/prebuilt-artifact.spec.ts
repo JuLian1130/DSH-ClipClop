@@ -137,9 +137,12 @@ beforeAll(() => {
  *
  * 基点前置①：挂载前硬断 `ctx.loader.internal` 可用——拿不到时基点参数被忽略、裸名落到本仓 store，
  * 从工作副本装载同样 ACTIVE（假绿；机制见设计文档 `预构建产物的装载与启动审计`）。
+ *
+ * 记账：`0.2.0-rc.2` 的 loader 把条目 **import 失败**记进 `ctx.logger`（错误）后继续结算，不再把整棵树
+ * 打成 rejection，所以控制条目的判据要从日志读，不能等 `mountRootInclude` 抛错。
  * @param configName - 临时 profile 下的配置文件名。
  * @param insert - 本组合的条目表，顺序即 activation 顺序。
- * @returns 根 context 与本次审计收集到的 warning。
+ * @returns 根 context、本次审计收集到的 warning 与本次挂载期间的错误日志。
  */
 async function mountComposition(configName: string, insert: ProfileEntry[]) {
   const configPath = join(profileDir, configName)
@@ -147,11 +150,19 @@ async function mountComposition(configName: string, insert: ProfileEntry[]) {
   const ctx = trackContext(new Context())
   await ctx.plugin(Loader)
   expect(ctx.loader.internal).toBeDefined()
+  const errors: string[] = []
+  ctx.logger.exporter({
+    levels: { default: 2 },
+    export: (message) => {
+      if (message.type !== 'error') return
+      errors.push(message.args.map(argument => argument instanceof Error ? argument.message : String(argument)).join(' '))
+    },
+  })
   const warnings: string[] = []
   await mountRootInclude(ctx, configPath, [{ insert }], bareBase)
   await ctx.get('loader')?.await()
   await auditStartupEntries(ctx, BIN_NAME, line => warnings.push(line))
-  return { ctx, warnings }
+  return { ctx, warnings, errors }
 }
 
 /**
@@ -195,10 +206,15 @@ describe('真实 Loader 组合从安装副本装载', () => {
   })
 
   it('对照条目 import 失败，证明裸名解析基点落在临时 profile', async () => {
-    // 断的是**原因**（Node 自己的找不到包），不是 app-boot/loader 的包装文案：同组合减去该条目就能
-    // 激活（见上一条用例），所以这里必须是一次 import 失败，而不是任何带该包名的报错。
-    await expect(mountComposition('control.yml', [fullStubs, controlEntry, navigatorEntry]))
-      .rejects.toThrow("Cannot find package '@deepseek-ai/dsh-agent-loop'")
+    // 断的是**原因**（Node 自己的找不到包 + 从哪个基点找），不是 app-boot/loader 的包装文案：同组合
+    // 减去该条目就能激活（见上一条用例），所以这里必须是一次 import 失败，而不是任何带该包名的报错。
+    // `0.2.0-rc.2` 的 loader 不再把 import 失败抛出树外，改记进 logger，判据因此从日志读。
+    const { ctx, errors } = await mountComposition('control.yml', [fullStubs, controlEntry, navigatorEntry])
+
+    expect(errors.join('\n')).toContain("Cannot find package '@deepseek-ai/dsh-agent-loop'")
+    // 基点确实是临时 profile 的 hoist 目录，而不是本仓 store——后者存在该包，对照条目就会 import 成功。
+    expect(errors.join('\n')).toContain(fileURLToPath(bareBase))
+    expect(loaderEntry(ctx, 'dsh-navigator').fiber?.state).toBe(ACTIVE)
   })
 
   it('只缺 sessionProjections 时启动不失败，审计以 warning 报出本条目停在 PENDING', async () => {

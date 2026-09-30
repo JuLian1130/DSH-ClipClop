@@ -453,7 +453,7 @@ async function settleParallelReview(attempt: ParallelAttempt): Promise<void> {
  */
 function annotatePendingSuggestions(agent: Agent): void {
   for (const message of [...agent.inbox.nextStep, ...agent.inbox.nextTurn]) {
-    if (message.source.kind !== 'plugin' || message.source.plugin !== name) continue
+    if (message.source.kind !== 'dsh-navigator') continue
     const text = textOf(message.content)
     if (text.includes(EXPIRY_NOTE)) continue
     const rewritten = noticeMessage(withExpiryNote(text))
@@ -658,7 +658,7 @@ async function reviewOnce(attempt: ReviewAttempt): Promise<ReviewSettlement | nu
 
   const instruction = createUserMessage({
     content: [{ type: 'text', text: composeReviewInstruction(config.prompt) }],
-    source: { kind: 'plugin', plugin: name },
+    source: { kind: 'dsh-navigator' },
   })
 
   const timeout = deadline(upstream, config.reviewTimeoutMs, REVIEW_TIMEOUT_CODE)

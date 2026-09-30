@@ -4,12 +4,16 @@
 
 ## 构建与测试
 
+两个包（`packages/dsh-navigator`、`packages/dsh-reasoning-pruner`）同处一个 pnpm workspace，根上一条命令覆盖两边：
+
 ```bash
-pnpm install
-pnpm --dir packages/dsh-reasoning-pruner run build      # host 半 + 浏览器半
-pnpm --dir packages/dsh-reasoning-pruner run typecheck
-pnpm --dir packages/dsh-reasoning-pruner run test
+pnpm install            # 装依赖并各跑一次 prepare（= build）
+pnpm run build
+pnpm run typecheck
+pnpm -r run test
 ```
+
+单包重跑把 `pnpm run build` 换成 `pnpm --dir packages/<包名> run build` 即可。
 
 `dsh-reasoning-pruner` 有**两个面**，产物都在 `lib/` 下：
 

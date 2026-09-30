@@ -32,9 +32,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { Message, RequestMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import * as navigator from '../src/index.ts'
 import {
   REVIEW_DOMAIN_NAME,
   REVIEW_TABLE,
@@ -139,19 +138,17 @@ async function rawRecord(
   return document.record
 }
 
-/** 一条消息是不是本插件写入的 user 消息（`source.kind === 'plugin'` 且插件名是本插件）。 */
-function isPluginUserMessage(message: Message): boolean {
+/** 一条消息是不是本插件写入的 user 消息（`source.kind === 'dsh-navigator'`）。 */
+function isPluginUserMessage(message: RequestMessage): boolean {
   return message.role === 'user'
-    && message.source.kind === 'plugin'
-    && message.source.plugin === navigator.name
+    && message.source?.kind === 'dsh-navigator'
 }
 
 /** 一条请求是不是本插件的复核请求：末条是本插件注入的复核指令（带 `form` 的是干预消息，不是指令）。 */
 function carriesReviewInstruction(call: ObservedCall): boolean {
   const last = call.request.messages.at(-1)
   return last?.role === 'user'
-    && last.source.kind === 'plugin'
-    && last.source.plugin === navigator.name
+    && last?.source?.kind === 'dsh-navigator'
     && last.source.form === undefined
 }
 
@@ -194,15 +191,14 @@ async function expectFailedRecord(root: string, sessionId: SessionId, triggerSte
 function stopNotice(fixture: NavigatorLoop): Message | undefined {
   const event = fixture.events().find(
     candidate => candidate.type === 'user/message'
-      && candidate.data.source.kind === 'plugin'
-      && candidate.data.source.plugin === navigator.name,
+      && candidate.data.source.kind === 'dsh-navigator',
   )
   const id = event?.type === 'user/message' ? event.data.id : undefined
   return fixture.agent.session.deriveMessages().find(message => message.id === id)
 }
 
 /** 一条消息的正文文本。 */
-function textOf(message: Message | undefined): string {
+function textOf(message: RequestMessage | undefined): string {
   return message?.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('') ?? ''
 }
 

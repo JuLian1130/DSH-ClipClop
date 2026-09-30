@@ -22,7 +22,7 @@ export function apply(ctx, config) {
   ctx.on('session/event', (session, event) => {
     if (event.type !== 'user/message') return
     const message = event.data
-    if (message?.source?.kind !== 'plugin' || message.source.form !== 'notice') return
+    if (message?.source?.kind !== 'dsh-navigator' || message.source.form !== 'notice') return
     const text = (message.content ?? []).map(block => block.text ?? '').join('')
     appendFileSync(config.file, `${JSON.stringify({ id: message.id, text })}\n`)
   })

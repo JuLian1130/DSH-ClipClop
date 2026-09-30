@@ -2,7 +2,7 @@
 
 状态：需求已收敛并实现——14 张票全部 `done`，门禁 `vitest run` 20 文件 126 用例全绿。G1、G2、G5–G15 已实测通过，**仅 G3（Desktop 本地联调）待验证**，详见「验证状态」。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
 
-本文件引用的 DSH 扩展点均按当时的实装版本 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实。按 `AGENTS.md` 的下限基准（`>= 0.2.0-rc.2`，不设上限），这些结论在更高版本上**乐观地先视为兼容**；升级后按「验证状态」的核对清单重跑，发现差异改文档、不加版本判断分支。
+本文件引用的 DSH 扩展点原先按 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实；**2026-10-01 起基准提到 `0.2.0-rc.2`**（与 `AGENTS.md` 的下限基准 `>= 0.2.0-rc.2` 对齐），差异与迁移面见「验证状态」的第一节。按该下限基准，更高版本乐观地先视为兼容；升级后按下表的核对清单重跑，发现差异改文档、不加版本判断分支。
 
 本文件记录**取舍与机制**：为什么这样定、调用哪个钩子、消息字段形状、源码依据与实测证据。**需求陈述在[实施规格](../.scratch/dsh-navigator/spec.md)里**；规格只写操作性定义、可观察的验收标准和交付约束，不复制本文件的机制描述。判断一句话该放哪边：**删掉它之后，有没有验收标准变得无法判断**——会，属于规格；不会，属于本文件。两者冲突时：需求以规格为准，取舍与机制以本文件为准。
 
@@ -149,6 +149,21 @@ DSH 没有 JSON mode、response schema、`tool_choice` 或解析助手（`packag
 - **Cordis 的同一性**：夹具的桩与本仓库的 `@deepseek-ai/cordis` 同源；从临时 profile 按包名装载时两侧必须解析到同一份 cordis，否则桩 `provide` 的服务对插件不可见。**产物的运行时 import 有四个**：`@deepseek-ai/dsh-llm`（`createUserMessage`）、`@deepseek-ai/dsh-timeout`（`deadline`）、`zod`、`schemastery`；其余服务包仍是 type-only。`@deepseek-ai/dsh-llm` 是 peer、`@deepseek-ai/dsh-timeout` 是普通依赖，临时 profile 都要能解析到，否则「条目 ACTIVE」这条断言直接红——所以它仍是环境前提，只是前提比 02b 时多。
 
 ## 验证状态
+
+### DSH 基准升级到 `0.2.0-rc.2`（2026-10-01）
+
+本包原按 `0.1.6-alpha.1` 开发，落后的版本线在同一个 pnpm workspace 里牵制另一包（pruner）的依赖解析，所以本次把声明与实装一起升到下限版本。**这不是 `AGENTS.md` 的要求**（既有插件是否针对最新版本开发不在该规则范围内），是仓库卫生。
+
+实装版本：DSH `0.2.0-rc.2`、cordis `4.0.4`。门禁结果：`tsc -p tsconfig.typecheck.json` 干净、`tsc -p tsconfig.json` 通过、`vitest run` **20 文件 126 用例全绿**。（同机对照：升级前 `121 passed | 5 skipped`，其中 `prebuilt-artifact` 的 `pnpm pack` 因本机 corepack 钉的 pnpm `10.12.1` 与实装 `11.7.0` 不符而失败，与版本无关。）
+
+改动分四类，都是机制层的事实，不是版本判断分支：
+
+- **消息来源 kind**：v4 会话格式**拒绝**通用 `plugin` 包装（`session-format-v3-to-v4/src/message-sources.ts` 的 `assertV4MessageSources` 要求「生产者自有的 source kind」），`MessageSourceMap` 里也没有了 `plugin` 成员。本插件在 `src/types.ts` 登记 `'dsh-navigator'` 来源类型（`ContextFormed` 提供 `form` 那半边），`noticeMessage` / `annotatePendingSuggestions` / 复核指令三处改用自家 kind，随之删掉「再比一次插件名」的冗余判断。旧会话记录由 v3→v4 迁移照常读取（它按 `role` 与 `form` 保留元数据），本插件不读这个 kind 判历史（投影只**正向**认 `kind === 'user'`）。
+- **请求消息的类型**：`ctx.llm.stream()` 的 `messages` 现在是 `RequestMessage = Message | RequestUserInput`，其中 `RequestUserInput` 没有 `id` 与 `source`；夹具与断言按这个形状收窄。
+- **mock 模型的协议**：`dsh-llm-deepseek` 在该版本只走 Anthropic Messages，`protocol` 已不可配置（`config.ts` 见到它直接抛错），三入口腿的 mock 因此按 `message_start` / `content_block_*` / `message_delta` / `message_stop` 的帧序回。
+- **装载与呈现**：`cordis-plugin-loader@1.0.5` 把条目 import 失败记进 `ctx.logger` 后**继续结算**，不再把整棵树打成 rejection——`prebuilt-artifact` 的对照条目判据改从日志读（判据内容不变：Node 的找不到包 + 从临时 profile 的基点找）。客户端的对话视图在该版本**不再显示普通 context 行**（`ui-chat` 的 `chat-visibility.ts` 只留带工具增删的那些），注入内容的呈现面改由 Trajectory 承担——Web 腿因此改读 Trajectory 的行（`tr[data-kind="context"]`，行的 `aria-label` 带正文），夹具相应改挂 `ui-trajectory` bundle、开 `configForms.developerTools`。票面原文那句「对话视图里的折叠行」在最新版本上已不是真实呈现面。
+
+更早的一次性探针是在 `0.1.6-alpha.1` 上做的（下表如实标注），它们观测的是机制是否成立，不随版本号作废；升级后已按下表重跑可重跑的项。
 
 一次性探针在 DSH `0.1.6-alpha.1` 上实测通过的项目、仍未验证的项目，以及只有源码核对的项目。
 
