@@ -19,12 +19,11 @@
 
 | 项 | 值 | 依据 |
 | --- | --- | --- |
-| DSH 基准 | `0.2.0-rc.1` | `package.json:44-45` 的 `^0.2.0-rc.1`；`packages/dsh-reasoning-pruner/node_modules` 下实装的 `dsh-llm` / `dsh-llm-pi-ai` / `dsh-llm-deepseek` / `dsh-session` 均报 `0.2.0-rc.1` |
+| DSH 基准 | `>= 0.2.0-rc.2`（下限，更高版本乐观地先视为兼容） | `AGENTS.md`「DSH 版本基准」；`package.json:44-45` 声明 `^0.2.0-rc.1`，`packages/dsh-reasoning-pruner/node_modules` 下实装的 `dsh-llm` / `dsh-llm-pi-ai` / `dsh-llm-deepseek` / `dsh-session` 均报 `0.2.0-rc.1`——这是本包开发依赖未随用户环境更新，属既有依赖选择，不改变本文的调研结论 |
 | pi-ai | `0.85.1` | 本仓 `node_modules/.pnpm/@earendil-works+pi-ai@0.85.1*` |
 
-两处需要留意，本文均已核对：
+一处需要留意，本文已核对：
 
-- **`README.zh.md:19,22` 仍写 `0.1.7-rc.2`，已过期**。基准在提交 `fc24821`（「DSH 基准升到 0.2.0-rc.1，版本声明改用 ^ 范围」）中已抬到 `0.2.0-rc.1`，README 未同步。
 - **本仓的 pi-ai 副本是未打补丁的**（本仓无 `patches/` 目录），而设计文档与源码依据引用的是 DSH 检出里**已打补丁**的副本。两者相差一行，例如历史组装时的过滤：DSH 检出 `dist/api/openai-completions.js:979`，本仓同文件 `:980`。**引用 pi-ai 行号时必须写明是哪一个副本**，否则会指错行。
 
 下文 pi-ai 行号统一以**本仓副本**为准，并在括号里给出差异说明。

@@ -2,7 +2,7 @@
 
 状态：需求已收敛并实现——14 张票全部 `done`，门禁 `vitest run` 20 文件 126 用例全绿。G1、G2、G5–G15 已实测通过，**仅 G3（Desktop 本地联调）待验证**，详见「验证状态」。术语以 [CONTEXT.md](../CONTEXT.md) 为准。
 
-本文件引用的 DSH 扩展点均按 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实。
+本文件引用的 DSH 扩展点均按当时的实装版本 `0.1.6-alpha.1`（本地检出 `dsh-v0.1.6-alpha.1-5-g0d1f50007f`）逐条核实。按 `AGENTS.md` 的下限基准（`>= 0.2.0-rc.2`，不设上限），这些结论在更高版本上**乐观地先视为兼容**；升级后按「验证状态」的核对清单重跑，发现差异改文档、不加版本判断分支。
 
 本文件记录**取舍与机制**：为什么这样定、调用哪个钩子、消息字段形状、源码依据与实测证据。**需求陈述在[实施规格](../.scratch/dsh-navigator/spec.md)里**；规格只写操作性定义、可观察的验收标准和交付约束，不复制本文件的机制描述。判断一句话该放哪边：**删掉它之后，有没有验收标准变得无法判断**——会，属于规格；不会，属于本文件。两者冲突时：需求以规格为准，取舍与机制以本文件为准。
 
@@ -10,7 +10,7 @@
 
 - 只开发插件，不修改 deepseek-harness 源码。需要 DSH 不具备的扩展点时，在插件激活阶段或首次取得主会话时直接报错，不静默降级。
   - **服务依赖全部交给原生 `inject`。** Cordis 在依赖就绪前不会激活插件，所以服务缺失时 `apply` 根本不会执行（`vendor/cordis/src/fiber.ts:611-623` 的 `_refresh()` 在任一注入服务缺失时把该插件置为 INACTIVE），「在 `apply` 里检查服务是否存在」是死代码。缺服务时的表现是「插件不激活」，由 DSH 启动审计报告（`packages/boot/app-boot/src/index.ts:779-784` 汇总缺哪个服务，`:801` 打印 `warning: N entries did not activate`；必需条目直接启动失败）。这不是静默降级——插件根本不会运行，只是报告者从插件换成了框架。
-  - **`apply` 里只检查 `inject` 表达不了的部分**：我们要调用的 API 形状（`ctx.llm.stream`、`ctx.sessions.get` 是否为函数），以及第一次拿到主会话时的会话级方法（`deriveMessages`、`requestHeader`）。不检查 `agent/pre-step` 事件是否存在——DSH 没有这种查询接口。对 agent loop 行为的依赖改为锁定版本：本版插件针对 `0.1.6-alpha.1`，换成别的版本时**行为不做保证**。不要写成「版本不符就复核不触发」——并不存在一条按版本号判断的机制，那种说法既没有代码支撑也无法验收。
+  - **`apply` 里只检查 `inject` 表达不了的部分**：我们要调用的 API 形状（`ctx.llm.stream`、`ctx.sessions.get` 是否为函数），以及第一次拿到主会话时的会话级方法（`deriveMessages`、`requestHeader`）。不检查 `agent/pre-step` 事件是否存在——DSH 没有这种查询接口。对 agent loop 行为的依赖按下限基准（`>= 0.2.0-rc.2`）处理：更高版本乐观地先视为兼容，不写版本判断分支。不要写成「版本不符就复核不触发」——并不存在一条按版本号判断的机制，那种说法既没有代码支撑也无法验收。
   - **「API 形状分两处检查」为什么一处用不上了也还留两处**：从 03 起 `ctx.sessions.get` 只服务**激活门禁**——复核取主会话改走 pre-step 载荷的 `agent.session`（下一条），插件里已经没有 `ctx.sessions.get` 的调用方。但「激活时它必须是函数」是规格明写的验收（`测试决策` ①：激活阶段报错并点出缺的是哪个）：删掉这条检查，`loading-config.spec.ts` 的「sessions.get 缺失时激活阶段报错」变红，所以它保留；变的只是它不再是取主会话的路径。
   - **复核取主会话走 pre-step 载荷的 `agent.session`**：快照（`session.deriveMessages()`）、路由（`session.requestHeader()?.config`）与结论应用都从这个会话取，不经 `ctx.sessions.get`。载荷里的 `agent` 由派发器注入（`packages/core/agent/src/dispatch.ts` 的 `agentEvents`：`fused` 把 `agent` 并进载荷，且展开在调用方字段之后，调用方盖不掉它）；DSH 自己的 pre-step 监听器同样从载荷取 `agent.session`（`packages/context/tmux-context/src/index.ts`、`packages/context/time-context/src/index.ts`、`packages/session/session-checkpoint-policy/src/index.ts` 等十来处）。因此插件既不需要 `inject` `agent`，也不需要自己按 id 去找会话。
   - **监听 `agent/pre-step` 不需要新增服务**：事件派发按作用域过滤，未打 scope 标记的监听器**全收**——`packages/core/scope/src/index.ts` 的 `scopeTarget` 在 `tag === undefined` 时直接返回 true。同类先例是 `packages/compaction/compaction-basic/src/index.ts`（它的 `inject` 不含 `agent`，照样 `ctx.on('agent/pre-step', …)`）。这条原先只有源码核对；03 的集成夹具把它变成运行时保证（见「验证状态」G12），所以插件的 `inject` 保持 `['llm', 'sessions', 'sessionProjections']` 不变。

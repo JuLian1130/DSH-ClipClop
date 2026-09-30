@@ -2,7 +2,7 @@
 
 状态：机制已逐条核实，**实现未开始**。耐久记录的承载类型经类型普查选定为 **`web/deepseek-search-llm-request`**（候选排序与排除清单见「待办与上游诉求」）；**闸门 A 已关闭**（票 08 实测：A1/A2/B1/B2/C1/C2 全通过、A2 的被计费输入下降，见 `.scratch/historical-reasoning-pruning/gate-a-record.md`；结论只在被实测的网关与 chat-completions 传输上成立）。四张闸门见[实施规格](../.scratch/historical-reasoning-pruning/spec.md)：A（端点接受度，实现前必须关闭）、B（缓存净收益）、C（回放与不变式）、D（任务质量不下降），后三张是实现后的判据。文中标注「待闸门背书」的默认值在闸门关闭前不得写死。
 
-本文件引用的 DSH 扩展点按**最新版本 `0.1.7-rc.2`** 逐条核实，路径为 DSH 仓内相对路径。**最新版本是新插件的唯一基准**：不为旧版本留兼容路径、版本判断分支或降级行为（`AGENTS.md` 的「DSH 版本基准」）。用户运行环境（`~/.dsh/profiles/`）与 DSH 源码 checkout 都是 `0.1.7-rc.2`；本仓的开发依赖另见下文说明。升级后按下文「验证状态」的核对清单重跑一遍——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
+本文件引用的 DSH 扩展点按**不低于 `0.2.0-rc.2` 的最新版本**逐条核实，路径为 DSH 仓内相对路径。基准是**下限**（`>= 0.2.0-rc.2`，不设上限）：不为旧版本留兼容路径、版本判断分支或降级行为，更高版本乐观地先视为兼容（`AGENTS.md` 的「DSH 版本基准」）。用户运行环境（`~/.dsh/profiles/`）与 DSH 源码 checkout 都是 `0.2.0-rc.2`；本仓的开发依赖另见下文说明。升级后按下文「验证状态」的核对清单重跑一遍——不存在一条按版本号判断的机制，那种写法既无代码支撑也无法验收。
 
 本文件记录**取舍与机制**：为什么这样定、挂哪个钩子、事件字段形状、源码依据与待实测项。**需求陈述与验收标准在[实施规格](../.scratch/historical-reasoning-pruning/spec.md)里**，规格只写操作性定义、可观察判据与交付约束，不复制本文件的机制描述。判断一句话该放哪边：**删掉它之后，有没有验收标准变得无法判断**——会，属于规格；不会，属于本文件。两者冲突时：需求以规格为准，取舍与机制以本文件为准。
 
@@ -208,7 +208,7 @@ interface ReasoningPrunePayload {
 
 ## 验证状态
 
-**已由源码核实**（本次，`0.1.7-rc.2`）：上文所有带 `path:line` 的机制断言；`compaction-image-offload` 的投影形状可直接照抄；`registerMessageProjection` 重复注册同类型会抛（`packages/core/session/src/index.ts:942-947`）。
+**已由源码核实**（撰写时按当时的实装版本逐条核过；按下限基准，结论在更高版本上乐观地先视为仍然有效）：上文所有带 `path:line` 的机制断言——行号是 DSH 源码 checkout 坐标，升级后按「基准」一节的核对清单重跑；`compaction-image-offload` 的投影形状可直接照抄；`registerMessageProjection` 重复注册同类型会抛（`packages/core/session/src/index.ts:942-947`）。
 
 **只有源码依据、需要运行时确认**（实现时按此顺序验，验不过就停下改设计）：
 
@@ -235,19 +235,19 @@ interface ReasoningPrunePayload {
 - **A2（被计费的输入真的下降）**：**已由票 08 实测**——DSH 侧两臂读 `assistant/message` 的 `usage` 三者之和，649 → 474（Δ = 175），同一命令连跑五次 Δ 全为正（151–190）；探针侧 A1↔B1 与 A2↔B2 的 `prompt_tokens` 各降 20。跑法与读数见 `.scratch/historical-reasoning-pruning/gate-a-record.md` §一 / §三。**不得外推**：结论只在该记录实测的那个网关上成立，且覆盖 chat-completions 传输——**不含** `llm-deepseek` 的 Messages 传输。
 - 附带记录本机实际路由的更省形态：`cline-pass` 的自有适配器只在推理非空时才写该字段（`~/.dsh/profiles/web/node_modules/dsh-cline-pass/lib/adapter.js:204-213` 的 `...(reasoning.length > 0 ? { reasoning_content: reasoning } : {})`），即裁剪后走的是**变体 C（字段整个省略）**，比 B 更干净。
 
-**基准：最新版本是唯一基准**
+**基准：最新版本是一个下限**
 
-设计文档的行号来自 DSH 源码 checkout，而该 checkout 的版本是 **`0.1.7-rc.2`**——**这就是最新版本，也是本插件的唯一基准**（`AGENTS.md` 的「DSH 版本基准」）。已核实三处环境，结论一致：
+设计文档的行号来自 DSH 源码 checkout，而该 checkout 的版本是 **`0.2.0-rc.2`**——**这是本插件的下限基准**（`AGENTS.md` 的「DSH 版本基准」），更高版本乐观地先视为兼容。已核实三处环境：
 
-- **用户运行环境**（`~/.dsh/profiles/node_modules/@deepseek-ai/`，即 GUI 真正加载插件的层）：**231 个 DSH 包全部是 `0.1.7-rc.2`**。
-- **DSH 源码 checkout**：`0.1.7-rc.2`。
-- **本仓的开发依赖**：`packages/dsh-navigator/package.json` 仍写 `0.1.6-alpha.1`（30 处）。**这是唯一的落后项，且不影响本插件**——按「已有插件是否针对最新版本开发不在本规则范围内」，不为它做升级；**新插件的依赖声明直接用 `0.1.7-rc.2`**，基准与运行环境因此一致。
+- **用户运行环境**（`~/.dsh/profiles/node_modules/@deepseek-ai/`，即 GUI 真正加载插件的层）：**230 个 `dsh-*` 包全部是 `0.2.0-rc.2`**（该目录共 252 个包，其余是 vendored 的 cordis / cosmokit / schemastery 等，按各自版本走）。
+- **DSH 源码 checkout**：`0.2.0-rc.2`。
+- **本仓的开发依赖**：`packages/dsh-navigator/package.json` 仍写 `0.1.6-alpha.1`（30 处）。**这是已有插件的依赖选择，不影响本插件，也不构成拒绝或阻塞的理由**——按「已有插件是否针对最新版本开发不在本规则范围内」，不为它做升级；**新插件的依赖声明直接用不低于下限的版本（当前即 `0.2.0-rc.2`）**。
 
 **已作废的判断**：本文件此前曾按「实装 `0.1.6-alpha.1`」记下三处「真实差异」——`TurnEndReasonMap` 无 `forked` 变体、格式世代为 v3（连带已知类型 57 条、表面类型 4 条、`assertReleasedV4Relationships` 不生效）、浏览器侧服务名为 `ctx.settingsScope` 而非 `ctx.configForms`。**这三条全部只是「开发仓依赖落后」的产物，不是设计约束**，按最新版本基准一律作废：
 
-- 逐条对过 `0.1.7-rc.2` 的产物：`TurnEndReasonMap` **有** `forked`；`SESSION_FORMAT_VERSION` 是 **4**（`KNOWN_SESSION_EVENT_TYPES` **59** 条、表面类型 **5** 条、`assertReleasedV4Relationships` 是常开读门——本文件「待办与上游诉求」里那条结论**在最新版本上成立**）；浏览器侧服务名是 **`ctx.configForms`**，守卫是 `whileServed([...])`（见「激活点 ④」）。
+- 逐条对过最新版产物（本次按 `0.2.0-rc.2` 复核）：`TurnEndReasonMap` **有** `forked`（`packages/core/session/src/types.ts:228`）；`SESSION_FORMAT_VERSION` 是 **4**（`:89`；`KNOWN_SESSION_EVENT_TYPES` **59** 条、表面类型 **5** 条、`assertReleasedV4Relationships` 是常开读门——`packages/session/session-persistence-jsonl/src/format.ts:468` 无条件调用，本文件「待办与上游诉求」里那条结论**在最新版本上成立**）；浏览器侧服务名是 **`ctx.configForms`**，守卫是 `whileServed([...])`（见「激活点 ④」）。
 - 唯一保留的产物级事实是**承载类型的可用性**：`web/deepseek-search-llm-request` 在最新版本的 `KNOWN_SESSION_EVENT_TYPES` 里、且**不在** `RELATIONSHIP_TYPES` 里——这是本设计成立的前提，两侧都已实测确认。
-- ⇒ 实现与票据一律按 `0.1.7-rc.2` 的**源码 `path:line`** 与**同版本产物**写，不需要任何版本判断分支。
+- ⇒ 实现与票据一律按**不低于下限的最新版本**（当前即 `0.2.0-rc.2`）的**源码 `path:line`** 与**同版本产物**写，不需要任何版本判断分支。
 
 **未验证、明确不断言**：
 

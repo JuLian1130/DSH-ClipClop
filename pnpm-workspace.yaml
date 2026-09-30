@@ -1,7 +1,8 @@
 packages:
   - packages/*
-  # dsh-reasoning-pruner 的 DSH 基准是 0.1.7-rc.2，而 dsh-navigator 仍按 0.1.6-alpha.1 开发。
-  # 两条版本线的 peer 范围（^0.1.6-alpha.1 会匹配 0.1.7 的预发布版）在同一个 pnpm workspace 里会互相
+  # dsh-reasoning-pruner 的 DSH 基准是 >= 0.2.0-rc.2，而 dsh-navigator 仍按 0.1.6-alpha.1 开发
+  # （已有插件的依赖选择，按 AGENTS.md 不构成新插件的基准，也不阻塞新工作）。
+  # 两条版本线的 peer 范围（^0.1.6-alpha.1 会匹配同一 0.1 段的预发布版）在同一个 pnpm workspace 里会互相
   # 污染：实测一次 `pnpm install` 就会把 navigator 闭包里的 dsh-session-persistence / dsh-brand /
   # dsh-typert-protocol / dsh-util-values / cosmokit / schemastery 提升到新版。因此**排除该包**，
   # 它在自己的目录里单独安装：`pnpm --dir packages/dsh-reasoning-pruner install --ignore-workspace`。

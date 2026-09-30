@@ -16,10 +16,10 @@
 
 | 项 | 取值 | 依据 |
 | --- | --- | --- |
-| DSH | `0.1.7-rc.2` | 本包唯一基准（`AGENTS.md`「DSH 版本基准」），`peerDependencies` 逐版本钉住 |
+| DSH | `>= 0.2.0-rc.2` | 下限基准（`AGENTS.md`「DSH 版本基准」）：不设上限，更高版本乐观地先视为兼容；`peerDependencies` 按不低于该下限的版本声明 |
 | Node | `^22.19.0 \|\| >=24.0.0` | DSH 检出根 `package.json` 的 `engines` |
 | pnpm | `10.12.1` | 本仓根 `package.json` 的 `packageManager` |
-| 宿主 peer | `cordis ~4.0.4`、`dsh-llm 0.1.7-rc.2`、`dsh-session 0.1.7-rc.2` | `peerDependencies`，由目标 profile 的 `node_modules` 提供 |
+| 宿主 peer | `cordis ~4.0.4`、`dsh-llm ^0.2.0-rc.1`、`dsh-session ^0.2.0-rc.1` | `package.json` 的 `peerDependencies`，由目标 profile 的 `node_modules` 提供；范围是下限声明 |
 
 本包**未发布到 npm registry**（`package.json` 的 `private: true`），只承诺「本地 profile 内的 `node_modules` 链接 + 预构建产物」这条路。
 
