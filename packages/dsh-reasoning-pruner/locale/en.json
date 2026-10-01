@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Reasoning Pruner",
-    "description": "Keep the reasoning blocks of completed steps out of later requests, saving the input that would otherwise be re-paid on every request. Records stay unchanged; only the model-visible history is rewritten."
+    "description": "Keep the reasoning blocks of completed steps out of later requests, saving the input that would otherwise be re-paid on every request. Records stay unchanged; only the model-visible history is rewritten. For long-reasoning models it keeps the effective context focused; for models that price cache reads at 3%-10% of uncached input it cuts billed and quota consumption."
   }
 }

@@ -1,6 +1,6 @@
 # dsh-reasoning-pruner
 
-`dsh-reasoning-pruner` 让**历史步骤的推理块**不再进入此后的模型请求，从而省下每次请求都要重付的那部分输入。记录本身不变，只有模型可见的历史被改变（术语见根目录 [`CONTEXT.md`](../../CONTEXT.md) 的「推理裁剪」）。
+`dsh-reasoning-pruner` 让**历史步骤的推理块**不再进入此后的模型请求，从而省下每次请求都要重付的那部分输入。记录本身不变，只有模型可见的历史被改变（术语见根目录 [`CONTEXT.md`](../../CONTEXT.md) 的「推理裁剪」）。对于长推理模型可以聚焦有效上下文提升效果，对于 3%-10% 缓存计价的模型可有效降低计费和额度消耗。
 
 当前目录包含配置 schema、裁剪算子、投影与可装载的插件入口（`name`、`inject`、`Config`、`apply`）。三处挂点都已落地：**② 按会话级步数节流批量推进**（`agent/pre-step`）、**① 溢出救援**（`agent/request-error`，只搭车、不自持重试）、**④ 手动命令与可用性开关**（`/prune-reasoning` + 浏览器半）。本包**不修改 DeepSeek Harness 源码**。实施票据 `01`–`08` 全部完成（`.scratch/historical-reasoning-pruning/issues/`）。
 
