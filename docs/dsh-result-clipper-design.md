@@ -27,7 +27,7 @@
 - **失败语义**：模型不可用、超时、空结果、非法结果一律**原文透传**。任何路径都**绝不能抛**——`tools/post-execute` 抛错会把整个工具调用变成错误结果。
 - **并发**：每条工具结果独立处理，不共享状态、不做全局串行；DSH 自己的工具调用并发池已经限制总数。
 
-## 原文入口与保留
+## 原结果入口与保留
 
 - 被摘要的结果在替换前调用 `ctx.get('spillStore').saveText(...)`（`owner.sessionId`、`source{tool, toolName, callId}`、`suggestedName`、完整正文），把返回的 `locator` 与 `retrievalHint` 作为固定的入口说明**放在摘要正文最前**。位置由默认组合里的旧结果裁剪器决定：`dsh-compaction-tool-result-pruner` 裁超长结果时只保留头 4096 / 尾 1024 字符，写在中间会被删掉。
 - **长度约束**：摘要加入口说明的总长度必须留在该裁剪器的阈值（默认 8192 字符）以内。当前摘要输出上限 512 token 天然满足；以后放宽摘要输出上限时必须重新检查这条。
@@ -70,14 +70,14 @@
 默认 bundle 已启用 `ptc-runtime`、`workflow-ptc`、`spill-local`、`spill-policy`（`maxInlineTokens: 12500`）和 `dsh-compaction-tool-result-pruner`（`packages/bundle/base/cordis.patch.yml:390-421`）。
 
 - 与 `dsh-reasoning-pruner` **正交**：它只读助手消息的重放信封与当前表面位置，不依赖任何工具结果内容，也不注册 `tools/post-execute` 或 `tool/result`；本插件只改工具结果 `content`，不会使它的裁剪目标失效。
-- 与 `dsh-compaction-tool-result-pruner` 的交互只有一处：它只处理超过 `thresholdChars`（默认 8192）字符的当前工具结果，因此摘要通常不被改写；入口说明放正文最前、并守住长度约束（见「原文入口与保留」）。
+- 与 `dsh-compaction-tool-result-pruner` 的交互只有一处：它只处理超过 `thresholdChars`（默认 8192）字符的当前工具结果，因此摘要通常不被改写；入口说明放正文最前、并守住长度约束（见「原结果入口与保留」）。
 - 与 `spill-policy` 的相对位置是行为的一部分：本插件在它外层运行（两者都 `prepend`，本插件后注册），所以隐私判断看到的是 spill 截断后的正文。装载顺序相反时退化为判断原文，方向保守。
 - 不检测、不读取其他插件的配置：共存约束以上述静态规则表达，不引入对别的插件配置的依赖。
 
 ## 配置面与设置座位
 
 - 开关放在「设置 → 内置插件」；参数放在插件自己的详情卡片。
-- 座位：注册 Host settings 命名空间 + 一个 `plugins.item` 卡片（`view: 'page'`），照 `@deepseek-ai/dsh-client-ui-settings-web-search` 的先例；逐字段恢复默认用 `resetField`（底层是 `op: 'unset'` 回落到 schema/base 默认）。提示词恢复默认通过清除用户覆盖实现。不需要 YAML 兼容路径。
+- 座位：插件自身的 profile 条目即 settings 命名空间（`SettingsNamespace`，Host 侧由 `ctx.settings.describe()` 投影出表单）+ 浏览器半注册一个 `plugins.item` 卡片（`view: 'page'`，经 `ctx.configForms.get(ns)` 取得该命名空间），照 `@deepseek-ai/dsh-client-ui-settings-web-search` 的先例；逐字段恢复默认用卡片注入的 `resetField`（stage 一次清空，保存后回落到 schema/base 默认，底层是 `op: 'unset'`）。需要「保存即生效」的字段在 schema 上声明 `volatile`。提示词恢复默认通过清除用户覆盖实现。不需要 YAML 兼容路径。
 - **固定常量**（页面只读展示，不开放配置）：辅助请求超时 20s；相关摘要 ≤3 条、每条 ≤600 字符；`additionalContexts` ≤2,000 估算器单位；摘要输出 ≤512 token；重复读取 memo 上限 200 条。固定前缀的字段与长度上限由程序控制，页面不开放任意扩大上下文。
 - **可配**：两项能力开关；摘要准入判断开关（默认关闭）；主 route 选择（摘要与隐私共用）与准入 route 选择（留空跟随主 route）；「主 route 已确认为本地」确认位（仅隐私模式要求）；`minInlineTokens`（1024）；`maxSummarizeTokens`（12500，只作用于 `bash`/`web_fetch`）；失败策略（`passthrough` | `block`）；准入、摘要、隐私三类请求各自的「关闭推理」开关（默认都关闭推理）；摘要/隐私/准入提示词的规则正文；debug 开关与路径；干跑。
 - 页面加一句静态警告：摘要会把工具正文发送给所选 route。
