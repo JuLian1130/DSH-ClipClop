@@ -34,7 +34,7 @@
 - **保留与清理全部由 DSH 的 spill 后端负责**（本机后端：`cleanupPeriodDays` 默认 30 天、进程启动时扫一次，`0` 关闭）。插件不设条数上限、不自行清理、不解析 locator。
 - **后端缺失或写入失败** → 该结果**透传不摘要**，以保住「没有入口就不摘要」的不变量。
 - **入口确实可读**（已核实）：本机后端的 `locator` 是绝对路径，`retrievalHint` 是固定文案「Use read with offset/limit, or grep this path to search within it.」；fs 沙箱只限制写入（`writeText`/`editText`），读取不经沙箱，因此 read-only、workspace-write、danger-full-access 三种模式下模型都能读回原文。默认落盘位置是 OS 临时目录下的私有进程目录（`mkdtempSync(tmpdir(), 'dsh-spill-')`），沙箱部署无需搬家。
-- `read` 读取摘要保存的入口时只跳过再次摘要，仍经过隐私判断。**识别方式**：插件在会话内记住自己写出的每个 `locator`，一条 `read` 的 `file_path` 命中该集合即视为读回——只做字符串比对，不解析 `locator` 的结构或语义（「不解析 locator」与「记住自己写出的值」不冲突）；集合随会话失效，重启或 fork 后同一入口会被当作普通 `read`（会再摘要一次）。本条不能用摘要 memo 代替：读回后的正文是 `read` 的渲染结果，与被摘要前的正文 hash 不同。重读不得跳过 `fs/observed` 的真实 version 发射；验收覆盖「同一 turn 先 read 后 edit」与「read 被摘要后再 edit」两种顺序，都不得出现 `FS_NOT_OBSERVED`。
+- `read` 读取摘要保存的入口时只跳过整个摘要路径（含准入判断，因而不发准入请求），仍经过隐私判断。**识别方式**：插件在会话内记住自己写出的每个 `locator`，一条 `read` 的 `file_path` 命中该集合即视为读回——只做字符串比对，不解析 `locator` 的结构或语义（「不解析 locator」与「记住自己写出的值」不冲突）；集合随会话失效，重启或 fork 后同一入口会被当作普通 `read`（会再摘要一次）。本条不能用摘要 memo 代替：读回后的正文是 `read` 的渲染结果，与被摘要前的正文 hash 不同。重读不得跳过 `fs/observed` 的真实 version 发射；验收覆盖「同一 turn 先 read 后 edit」与「read 被摘要后再 edit」两种顺序，都不得出现 `FS_NOT_OBSERVED`。
 
 ## 隐私闸门
 
