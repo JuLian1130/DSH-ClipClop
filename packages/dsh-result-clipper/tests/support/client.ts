@@ -50,14 +50,6 @@ export class StubForm {
     return true
   }
 
-  async unset(field: string): Promise<boolean> {
-    return await this.set(field, undefined)
-  }
-
-  async mutate(): Promise<boolean> {
-    return this.accepted
-  }
-
   /** 按发布契约把它当 `ConfigForm` 交出（夹具不需要 `ConfigForm` 的全部成员）。 */
   asConfigForm(): ConfigForm<StubSection> {
     return this as unknown as ConfigForm<StubSection>
@@ -93,10 +85,10 @@ export interface ClientFixture {
 
 /**
  * 装出一份浏览器半。
- * @param configFormsEntry - 可选的 settings 表单替身；不给就新建一个（用例仍能通过 `fixture.form` 拿到它）。
- * @returns 夹具、表单替身与注册表。
+ * @returns 夹具、settings 表单替身与注册表。
  */
-export async function mountClient(configFormsEntry: StubForm = new StubForm()): Promise<ClientFixture & { readonly form: StubForm }> {
+export async function mountClient(): Promise<ClientFixture & { readonly form: StubForm }> {
+  const configFormsEntry = new StubForm()
   const entries = new Map<string, CapturedEntry[]>()
   let active: 'zh' | 'en' = 'zh'
   const slots = {
