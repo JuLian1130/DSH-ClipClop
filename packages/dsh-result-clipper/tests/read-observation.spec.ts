@@ -10,6 +10,9 @@
  * edit 判失败**。阳性对照是一条没读过的路径——它必须真的被判失败，否则「两种 read 顺序没出错」在探针根本
  * 不会拒绝时也为真。
  *
+ * 两种顺序的差别落在 **read 有没有被摘要替换**：第一臂读低于下限的小文件（插件判 `not-candidate`、原样透传），
+ * 第二臂读被摘要的 `READ_PATH`（整条摘要路径 + 入口替换都走过）。
+ *
  * @module
  */
 
@@ -37,6 +40,12 @@ const REPLY = JSON.stringify({ action: 'summarize', summary: SHORT_SUMMARY })
 /** 本文件读的那条路径。 */
 const READ_PATH = '/abs/big.txt'
 
+/** 原样透传那一臂读的小文件：估价低于 `minInlineTokens`（1024），不进摘要候选。 */
+const SMALL_PATH = '/abs/small.txt'
+
+/** 小文件正文：20 行、约 360 字符，离摘要下限很远。 */
+const SMALL_BODY = Array.from({ length: 20 }, (_unused, index) => `small-${index} `.repeat(2)).join('\n')
+
 const contexts: Context[] = []
 
 afterEach(async () => {
@@ -48,7 +57,7 @@ class FakeFs {
   /** 不约束的后端：`read` / `edit` 因此按无条件路径执行。 */
   readonly sandboxMode = undefined
 
-  readonly files = new Map<string, string>([[READ_PATH, FILE_LINES]])
+  readonly files = new Map<string, string>([[READ_PATH, FILE_LINES], [SMALL_PATH, SMALL_BODY]])
 
   /**
    * 解析路径。
@@ -199,10 +208,11 @@ async function setup(): Promise<Fixture> {
 /**
  * 读一次文件。
  * @param ctx - 夹具 context。
+ * @param path - 要读的路径。
  * @returns 模型最终看到的文本。
  */
-async function read(ctx: Context): Promise<string> {
-  const result = await ctx.tools.execute(exec('read', undefined, { file_path: READ_PATH }))
+async function read(ctx: Context, path: string = READ_PATH): Promise<string> {
+  const result = await ctx.tools.execute(exec('read', undefined, { file_path: path }))
   return textOf(result.content)
 }
 
@@ -210,11 +220,12 @@ async function read(ctx: Context): Promise<string> {
  * 编辑一次文件。
  * @param ctx - 夹具 context。
  * @param path - 要编辑的路径。
+ * @param oldString - 要替换的原文；新文取它的大写，两条路径各用各的标记。
  * @returns 工具结果。
  */
-async function edit(ctx: Context, path: string): Promise<ToolResult> {
+async function edit(ctx: Context, path: string, oldString = 'line-0 '): Promise<ToolResult> {
   return ctx.tools.execute(exec('edit', undefined, {
-    file_path: path, old_string: 'line-0 ', new_string: 'LINE-0 ',
+    file_path: path, old_string: oldString, new_string: oldString.toUpperCase(),
   }))
 }
 
@@ -226,14 +237,17 @@ describe('票 04 第 10 条：read 之后的 edit 不出现 FS_NOT_OBSERVED', ()
     expect(textOf(result.content)).toContain('FS_NOT_OBSERVED')
   })
 
-  it('同一 turn 先 read 后 edit：read 的摘要替换不影响这次观察，edit 不再被判失败', async () => {
-    const { ctx } = await setup()
-    const observed = await read(ctx)
-    // 阳性对照：这条 read 真的走了摘要路径（否则「观察照常发出」在插件没装上时也为真）。
-    expect(observed).toContain(SHORT_SUMMARY)
-    expect(observed).not.toBe(FILE_LINES)
+  it('同一 turn 先 read 后 edit：read 原样透传（低于摘要下限）时观察照常发出，edit 不再被判失败', async () => {
+    const { ctx, route, probe } = await setup()
+    const observed = await read(ctx, SMALL_PATH)
+    // 这一臂的 read 不进摘要候选：零摘要请求、正文里没有摘要，插件只做了 `not-candidate` 判断。
+    expect(route.requests).toHaveLength(0)
+    expect(observed).toContain('small-0')
+    expect(observed).not.toContain(SHORT_SUMMARY)
+    // 观察面写死：真实 version 已经发出（`fs-observation-policy` 记录的正是这一条）。
+    expect(probe.versions.get(`s1|${SMALL_PATH}`)).toBe('v1')
 
-    const result = await edit(ctx, READ_PATH)
+    const result = await edit(ctx, SMALL_PATH, 'small-0 ')
     expect(textOf(result.content)).not.toContain('FS_NOT_OBSERVED')
     expect(result.isError).toBe(false)
   })
