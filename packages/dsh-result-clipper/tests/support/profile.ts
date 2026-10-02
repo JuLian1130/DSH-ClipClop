@@ -108,7 +108,8 @@ export async function bootProfile(config: Record<string, unknown>): Promise<Live
 function resolvedConfig(ctx: Context): LiveConfig {
   const entry = [...ctx.loader.entries()].find(candidate => candidate.options.id === PREFERENCE_NAMESPACE)
   const config = entry?.fiber?.config as Partial<LiveConfig> | undefined
-  if (config?.summarize === undefined || config.debug === undefined || config.debugPath === undefined) {
+  if (config?.summarize === undefined || config.privacyGate === undefined
+    || config.debug === undefined || config.debugPath === undefined) {
     throw new Error('profile fixture: the result-clipper row has no resolved volatile config')
   }
   return config as LiveConfig

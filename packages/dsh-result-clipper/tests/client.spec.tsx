@@ -14,11 +14,10 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
+import type { ComponentType } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
-import { ResultClipperCard } from '../src/client/card.tsx'
 import type { ResultClipperTabInjected, ResultClipperTabProps } from '../src/client/tab.tsx'
-import { ResultClipperTab } from '../src/client/tab.tsx'
 import { mountClient } from './support/client.ts'
 import type { ClientFixture, StubForm } from './support/client.ts'
 
@@ -81,7 +80,8 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
     const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const { container } = render(<ResultClipperTab {...props} />)
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...props} />)
 
     const switches = [...container.querySelectorAll('[role="switch"]')]
     expect(switches).toHaveLength(3)
@@ -96,7 +96,8 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
     const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const { container } = render(<ResultClipperTab {...props} />)
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...props} />)
 
     const switches = [...container.querySelectorAll('[role="switch"]')]
     await fireEvent.click(switches[0]!)
@@ -114,7 +115,8 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
     const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const { container } = render(<ResultClipperTab {...props} />)
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...props} />)
 
     await fireEvent.click([...container.querySelectorAll('[role="switch"]')][2]!)
     expect(fixture.form.writes).toEqual([{ field: 'debug', value: true }])
@@ -126,7 +128,8 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
     const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const { container } = render(<ResultClipperTab {...props} />)
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...props} />)
 
     await fireEvent.click([...container.querySelectorAll('[role="switch"]')][0]!)
     await Promise.resolve()
@@ -142,7 +145,8 @@ describe('票 02 第 2 条：debug 路径参数在详情卡片上', () => {
     const entry = only(fixture, 'plugins.item')
     const face = entry.options.inject!() as ResultClipperCardInjected
     const props = { view: 'summary', t: fixture.t, ...boundHooks(face.hooks), setDebugPath: face.setDebugPath } as unknown as ResultClipperCardProps
-    const { container } = render(<ResultClipperCard {...props} />)
+    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
+    const { container } = render(<CardComponent {...props} />)
     expect(container.querySelector('input')).toBeNull()
     expect(container.textContent).toBe(fixture.t('description'))
   })
@@ -153,7 +157,8 @@ describe('票 02 第 2 条：debug 路径参数在详情卡片上', () => {
     const entry = only(fixture, 'plugins.item')
     const face = entry.options.inject!() as ResultClipperCardInjected
     const props = { view: 'page', t: fixture.t, ...boundHooks(face.hooks), setDebugPath: face.setDebugPath } as unknown as ResultClipperCardProps
-    const { container } = render(<ResultClipperCard {...props} />)
+    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
+    const { container } = render(<CardComponent {...props} />)
 
     const input = container.querySelector('input')!
     expect(input.value).toBe('/tmp/result-clipper.jsonl')
@@ -169,7 +174,8 @@ describe('票 02 第 2 条：debug 路径参数在详情卡片上', () => {
     const entry = only(fixture, 'plugins.item')
     const face = entry.options.inject!() as ResultClipperCardInjected
     const props = { view: 'page', t: fixture.t, ...boundHooks(face.hooks), setDebugPath: face.setDebugPath } as unknown as ResultClipperCardProps
-    const { container } = render(<ResultClipperCard {...props} />)
+    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
+    const { container } = render(<CardComponent {...props} />)
 
     await fireEvent.change(container.querySelector('input')!, { target: { value: '/tmp/x.jsonl' } })
     await fireEvent.blur(container.querySelector('input')!)

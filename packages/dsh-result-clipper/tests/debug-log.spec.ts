@@ -12,12 +12,20 @@
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, exec, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { Config } from '../src/index.ts'
+
+// 「零写盘」的观察面是**写调用本身**：只断言某个猜出来的文件名不存在是空转的（插件回退到别的默认路径照样
+// 绿）。所以把 `appendFile` 包一层记账，其余 fs 行为原样透传。
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, appendFile: vi.fn(actual.appendFile) }
+})
 
 /** 每个用例一个临时目录：里面的路径形态（父目录不存在、已有内容、不可写）互不干扰。 */
 const roots: string[] = []
@@ -28,6 +36,7 @@ const open: HostFixture[] = []
 afterEach(async () => {
   await Promise.all(open.splice(0).map(async (fixture) => { await fixture.dispose() }))
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+  vi.mocked(appendFile).mockClear()
 })
 
 /** 一个全新的临时目录。 */
@@ -129,14 +138,23 @@ describe('票 02 第 4 条：关闭时零写盘', () => {
     fixture.ctx.tools.register(textTool('bash', 'body'))
     await fixture.ctx.tools.execute(exec('bash'))
     expect(existsSync(path)).toBe(false)
+    expect(appendFile).not.toHaveBeenCalled()
   })
 
-  it('debug 开启但路径为空时不写盘', async () => {
+  it('debug 开启但路径为空时一次写调用都不发生（不回退到任何默认路径）', async () => {
     const root = tempRoot()
     const fixture = await mounted({ debug: true, debugPath: '' })
     fixture.ctx.tools.register(textTool('bash', 'body'))
     await fixture.ctx.tools.execute(exec('bash'))
-    expect(existsSync(join(root, 'debug.jsonl'))).toBe(false)
+    expect(appendFile).not.toHaveBeenCalled()
+
+    // 阳性对照：同一套夹具只把路径填上，写调用就发生——证明上一条断的不是「这条路径恰好没人写」。
+    const path = join(root, 'debug.jsonl')
+    const writable = await mounted({ debug: true, debugPath: path })
+    writable.ctx.tools.register(textTool('bash', 'body'))
+    await writable.ctx.tools.execute(exec('bash'))
+    expect(appendFile).toHaveBeenCalledTimes(1)
+    expect(existsSync(path)).toBe(true)
   })
 
   it('写入失败（路径的父级是文件）不影响工具结果，也不抛错', async () => {
