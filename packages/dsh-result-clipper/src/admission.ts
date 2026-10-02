@@ -21,7 +21,7 @@ import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, composeRequestPrefix, requestMo
 /** 内置的准入规则正文，也是页面「恢复默认」回落到的值（用户故事 46）。 */
 export const DEFAULT_ADMISSION_RULE = [
   '你会拿到一条工具结果的元数据，不含正文。判断它值不值得发起一次带正文的摘要请求：',
-  '从工具名与结果大小看不出可摘要的内容时回答 no，其余情况回答 yes。',
+  '从这次结果的估算大小看不出还有可摘要的内容时回答 no，其余情况回答 yes。',
 ].join('\n')
 
 /** 固定安全外壳：只陈述输出形状与数据边界，不含任何可编辑规则。 */

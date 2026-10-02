@@ -309,6 +309,21 @@ describe('票 06 第 5 条：准入判断失败仍继续摘要', () => {
     expect(textOf(result.content)).toContain(SHORT_SUMMARY)
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'summarized', admission: 'failed' }))
   })
+
+  it('准入之后的写盘抛出时，准入结论仍如实记那次判断的结果（不谎报没发过准入请求）', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.spill!.fail = true
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(result.isError).toBe(false)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    // 阳性对照：准入与摘要各发过一次，所以这一次的准入结论是 yes 而不是「不适用」。
+    expect(route.requests).toHaveLength(2)
+    expect(records(path).at(-1)).toEqual(
+      expect.objectContaining({ action: 'unmodified', reason: 'failed', admission: 'yes' }),
+    )
+  })
 })
 
 describe('票 06 第 6 条：memo 命中与按入口读回时都不发准入请求', () => {

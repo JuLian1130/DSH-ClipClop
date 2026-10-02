@@ -185,8 +185,9 @@ async function summarize(
 
   const store = ctx.get('spillStore')
   if (store === undefined) return unchanged('failed', admission)
-  // 存储失败与「没有会话归属」都由这一处兜住：抛出的错误走调用点的 catch，按 `failed` 透传。
-  const written = await writeEntry(store, exec, exec.name, original)
+  // 后端写入失败的抛出在这里就地兜住：调用点的兜底 catch 不知道准入已经跑过，会把准入结论记成「不适用」。
+  // `writeEntry` 交回 `undefined` 是「没有会话归属」，与写入失败同走 `failed` 透传。
+  const written = await writeEntry(store, exec, exec.name, original).catch((): undefined => undefined)
   if (written === undefined) return unchanged('failed', admission)
   noteReadback(readback, written)
   return {
