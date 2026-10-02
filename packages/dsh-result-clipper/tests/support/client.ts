@@ -20,6 +20,7 @@ export interface StubSection {
   privacyGate: boolean
   admissionJudge: boolean
   debug: boolean
+  dryRun: boolean
   debugPath: string
   routeProvider: string
   routeModel: string
@@ -43,6 +44,7 @@ export const SECTION_DEFAULTS: StubSection = {
   privacyGate: false,
   admissionJudge: false,
   debug: false,
+  dryRun: false,
   debugPath: '',
   routeProvider: '',
   routeModel: '',

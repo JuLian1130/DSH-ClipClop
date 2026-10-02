@@ -21,7 +21,7 @@
 import { boundContextSummary, createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed, GenerateOptions, LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
 import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, parseAction, requestModelText } from './summary.ts'
-import type { ModelRequestFailure, SummaryAction } from './summary.ts'
+import type { ModelCallUsage, ModelRequestFailure, SummaryAction } from './summary.ts'
 
 // 消息来源是生产者自报的 kind（会话格式拒绝通用 `plugin` 包装），所以本插件在这里登记自己的来源类型。
 declare module '@deepseek-ai/dsh-llm' {
@@ -92,6 +92,14 @@ export function parsePrivacyOutput(text: string): PrivacyResult | undefined {
   const parsed = parseAction(action, summary)
   return parsed === undefined ? undefined : { ok: true, verdict: 'safe', action: parsed }
 }
+/** 一次隐私判断的收场：判断结论与这次请求的用量。判断失败时用量同样可能为空（底层没报告）。 */
+export interface PrivacyCall {
+  /** 判断结论。 */
+  readonly result: PrivacyResult
+  /** 这次请求的用量；底层没报告时为 `undefined`。 */
+  readonly usage: ModelCallUsage | undefined
+}
+
 /**
  * 发一次隐私判断请求并解析结论。请求带完整文本投影，只发一次。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
@@ -99,7 +107,7 @@ export function parsePrivacyOutput(text: string): PrivacyResult | undefined {
  * @param model - 主 route 的 model id。
  * @param disableReasoning - 是否关闭推理；关闭时显式传 `off`。
  * @param prompt - {@link composePrivacyPrompt} 的产物。
- * @returns 解析出的结论；任何失败按 {@link ModelRequestFailure} 交回。
+ * @returns 解析出的结论与这次请求的用量；任何失败按 {@link ModelRequestFailure} 交回。
  */
 export async function requestPrivacy(
   llm: LlmRuntime,
@@ -107,7 +115,7 @@ export async function requestPrivacy(
   model: string,
   disableReasoning: boolean,
   prompt: string,
-): Promise<PrivacyResult> {
+): Promise<PrivacyCall> {
   const options: GenerateOptions = {
     provider,
     model,
@@ -118,9 +126,9 @@ export async function requestPrivacy(
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
   const result = await requestModelText(llm, options)
-  if (!result.ok) return { ok: false, failure: result.failure }
+  if (!result.ok) return { result: { ok: false, failure: result.failure }, usage: undefined }
   const parsed = parsePrivacyOutput(result.text)
-  return parsed ?? { ok: false, failure: 'failed' }
+  return { result: parsed ?? { ok: false, failure: 'failed' }, usage: result.usage }
 }
 
 /**

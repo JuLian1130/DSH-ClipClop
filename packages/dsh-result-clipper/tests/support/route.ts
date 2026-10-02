@@ -8,11 +8,11 @@
  * @module
  */
 
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 
-/** 一段脚本化答复：文本、抛错，或挂到请求的 signal 中止。 */
+/** 一段脚本化答复：文本（可带用量）、抛错，或挂到请求的 signal 中止。 */
 export type FakeReply =
-  | { readonly text: string }
+  | { readonly text: string; readonly usage?: TokenUsage }
   | { readonly error: string }
   | { readonly hang: true }
 
@@ -54,6 +54,9 @@ export class FakeRoute {
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: reply.text }
     yield { type: 'block-end', index: 0, block: { type: 'text', text: reply.text } }
+    // 用量块照 DSH 的流协议排在终止块之前（适配器在 finish 前报告 usage）；没给就整块不发，
+    // 「底层没报告用量」这条路径因此与「报告了 0」在夹具里是可分开的。
+    if (reply.usage !== undefined) yield { type: 'usage', usage: reply.usage }
     yield { type: 'finish', reason: { kind: 'stop' } }
   }
 }

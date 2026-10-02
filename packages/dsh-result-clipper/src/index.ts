@@ -32,6 +32,11 @@
  * 准入判 no `admission-no`、保留全文 `kept`、没变短 `not-shorter`、按入口读回 `read-back`、放行的未判定
  * `uncertain`、失败 `failed`、窗口不足 `failed-window`、已替换 `summarized`、已拦截 `rejected`。
  *
+ * 本票（08）接入**干跑**：`dryRun` 开启且 debug 开关与日志路径都就位时，流水线照走（隐私判断、准入与摘要
+ * 请求都真的发出），但交回的永远是下游决策——不替换内容、不 append 会话事件、不调用 `saveText`、不写也不查
+ * memo；debug 记录加一个 `dryRun` 标记，字段取值记的是「本应替换 / 本应拦截 / 本应跳过及原因」。两项字段
+ * （`缓存观测`、`判断器输入 token 数`）与本票一起补齐。
+ *
  * 任何路径都不得抛出——`tools/post-execute` 抛错会把整个工具调用变成错误结果；调用点的兜底 catch 只负责
  * 收住意外，正常失败各自以「透传 / 拦截」结算。
  *
@@ -63,7 +68,7 @@ import {
   requestPrivacy,
   type ReminderLedger,
 } from './privacy.ts'
-import { composeSummaryPrompt, requestSummary, type SummaryAction } from './summary.ts'
+import { composeSummaryPrompt, requestSummary, type ModelCallUsage, type SummaryAction } from './summary.ts'
 
 export * from './config.ts'
 export * from './debug.ts'
@@ -105,17 +110,41 @@ export function apply(ctx: Context, config: Required<Config>): void {
         decision,
         outcome: { action: 'unmodified', reason: 'failed' },
         admission: 'not-applicable',
+        observation: { cacheReadTokens: 0, judgeInputTokens: null },
       }))
     await record(config, exec.name, result, startedAt, applied)
     return applied.decision
   }, { prepend: true })
 }
 
-/** 一次处理的结果：交回的工具决策、结果取值与准入结论。 */
-interface Processed {
+/** 一次处理交回的判定：工具决策、结果取值与准入结论。 */
+interface Applied {
   readonly decision: PostToolDecision
   readonly outcome: DebugOutcome
   readonly admission: AdmissionVerdict
+}
+
+/** 一次处理的结果：判定部分，加上这条结果的模型请求观测。 */
+interface Processed extends Applied {
+  readonly observation: Observation
+}
+
+/** 这条结果发出的模型请求的观测累计，即 debug 的「缓存观测」与「判断器输入 token 数」两个字段。 */
+interface Observation {
+  /** 各次模型请求里命中前缀缓存的输入 token 数之和。 */
+  cacheReadTokens: number
+  /** 准入判断那次请求的输入规模；没发准入请求时为 `null`。 */
+  judgeInputTokens: number | null
+}
+
+/**
+ * 干跑是否生效：`dryRun` 开启**且** debug 开关与日志路径都就位。两者缺一就不生效（照常替换），由页面提示
+ * ——干跑的产出就是这条日志，因此干跑不受「debug 关闭时零写盘」的例外对待。
+ * @param config - 解析后的配置。
+ * @returns 干跑生效时为真。
+ */
+function dryRunInEffect(config: Required<Config>): boolean {
+  return config.dryRun.get() && config.debug.get() && config.debugPath.get() !== ''
 }
 
 /**
@@ -123,6 +152,9 @@ interface Processed {
  *
  * 隐私开启时判断先于摘要（设计文档「隐私闸门」），且 `safe` 之后的候选、读回与 `keep` 分支与隐私关闭时同源；
  * 隐私关闭时按原顺序走准入与 memo。
+ *
+ * 干跑只改两件事：交回的决策永远是下游决策（`dryRun ? decision : …`），以及所有写状态的动作（`saveText`、
+ * 读回台账、memo、会话提醒）都不发生；判定与模型请求照常，所以记录里的取值是真实预报。
  * @param ctx - 插件的 context。
  * @param config - 解析后的配置。
  * @param readback - 本进程内各会话写出的入口台账。
@@ -131,7 +163,7 @@ interface Processed {
  * @param exec - 工具执行（会话归属与 `read` 的路径）。
  * @param result - 工具结果的原始投影（摘要资格按它测量）。
  * @param decision - 下游（含 spill）的决策，也是隐私判断与替换的对象。
- * @returns 交回的决策、结果取值与准入结论。
+ * @returns 交回的决策、结果取值、准入结论与模型请求观测。
  */
 async function process(
   ctx: Context,
@@ -143,8 +175,11 @@ async function process(
   result: Readonly<ToolExecutionResult>,
   decision: PostToolDecision,
 ): Promise<Processed> {
+  const dryRun = dryRunInEffect(config)
+  const observation: Observation = { cacheReadTokens: 0, judgeInputTokens: null }
+  const settle = (applied: Applied): Processed => ({ ...applied, observation })
   const unchanged = (reason: UnmodifiedReason, admission: AdmissionVerdict = 'not-applicable'): Processed =>
-    ({ decision, outcome: { action: 'unmodified', reason }, admission })
+    settle({ decision, outcome: { action: 'unmodified', reason }, admission })
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文；它也不是本次要判断的工具内容。
   if (decision.kind === 'block') return unchanged('not-candidate')
 
@@ -156,8 +191,15 @@ async function process(
       visible,
       [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],
     )
-    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection)
-    if (judgement.kind === 'block') return rejected(exec.name)
+    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation)
+    // 干跑只预报「本应拦截」，交回的仍是下游决策——模型可见内容一个字都不变。
+    if (judgement.kind === 'block') {
+      return settle({
+        decision: dryRun ? decision : blockedDecision(exec.name),
+        outcome: { action: 'rejected' },
+        admission: 'not-applicable',
+      })
+    }
     // 摘要能力关闭时整条摘要路径都不发请求，所以「为什么这条结果没改动」的取值是摘要关闭——判 `safe` 与按
     // `passthrough` 放行都一样（规格「契约 · 判定顺序」）；隐私判断本身照常发出。
     if (!config.summarize.get()) return unchanged('summary-off')
@@ -168,7 +210,9 @@ async function process(
     if (verdict.kind === 'skip') return unchanged('not-candidate')
     // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储、不进 memo。
     if (judgement.action.action === 'keep') return unchanged('kept')
-    return replace(ctx, readback, exec, decision, visible, judgement.action.summary, 'not-applicable')
+    return settle(await replace(
+      ctx, readback, exec, decision, visible, judgement.action.summary, 'not-applicable', dryRun,
+    ))
   }
 
   if (!config.summarize.get()) return unchanged('summary-off')
@@ -177,9 +221,12 @@ async function process(
   const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
   if (verdict.kind === 'skip') return unchanged('not-candidate')
 
-  // memo 只在隐私关闭时参与判重（裁决 B），并且必须在准入判断之前查找——命中即整条摘要请求路径短路。
-  const reused = lookupMemo(memo, exec, verdict.text)
-  if (reused !== undefined) return replace(ctx, readback, exec, decision, visible, reused, 'not-applicable')
+  // memo 只在隐私关闭时参与判重（裁决 B），并且必须在准入判断之前查找——命中即整条摘要请求路径短路。干跑
+  // 既不写也不查：查找会刷新最近使用次序，同样改变随后真实运行的行为，而命中与否不改变记录里的取值。
+  const reused = dryRun ? undefined : lookupMemo(memo, exec, verdict.text)
+  if (reused !== undefined) {
+    return settle(await replace(ctx, readback, exec, decision, visible, reused, 'not-applicable', dryRun))
+  }
 
   const llm = ctx.get('llm')
   let admission: AdmissionVerdict = 'not-applicable'
@@ -189,26 +236,40 @@ async function process(
     if (llm === undefined || provider === '' || model === '') {
       admission = 'failed'
     } else {
-      const answer = await requestAdmission(
+      const called = await requestAdmission(
         llm, provider, model, config.admissionDisableReasoning.get(),
         composeAdmissionPrompt(config.admissionPrompt.get(), verdict.estimated),
       )
+      observation.judgeInputTokens = noteUsage(observation, called.usage)
       // 判断失败不是关功能：`failed` 只记进准入结论，照常发起带正文的摘要请求。
-      admission = answer === undefined ? 'failed' : answer ? 'yes' : 'no'
-      if (answer === false) return unchanged('admission-no', 'no')
+      admission = called.answer === undefined ? 'failed' : called.answer ? 'yes' : 'no'
+      if (called.answer === false) return unchanged('admission-no', 'no')
     }
   }
   const provider = config.routeProvider.get()
   const model = config.routeModel.get()
   if (llm === undefined || provider === '' || model === '') return unchanged('failed', admission)
-  const action = await requestSummary(
+  const outcome = await requestSummary(
     llm, provider, model, config.summaryDisableReasoning.get(),
     composeSummaryPrompt(config.summaryPrompt.get(), verdict.estimated, verdict.text),
   )
-  if (action === undefined) return unchanged('failed', admission)
-  if (action.action === 'keep') return unchanged('kept', admission)
-  noteMemo(memo, exec, verdict.text, action.summary)
-  return replace(ctx, readback, exec, decision, visible, action.summary, admission)
+  noteUsage(observation, outcome.usage)
+  if (outcome.action === undefined) return unchanged('failed', admission)
+  if (outcome.action.action === 'keep') return unchanged('kept', admission)
+  if (!dryRun) noteMemo(memo, exec, verdict.text, outcome.action.summary)
+  return settle(await replace(ctx, readback, exec, decision, visible, outcome.action.summary, admission, dryRun))
+}
+
+/**
+ * 记下一次模型请求的观测：缓存命中累加进「缓存观测」，并交回这次请求的输入规模。
+ * @param observation - 这条结果的观测累计。
+ * @param usage - 这次请求的用量；底层没报告时为 `undefined`。
+ * @returns 这次请求的输入 token 总数（未缓存 + 缓存读 + 缓存写）；没有用量时为 `null`。
+ */
+function noteUsage(observation: Observation, usage: ModelCallUsage | undefined): number | null {
+  if (usage === undefined) return null
+  observation.cacheReadTokens += usage.cacheReadTokens
+  return usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
 }
 
 /**
@@ -225,12 +286,15 @@ type PrivacyJudgement =
  *
  * **配置失败**（主 route 未确认为本地、没有 `llm` 服务或 route 没配出来）按失败策略处理：它的可见面是配置项
  * 与卡片常驻警告（静态配置状态），因此不另发会话提醒。**运行期失效**（未能判定 / 判断失败 / 窗口不足）在按
- * `passthrough` 放行时各提醒一条，`block` 策略下不发提醒（拦截本身在对话里可见）。
+ * `passthrough` 放行时各提醒一条，`block` 策略下不发提醒（拦截本身在对话里可见）；干跑下两者都不发生——
+ * 提醒既不 append 也不进台账，否则会改变随后真实运行的提醒去重。
  * @param ctx - 插件的 context。
  * @param config - 解析后的配置。
  * @param reminders - 本进程内各会话的失效提醒台账。
  * @param exec - 工具执行（取会话归属）。
  * @param projection - 模型即将看到的完整文本投影。
+ * @param dryRun - 干跑：请求照发，但不 append 会话事件。
+ * @param observation - 这条结果的模型请求观测累计。
  * @returns 这次判断的结论。
  */
 async function judgePrivacy(
@@ -239,6 +303,8 @@ async function judgePrivacy(
   reminders: ReminderLedger,
   exec: ToolExecution,
   projection: string,
+  dryRun: boolean,
+  observation: Observation,
 ): Promise<PrivacyJudgement> {
   const blocked = config.failurePolicy.get() === 'block'
   const llm = ctx.get('llm')
@@ -247,14 +313,16 @@ async function judgePrivacy(
   if (!config.routeConfirmedLocal.get() || llm === undefined || provider === '' || model === '') {
     return blocked ? { kind: 'block' } : { kind: 'passthrough', reason: 'failed' }
   }
-  const answer = await requestPrivacy(
+  const called = await requestPrivacy(
     llm, provider, model, config.privacyDisableReasoning.get(),
     composePrivacyPrompt(config.privacyPrompt.get(), projection),
   )
+  noteUsage(observation, called.usage)
+  const answer = called.result
   if (!answer.ok) {
     if (blocked) return { kind: 'block' }
     const reason: UnmodifiedReason = answer.failure === 'failed-window' ? 'failed-window' : 'failed'
-    notifyFailure(reminders, exec.agent?.session, reason)
+    if (!dryRun) notifyFailure(reminders, exec.agent?.session, reason)
     return { kind: 'passthrough', reason }
   }
   // 判定敏感在任何失败策略下都拦截。
@@ -262,34 +330,33 @@ async function judgePrivacy(
   if (answer.verdict === 'uncertain') {
     if (blocked) return { kind: 'block' }
     // `uncertain` 连带取消摘要：既不摘要也不拦截，按失败策略放行原文。
-    notifyFailure(reminders, exec.agent?.session, 'uncertain')
+    if (!dryRun) notifyFailure(reminders, exec.agent?.session, 'uncertain')
     return { kind: 'passthrough', reason: 'uncertain' }
   }
   return { kind: 'safe', action: answer.action }
 }
 
 /**
- * 判定敏感或按失败策略拦截：交回原生 `block`，文案固定且只带工具名。
+ * 判定敏感或按失败策略拦截时交回模型的决策：原生 `block`，文案固定且只带工具名。
  * @param toolName - 被拦下的工具名。
- * @returns 交回的决策、`rejected` 取值与不适用的准入结论。
+ * @returns 交回的决策。
  */
-function rejected(toolName: string): Processed {
-  return {
-    decision: { kind: 'block', feedback: [{ type: 'text', text: composeBlockedFeedback(toolName) }] },
-    outcome: { action: 'rejected' },
-    admission: 'not-applicable',
-  }
+function blockedDecision(toolName: string): PostToolDecision {
+  return { kind: 'block', feedback: [{ type: 'text', text: composeBlockedFeedback(toolName) }] }
 }
 
 /**
  * 用一条摘要替换模型可见投影：先按入口说明的预留上界比长度，严格更短才写盘并拼入口说明。
+ *
+ * 干跑只走到「本应替换」为止：不写盘、不记入口，交回的仍是下游决策。
  * @param ctx - 插件的 context。
  * @param readback - 本进程内各会话写出的入口台账。
  * @param exec - 工具执行（会话归属与工具来源）。
- * @param decision - 要替换的决策。
+ * @param decision - 要替换的决策；干跑时原样交回。
  * @param visible - 要被替换掉的那段模型可见投影。
  * @param summary - 要放进去的摘要正文（可能来自 memo 或隐私模式的合并请求）。
  * @param admission - 这次结果的准入结论，原样记进 debug 记录。
+ * @param dryRun - 干跑：不调用 `saveText`、不记读回台账，只预报结果取值。
  * @returns 交回的决策、结果取值与准入结论。
  */
 async function replace(
@@ -300,8 +367,9 @@ async function replace(
   visible: readonly ContentBlock[],
   summary: string,
   admission: AdmissionVerdict,
-): Promise<Processed> {
-  const unchanged = (reason: UnmodifiedReason): Processed =>
+  dryRun: boolean,
+): Promise<Applied> {
+  const unchanged = (reason: UnmodifiedReason): Applied =>
     ({ decision, outcome: { action: 'unmodified', reason }, admission })
   const original = textOf(visible)
   // 入口说明的实际值写盘前取不到，所以比较用它的预留上界（裁决 A）：不短就透传、一次 `saveText` 都不发。
@@ -309,7 +377,9 @@ async function replace(
 
   const store = ctx.get('spillStore')
   if (store === undefined) return unchanged('failed')
-  // 后端写入失败的抛出在这里就地兜住：调用点的兜底 catch 不知道准入已经跑过，会把准入结论记成「不适用」。
+  // 干跑没有入口（入口由 `saveText` 产生），所以「本应替换」只记动作、不记摘要文本。
+  if (dryRun) return { decision, outcome: { action: 'summarized' }, admission }
+  // 后端写入失败的抛出在这里就地兜住：走调用点的兜底 catch 会把准入结论记成「不适用」。
   // `writeEntry` 交回 `undefined` 是「没有会话归属」，与写入失败同走 `failed` 透传。
   const written = await writeEntry(store, exec, exec.name, original).catch((): undefined => undefined)
   if (written === undefined) return unchanged('failed')
@@ -347,12 +417,13 @@ function textOf(content: readonly ContentBlock[]): string {
 }
 
 /**
- * 按配置追加一行 debug 记录。debug 关闭或路径为空时不写盘。
+ * 按配置追加一行 debug 记录。debug 关闭或路径为空时不写盘；干跑生效时这一行带 `dryRun` 标记（它的取值是
+ * 「本应发生什么」的预报）。
  * @param config - 解析后的配置。
  * @param toolName - 工具名。
  * @param result - 工具结果的原始投影。
  * @param startedAt - 拿到结果前的时间戳。
- * @param applied - 本条结果的结果取值与准入结论。
+ * @param applied - 本条结果的结果取值、准入结论与模型请求观测。
  */
 async function record(
   config: Required<Config>,
@@ -369,7 +440,10 @@ async function record(
     resultBytes: measureContent(result.content),
     admission: applied.admission,
     durationMs: Math.round(performance.now() - startedAt),
+    cacheObservation: applied.observation.cacheReadTokens,
+    judgeInputTokens: applied.observation.judgeInputTokens,
     ...applied.outcome,
+    ...(dryRunInEffect(config) ? { dryRun: true } : {}),
   }
   try {
     await appendDebugRecord(path, line)

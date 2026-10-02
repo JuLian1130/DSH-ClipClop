@@ -4,7 +4,8 @@
  * 记录**不含**原文、摘要正文、完整提示词与凭据（规格「契约 · debug JSONL 字段」），所以这里的字段只有
  * 元数据。`结果取值` 是封闭的两段式（动作 + 未改动原因）：`summary-off` 自 02，`not-candidate`、`kept`、
  * `not-shorter`、`failed` 自 03，`read-back` 自 04，`admission-no` 与「准入结论」字段自 06，`uncertain`、
- * `failed-window` 与 `rejected` 自 07；其余取值由引入对应机制的票各自加入。
+ * `failed-window` 与 `rejected` 自 07。本票（08）补齐规格列出的另两个字段——`缓存观测`（前缀缓存命中）与
+ * `判断器输入 token 数`（准入判断那次请求的输入规模）——并给干跑记录加一个 `dryRun` 标记。
  *
  * @module
  */
@@ -49,6 +50,17 @@ export type DebugRecord = DebugOutcome & {
   admission: AdmissionVerdict
   /** 调用耗时：本监听器从拿到结果到最终决策的毫秒数。 */
   durationMs: number
+  /** 缓存观测：这条结果的各次模型请求里命中前缀缓存的输入 token 数之和；没发请求或底层未报告时为 0。 */
+  cacheObservation: number
+  /**
+   * 判断器输入 token 数：摘要准入判断那次请求的输入规模（未缓存 + 缓存读 + 缓存写三种输入 token 之和）。
+   * 没发准入请求（开关关闭、隐私模式、未进候选、按入口读回、memo 命中、摘要关闭）时为 `null`。
+   */
+  judgeInputTokens: number | null
+  /**
+   * 干跑记录：动作与原因记的是「本应发生什么」的预报，不是真实结果。真实记录没有这个键。
+   */
+  dryRun?: true
 }
 
 /**

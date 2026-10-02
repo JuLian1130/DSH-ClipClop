@@ -23,7 +23,7 @@ import {
   isContextWindowExceededError,
   isHarnessError,
 } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, LlmRuntime, TokenUsage } from '@deepseek-ai/dsh-llm'
 
 /** 摘要输出上限（固定常量，不可配）：输出 512 token。 */
 export const SUMMARY_MAX_TOKENS = 512
@@ -117,16 +117,40 @@ export function parseAction(action: unknown, summary: unknown): SummaryAction | 
  */
 export type ModelRequestFailure = 'failed' | 'failed-window'
 
-/** 一次模型请求的收场：拿到文本正文，或按失败分类交回。 */
+/**
+ * 一次模型请求的用量观测。三类输入 token 按 DSH 口径**各自独立计数**（未缓存的 `inputTokens`、缓存读、
+ * 缓存写），所以「这次请求的输入规模」是三者之和。
+ */
+export interface ModelCallUsage {
+  /** 未命中的输入 token 数。 */
+  readonly inputTokens: number
+  /** 命中前缀缓存的输入 token 数。 */
+  readonly cacheReadTokens: number
+  /** 写入前缀缓存的输入 token 数。 */
+  readonly cacheWriteTokens: number
+}
+
+/** 一次模型请求的收场：拿到文本正文与用量，或按失败分类交回。 */
 export type ModelTextResult =
-  | { readonly ok: true; readonly text: string }
+  | { readonly ok: true; readonly text: string; readonly usage: ModelCallUsage | undefined }
   | { readonly ok: false; readonly failure: ModelRequestFailure }
+
+/**
+ * 一次摘要请求的收场：解析出的结论与这次请求的用量。两者各自可为空——结论非法与底层没报告用量都不是失败
+ * 的同义词，所以不合并。
+ */
+export interface SummaryOutcome {
+  /** 解析出的结论；调用失败或非法结果时为 `undefined`。 */
+  readonly action: SummaryAction | undefined
+  /** 这次请求的用量；底层没报告时为 `undefined`。 */
+  readonly usage: ModelCallUsage | undefined
+}
 
 /**
  * 发一次摘要路径的模型请求并取回文本正文。准入、摘要与隐私三类请求共用它。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param options - 请求参数。
- * @returns 组装出的文本正文；模型不可用、请求中止、错误结束或抛出时按 {@link ModelRequestFailure} 交回。
+ * @returns 组装出的文本正文与用量；模型不可用、请求中止、错误结束或抛出时按 {@link ModelRequestFailure} 交回。
  */
 export async function requestModelText(llm: LlmRuntime, options: GenerateOptions): Promise<ModelTextResult> {
   const assembler = new BlockAssembler()
@@ -144,7 +168,21 @@ export async function requestModelText(llm: LlmRuntime, options: GenerateOptions
   if (finish.kind === 'error') {
     return { ok: false, failure: classifyFailure(finish.failure.code, finish.failure.message) }
   }
-  return { ok: true, text: textOf(assembler.blocks()) }
+  return { ok: true, text: textOf(assembler.blocks()), usage: usageOf(assembler.usage) }
+}
+
+/**
+ * 把底层报告的用量收成观测字段。缺省的两类缓存计数按 0 计（适配器不报缓存就是没命中）。
+ * @param usage - 组装器收到的 `usage` 块；没收到时为 `undefined`。
+ * @returns 用量观测；没有用量时为 `undefined`。
+ */
+function usageOf(usage: TokenUsage | undefined): ModelCallUsage | undefined {
+  if (usage === undefined) return undefined
+  return {
+    inputTokens: usage.inputTokens,
+    cacheReadTokens: usage.cacheReadTokens ?? 0,
+    cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+  }
 }
 
 /**
@@ -164,7 +202,7 @@ function classifyFailure(code: string | undefined, detail: string): ModelRequest
  * @param model - 主 route 的 model id。
  * @param disableReasoning - 是否关闭推理；关闭时显式传 `off`。
  * @param prompt - {@link composeSummaryPrompt} 的产物。
- * @returns 解析出的结论；任何失败都是 `undefined`。
+ * @returns 解析出的结论与这次请求的用量；任何失败都是空结论。
  */
 export async function requestSummary(
   llm: LlmRuntime,
@@ -172,7 +210,7 @@ export async function requestSummary(
   model: string,
   disableReasoning: boolean,
   prompt: string,
-): Promise<SummaryAction | undefined> {
+): Promise<SummaryOutcome> {
   const options: GenerateOptions = {
     provider,
     model,
@@ -183,7 +221,9 @@ export async function requestSummary(
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
   const result = await requestModelText(llm, options)
-  return result.ok ? parseSummaryOutput(result.text) : undefined
+  return result.ok
+    ? { action: parseSummaryOutput(result.text), usage: result.usage }
+    : { action: undefined, usage: undefined }
 }
 
 /**

@@ -1,7 +1,7 @@
 /**
- * dsh-result-clipper 的浏览器半：把两项能力开关、摘要准入判断开关与 debug 开关注册成「设置 → 内置插件」里的
- * 一个页签，并把摘要与准入两路参数（route、阈值、「关闭推理」、提示词）与 debug 日志路径注册成插件详情卡片
- * 上的参数。
+ * dsh-result-clipper 的浏览器半：把两项能力开关、摘要准入判断开关、debug 开关与干跑开关注册成「设置 →
+ * 内置插件」里的一个页签，并把摘要与准入两路参数（route、阈值、「关闭推理」、提示词）与 debug 日志路径注册
+ * 成插件详情卡片上的参数。
  *
  * 座位分两处的依据是设计文档「配置面与设置座位」：开关在插件页签，参数在插件自己的详情卡片；两处都经
  * `ctx.configForms.get(ns)` 取得同一个 settings 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口
@@ -63,6 +63,7 @@ interface PreferenceSection {
   privacyGate: boolean
   admissionJudge: boolean
   debug: boolean
+  dryRun: boolean
   debugPath: string
   routeProvider: string
   routeModel: string
@@ -106,6 +107,9 @@ export function apply(ctx: Context): void {
           admissionJudge: booleanField(form, 'admissionJudge'),
           privacyGate: booleanField(form, 'privacyGate'),
           debug: booleanField(form, 'debug'),
+          dryRun: booleanField(form, 'dryRun'),
+          // 干跑生效与否要读日志路径：两者缺一时页签上当场给出提示。
+          debugPath: stringField(form, 'debugPath'),
         },
         setToggle: (field: ResultClipperToggle, value: boolean) => form.set(field, value),
       }),
@@ -156,7 +160,7 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'summaryDisableReasoning'
+  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'summaryDisableReasoning'
     | 'admissionDisableReasoning' | 'privacyDisableReasoning' | 'routeConfirmedLocal',
   fallback = false,
 ): ObservableSnapshot<boolean> {

@@ -89,7 +89,7 @@ describe('票 02 第 2 条：两处座位注册在设置页里', () => {
 })
 
 describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () => {
-  it('页面上有摘要、摘要准入判断、隐私闸门、debug 四个开关，初始都读 host 的默认值（关闭）', async () => {
+  it('页面上有摘要、摘要准入判断、隐私闸门、debug、干跑五个开关，初始都读 host 的默认值（关闭）', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
@@ -98,17 +98,19 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const { container } = render(<TabComponent {...props} />)
 
     const switches = [...container.querySelectorAll('[role="switch"]')]
-    expect(switches).toHaveLength(4)
-    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'false'])
+    expect(switches).toHaveLength(5)
+    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'false', 'false'])
     expect(container.textContent).toContain('工具结果摘要')
     expect(container.textContent).toContain('摘要准入判断')
     expect(container.textContent).toContain('隐私闸门')
     expect(container.textContent).toContain('debug 记录')
-    // 四个开关各自都在**自己那一行**里，行文案与控件成对出现。
+    expect(container.textContent).toContain('干跑')
+    // 五个开关各自都在**自己那一行**里，行文案与控件成对出现。
     expect(rowSwitch(container, '工具结果摘要')).not.toBeNull()
     expect(rowSwitch(container, '摘要准入判断')).not.toBeNull()
     expect(rowSwitch(container, '隐私闸门')).not.toBeNull()
     expect(rowSwitch(container, 'debug 记录')).not.toBeNull()
+    expect(rowSwitch(container, '干跑')).not.toBeNull()
   })
 
   it('点摘要开关写 summarize=true，点隐私开关写 privacyGate=true（各写各的字段）', async () => {
@@ -415,5 +417,48 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
 
     const off = await renderPage({ privacyGate: false, routeConfirmedLocal: false })
     expect(off.container.textContent).not.toContain(off.fixture.t('routeUnconfirmedWarning'))
+  })
+})
+
+describe('票 08 第 1 条：干跑开关与「干跑不生效」提示', () => {
+  /**
+   * 按页签的形状渲染一次。
+   * @param initial - 渲染前先写进 settings 替身的取值（干跑提示这类静态状态的用例要用它）。
+   */
+  async function renderTab(
+    initial: Partial<StubSection> = {},
+  ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperTabInjected }> {
+    const fixture = await mounted()
+    fixture.form.value = { ...fixture.form.value, ...initial }
+    const entry = only(fixture, 'settings.plugins.tab')
+    const face = entry.options.inject!() as ResultClipperTabInjected
+    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...props} />)
+    return { fixture, container, face }
+  }
+
+  it('点干跑开关写 dryRun=true（不是 debug 那一路）', async () => {
+    const { fixture, container, face } = await renderTab()
+    await fireEvent.click(rowSwitch(container, '干跑'))
+    expect(fixture.form.writes).toEqual([{ field: 'dryRun', value: true }])
+    // 读回绑定也要落在干跑那个字段上：只断言写入数组的话，把 hook 映射到别的字段仍会绿。
+    expect(face.hooks.dryRun.getSnapshot()).toBe(true)
+    expect(face.hooks.debug.getSnapshot()).toBe(false)
+  })
+
+  it('干跑开启而 debug 关闭或日志路径为空时提示不生效；两者都就位后提示消失', async () => {
+    const noDebug = await renderTab({ dryRun: true, debug: false, debugPath: '/tmp/dry.jsonl' })
+    expect(noDebug.container.textContent).toContain(noDebug.fixture.t('dryRunInactiveHint'))
+
+    const noPath = await renderTab({ dryRun: true, debug: true, debugPath: '' })
+    expect(noPath.container.textContent).toContain(noPath.fixture.t('dryRunInactiveHint'))
+
+    const ready = await renderTab({ dryRun: true, debug: true, debugPath: '/tmp/dry.jsonl' })
+    expect(ready.container.textContent).not.toContain(ready.fixture.t('dryRunInactiveHint'))
+
+    // 阳性对照：干跑没开时这一行根本不该出现提示（否则上一条断的就只是「这行文案一直在」）。
+    const off = await renderTab({ dryRun: false, debug: false, debugPath: '' })
+    expect(off.container.textContent).not.toContain(off.fixture.t('dryRunInactiveHint'))
   })
 })

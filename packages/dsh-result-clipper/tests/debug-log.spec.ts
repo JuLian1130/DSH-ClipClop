@@ -1,5 +1,5 @@
 /**
- * 票 02 第 4、5 条：debug 管道。
+ * 票 02 第 4、5 条：debug 管道（字段集合随引入票扩展，08 起含缓存观测与判断器输入 token 数）。
  *
  * 观察面是**写出的文件本身**：开启后按追加方式产出 metadata JSONL（工具名、结果大小、调用耗时），摘要关闭时
  * 记 `summary-off`；关闭或路径为空时零写盘。第 5 条把记录反序列化后逐键核对——字段集合里没有正文、摘要
@@ -63,7 +63,7 @@ function readRecords(path: string): unknown[] {
 }
 
 describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => {
-  it('一条工具结果写一行，字段是工具名、结果大小、准入结论、调用耗时与 summary-off', async () => {
+  it('一条工具结果写一行，字段是工具名、结果大小、准入结论、调用耗时、两个观测字段与 summary-off', async () => {
     const root = tempRoot()
     const path = join(root, 'nested', 'debug.jsonl')
     const fixture = await mounted({ summarize: false, debug: true, debugPath: path })
@@ -81,6 +81,8 @@ describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => 
       resultBytes: Buffer.byteLength(body, 'utf8'),
       admission: 'not-applicable',
       durationMs: expect.any(Number),
+      cacheObservation: 0,
+      judgeInputTokens: null,
       action: 'unmodified',
       reason: 'summary-off',
     })
@@ -205,7 +207,7 @@ describe('票 02 第 4 条：记录字段与取值随 03 的候选判断扩展',
 })
 
 describe('票 02 第 5 条：记录不含原文、摘要正文、提示词与凭据', () => {
-  it('记录的字段集合固定（06 起含准入结论），且整行文本里不出现工具正文与凭据样例', async () => {
+  it('记录的字段集合固定（06 起含准入结论、08 起含两个观测字段），且整行文本里不出现工具正文与凭据样例', async () => {
     const root = tempRoot()
     const path = join(root, 'debug.jsonl')
     const body = 'SECRET-TOOL-BODY-7f2a'
@@ -219,6 +221,8 @@ describe('票 02 第 5 条：记录不含原文、摘要正文、提示词与凭
     expect(raw).not.toContain('SECRET-PROMPT')
     expect(raw).not.toContain('sk-credential')
     const [record] = readRecords(path) as [Record<string, unknown>]
-    expect(Object.keys(record).sort()).toEqual(['action', 'admission', 'durationMs', 'reason', 'resultBytes', 'toolName'])
+    expect(Object.keys(record).sort()).toEqual([
+      'action', 'admission', 'cacheObservation', 'durationMs', 'judgeInputTokens', 'reason', 'resultBytes', 'toolName',
+    ])
   })
 })

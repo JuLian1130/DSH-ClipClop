@@ -4,7 +4,8 @@
  * 全部字段都 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
  * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、摘要准入判断关闭、主 route 与准入 route 未配置、
- * 阈值 1024/12500、三类请求各自关闭推理、提示词留空（用内置规则正文）、debug 关闭且不自动改用临时路径。
+ * 阈值 1024/12500、三类请求各自关闭推理、提示词留空（用内置规则正文）、debug 关闭且不自动改用临时路径、
+ * 干跑关闭。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
  * 清回空串。准入 route 的两个字段留空时跟随主 route（准入请求与摘要请求共用主 route 的部署最常见）。
@@ -33,6 +34,8 @@ export interface Config {
   debug?: Volatile<boolean>
   /** debug JSONL 路径；空串表示没有配置路径，此时不开 debug 也不写盘。 */
   debugPath?: Volatile<string>
+  /** 干跑开关，默认关闭；开启且 debug 开关与路径都就位时只写「本应发生什么」的记录（用户故事 50）。 */
+  dryRun?: Volatile<boolean>
   /** 主 route 的 provider（摘要与隐私共用）；空串表示未配置，此时摘要路径失败并透传。 */
   routeProvider?: Volatile<string>
   /** 主 route 的 model id；与 provider 一起决定请求发往哪条 route。 */
@@ -70,6 +73,7 @@ export const Config = z.object({
   admissionJudge: z.boolean().default(false).volatile(),
   debug: z.boolean().default(false).volatile(),
   debugPath: z.string().default('').volatile(),
+  dryRun: z.boolean().default(false).volatile(),
   routeProvider: z.string().default('').volatile(),
   routeModel: z.string().default('').volatile(),
   admissionProvider: z.string().default('').volatile(),

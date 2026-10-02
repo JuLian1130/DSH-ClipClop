@@ -17,6 +17,7 @@
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, composeRequestPrefix, requestModelText } from './summary.ts'
+import type { ModelCallUsage } from './summary.ts'
 
 /** 内置的准入规则正文，也是页面「恢复默认」回落到的值（用户故事 46）。 */
 export const DEFAULT_ADMISSION_RULE = [
@@ -55,13 +56,24 @@ export function parseAdmissionOutput(text: string): boolean | undefined {
 }
 
 /**
+ * 一次准入判断的收场：严格解析出的结论与这次请求的用量。判断失败（非法结果、超时、不可用）只让结论为空，
+ * 不影响用量是否被记录。
+ */
+export interface AdmissionOutcome {
+  /** `yes` 为 `true`、`no` 为 `false`；判断失败时为 `undefined`。 */
+  readonly answer: boolean | undefined
+  /** 这次请求的用量；底层没报告时为 `undefined`。 */
+  readonly usage: ModelCallUsage | undefined
+}
+
+/**
  * 发一次准入请求并解析结论。请求只带共用前缀、规则正文与固定外壳——不含工具正文。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param provider - 准入 route 的 provider。
  * @param model - 准入 route 的 model id。
  * @param disableReasoning - 是否关闭推理；关闭时显式传 `off`。
  * @param prompt - {@link composeAdmissionPrompt} 的产物。
- * @returns `yes` 为 `true`、`no` 为 `false`；任何失败都是 `undefined`。
+ * @returns `yes` 为 `true`、`no` 为 `false`；任何失败都是空结论。
  */
 export async function requestAdmission(
   llm: LlmRuntime,
@@ -69,7 +81,7 @@ export async function requestAdmission(
   model: string,
   disableReasoning: boolean,
   prompt: string,
-): Promise<boolean | undefined> {
+): Promise<AdmissionOutcome> {
   const options: GenerateOptions = {
     provider,
     model,
@@ -80,5 +92,7 @@ export async function requestAdmission(
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
   const result = await requestModelText(llm, options)
-  return result.ok ? parseAdmissionOutput(result.text) : undefined
+  return result.ok
+    ? { answer: parseAdmissionOutput(result.text), usage: result.usage }
+    : { answer: undefined, usage: undefined }
 }

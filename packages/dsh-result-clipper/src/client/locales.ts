@@ -13,6 +13,9 @@ export type ResultClipperLocaleKey =
   | 'privacyGateHint'
   | 'debug'
   | 'debugHint'
+  | 'dryRun'
+  | 'dryRunHint'
+  | 'dryRunInactiveHint'
   | 'flowWarning'
   | 'routeProvider'
   | 'routeProviderHint'
@@ -63,6 +66,9 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   privacyGateHint: '开启后每个标准工具结果先经本地模型判断；默认关闭。',
   debug: 'debug 记录',
   debugHint: '开启后向下面的日志路径追加 metadata 记录；关闭时不写盘。',
+  dryRun: '干跑',
+  dryRunHint: '开启后走完整流水线但只写诊断记录：不替换内容、不写会话事件、不调用存储、不写 memo。需要同时开启 debug 记录并填好日志路径。',
+  dryRunInactiveHint: '干跑未生效：debug 记录关闭或日志路径为空，工具结果仍会被照常替换。',
   flowWarning: '摘要会把工具正文发送给所选 route。',
   routeProvider: '摘要 route 的 provider',
   routeProviderHint: '摘要与隐私请求发往这条 provider 路由；留空时摘要路径失败并原样透传。',
@@ -114,6 +120,9 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   privacyGateHint: 'Judges every standard tool result locally before it reaches the model; off by default.',
   debug: 'Debug records',
   debugHint: 'Appends metadata records to the log path below; nothing is written while off.',
+  dryRun: 'Dry run',
+  dryRunHint: 'Runs the whole pipeline but only writes diagnostics: no replacement, no session events, no storage, no memo. Needs debug records on and a log path filled in.',
+  dryRunInactiveHint: 'Dry run is not in effect: debug records are off or the log path is empty, so tool results are still replaced.',
   flowWarning: 'Summarization sends the tool body to the selected route.',
   routeProvider: 'Summary route provider',
   routeProviderHint: 'Summary and privacy requests go to this provider route; while empty the summary path fails and passes the result through.',

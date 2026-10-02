@@ -48,7 +48,7 @@ describe('插件入口', () => {
 })
 
 describe('配置契约', () => {
-  it('默认配置合法且可装载，两个能力与 debug 都默认关闭、路径为空，route/阈值/提示词取首版默认', async () => {
+  it('默认配置合法且可装载，两个能力与 debug、干跑都默认关闭、路径为空，route/阈值/提示词取首版默认', async () => {
     const { fiber, error } = await load({})
     expect(error).toBeUndefined()
     expect(fiber.config?.summarize.get()).toBe(false)
@@ -56,6 +56,7 @@ describe('配置契约', () => {
     expect(fiber.config?.admissionJudge.get()).toBe(false)
     expect(fiber.config?.debug.get()).toBe(false)
     expect(fiber.config?.debugPath.get()).toBe('')
+    expect(fiber.config?.dryRun.get()).toBe(false)
     expect(fiber.config?.routeProvider.get()).toBe('')
     expect(fiber.config?.routeModel.get()).toBe('')
     expect(fiber.config?.admissionProvider.get()).toBe('')
@@ -74,10 +75,11 @@ describe('配置契约', () => {
   })
 
   it('显式取值覆盖默认值（volatile 引用，装载后按它读）', async () => {
-    const { fiber } = await load({ summarize: true, debug: true, debugPath: '/tmp/result-clipper.jsonl' })
+    const { fiber } = await load({ summarize: true, debug: true, debugPath: '/tmp/result-clipper.jsonl', dryRun: true })
     expect(fiber.config?.summarize.get()).toBe(true)
     expect(fiber.config?.debug.get()).toBe(true)
     expect(fiber.config?.debugPath.get()).toBe('/tmp/result-clipper.jsonl')
+    expect(fiber.config?.dryRun.get()).toBe(true)
     expect(fiber.config?.privacyGate.get()).toBe(false)
 
     const tuned = await load({

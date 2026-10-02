@@ -22,6 +22,7 @@ import Settings from '@deepseek-ai/dsh-settings'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as plugin from '../../src/index.ts'
+import type { FakeRoute } from './route.ts'
 
 /** settings 命名空间 = profile patch 行的 id（本插件的 host 入口名，不是包名）。 */
 export const PREFERENCE_NAMESPACE = 'dsh-result-clipper'
@@ -33,6 +34,7 @@ export interface LiveConfig {
   readonly admissionJudge: { get(): boolean }
   readonly debug: { get(): boolean }
   readonly debugPath: { get(): string }
+  readonly dryRun: { get(): boolean }
   readonly routeProvider: { get(): string }
   readonly routeModel: { get(): string }
   readonly admissionProvider: { get(): string }
@@ -68,9 +70,10 @@ export function cleanupProfiles(): void {
 /**
  * 装一条最小 profile：settings + 编辑器 + 工具运行时 + 被测插件各一行。
  * @param config - 被测插件那一行的 profile 配置（用户层）。
+ * @param llm - 可选的假 route；给出时 profile 里就有 `llm` 服务，摘要路径可以真的发出请求。
  * @returns 该 profile 的能力对象。
  */
-export async function bootProfile(config: Record<string, unknown>): Promise<LiveFixture> {
+export async function bootProfile(config: Record<string, unknown>, llm?: FakeRoute): Promise<LiveFixture> {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-result-clipper-')))
   roots.push(home)
   const dir = join(home, 'profiles', 'test')
@@ -104,6 +107,8 @@ export async function bootProfile(config: Record<string, unknown>): Promise<Live
   }
   const ctx = await boot('dsh', join(dir, 'cordis.yml'), readProfilePatches('dsh', profile), (root) => {
     root.provide('profileContext', profile)
+    // `llm` 是按名取自 context 的（插件每次处理结果都 `ctx.get('llm')`），所以替身照服务面挂上即可。
+    if (llm !== undefined) root.provide('llm', llm as never)
     Object.assign(root.loader.builtins, {
       editor: ConfigEditor,
       settings: Settings,
@@ -125,6 +130,7 @@ function resolvedConfig(ctx: Context): LiveConfig {
   const config = entry?.fiber?.config as Partial<LiveConfig> | undefined
   if (config?.summarize === undefined || config.privacyGate === undefined
     || config.admissionJudge === undefined || config.debug === undefined || config.debugPath === undefined
+    || config.dryRun === undefined
     || config.routeProvider === undefined || config.routeModel === undefined
     || config.admissionProvider === undefined || config.admissionModel === undefined
     || config.minInlineTokens === undefined || config.maxSummarizeTokens === undefined
