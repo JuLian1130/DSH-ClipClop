@@ -19,6 +19,10 @@
  * 按入口读回（`read` 的 `file_path` 命中本会话写出的 `locator`）时跳过整个摘要路径、记 `read-back`；台账按
  * 会话 id 分开，重启或 fork 后同一入口按普通 `read` 处理。
  *
+ * 本票（05）在候选判定与摘要请求之间接入**摘要 memo**：隐私关闭时按（工具名, 正文 hash）在当前会话内复用
+ * 同一条摘要，命中即不再发带正文的摘要请求（查找在准入判断之前，06 的准入阶段插在它之后）；`keep` 与失败
+ * 没有摘要可复用，因此不进 memo；隐私开启时不查找、不写入 memo（裁决 B）。
+ *
  * 每条普通派发在 debug 记录里留一条闭合的「结果取值」：摘要关闭 `summary-off`、非候选 `not-candidate`、
  * 保留全文 `kept`、没变短 `not-shorter`、按入口读回 `read-back`、失败 `failed`、已替换 `summarized`。
  *
@@ -34,6 +38,7 @@ import { candidateOf } from './candidate.ts'
 import type { Config } from './config.ts'
 import { appendDebugRecord, measureContent, type DebugOutcome, type DebugRecord } from './debug.ts'
 import { ENTRY_RESERVE, isReadBack, noteReadback, writeEntry, type ReadbackLedger } from './entry.ts'
+import { lookupMemo, noteMemo, type SummaryMemo } from './memo.ts'
 import { composeSummaryPrompt, requestSummary } from './summary.ts'
 
 export * from './config.ts'
@@ -41,6 +46,7 @@ export * from './debug.ts'
 export * from './candidate.ts'
 export * from './summary.ts'
 export * from './entry.ts'
+export * from './memo.ts'
 
 export const name = 'dsh-result-clipper'
 
@@ -59,11 +65,13 @@ export const inject = ['tools']
 export function apply(ctx: Context, config: Required<Config>): void {
   /** 本会话写出的入口 `locator`，按会话 id 分开（fork 出的新会话不继承父会话的入口）。 */
   const readback: ReadbackLedger = new Map()
+  /** 本会话已产出的摘要，按会话 id 分开（重启或 fork 后不复用）。 */
+  const memo: SummaryMemo = new Map()
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     if (exec.parent !== undefined) return next()
     const startedAt = performance.now()
     const decision = await next()
-    const applied = await summarize(ctx, config, readback, exec, result, decision)
+    const applied = await summarize(ctx, config, readback, memo, exec, result, decision)
       // 摘要路径的任何意外都不得把工具调用变成错误结果：透传并记 `failed`。
       .catch((): Summarized => ({ decision, outcome: { action: 'unmodified', reason: 'failed' } }))
     await record(config, exec.name, result, startedAt, applied.outcome)
@@ -78,10 +86,11 @@ interface Summarized {
 }
 
 /**
- * 摘要路径：判定候选（含读回识别）、发一次请求、按结论决定替换还是透传；要替换时先写原结果入口。
+ * 摘要路径：判定候选（含读回识别）、查 memo 或发一次请求、按结论决定替换还是透传；要替换时先写原结果入口。
  * @param ctx - 插件的 context。
  * @param config - 解析后的配置。
  * @param readback - 本进程内各会话写出的入口台账。
+ * @param memo - 本进程内各会话已产出的摘要。
  * @param exec - 工具执行（会话归属与 `read` 的路径）。
  * @param result - 工具结果的原始投影（摘要资格按它测量）。
  * @param decision - 下游（含 spill）的决策。
@@ -91,6 +100,7 @@ async function summarize(
   ctx: Context,
   config: Required<Config>,
   readback: ReadbackLedger,
+  memo: SummaryMemo,
   exec: ToolExecution,
   result: Readonly<ToolExecutionResult>,
   decision: PostToolDecision,
@@ -105,24 +115,34 @@ async function summarize(
   const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
   if (verdict.kind === 'skip') return unchanged('not-candidate')
 
-  const provider = config.routeProvider.get()
-  const model = config.routeModel.get()
-  const llm = ctx.get('llm')
-  if (llm === undefined || provider === '' || model === '') return unchanged('failed')
-  const action = await requestSummary(
-    llm, provider, model, config.summaryDisableReasoning.get(),
-    composeSummaryPrompt(config.summaryPrompt.get(), verdict.text),
-  )
-  if (action === undefined) return unchanged('failed')
-  // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储。
-  if (action.action === 'keep') return unchanged('kept')
+  // memo 只在隐私关闭时参与判重（裁决 B），并且必须在准入判断之前查找——命中即整条摘要请求路径短路。
+  const privacy = config.privacyGate.get()
+  const reused = privacy ? undefined : lookupMemo(memo, exec, verdict.text)
+  let summary: string
+  if (reused !== undefined) {
+    summary = reused
+  } else {
+    const provider = config.routeProvider.get()
+    const model = config.routeModel.get()
+    const llm = ctx.get('llm')
+    if (llm === undefined || provider === '' || model === '') return unchanged('failed')
+    const action = await requestSummary(
+      llm, provider, model, config.summaryDisableReasoning.get(),
+      composeSummaryPrompt(config.summaryPrompt.get(), verdict.text),
+    )
+    if (action === undefined) return unchanged('failed')
+    // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，不写存储，也没有摘要可进 memo。
+    if (action.action === 'keep') return unchanged('kept')
+    summary = action.summary
+    if (!privacy) noteMemo(memo, exec, verdict.text, summary)
+  }
 
   // 比较基准取**模型可见投影**（下游决策的内容），不是候选资格用的原始投影：要被替换掉的是这一段，
   // 只有摘要比它短才划算。默认部署下 spill 与本插件的上限同为 12500，候选内两者一致。
   const visible = decision.content ?? result.content
   const original = textOf(visible)
   // 入口说明的实际值写盘前取不到，所以比较用它的预留上界（裁决 A）：不短就透传、一次 `saveText` 都不发。
-  if (action.summary.length + ENTRY_RESERVE >= original.length) return unchanged('not-shorter')
+  if (summary.length + ENTRY_RESERVE >= original.length) return unchanged('not-shorter')
 
   const store = ctx.get('spillStore')
   if (store === undefined) return unchanged('failed')
@@ -133,7 +153,7 @@ async function summarize(
   return {
     decision: {
       kind: 'accept',
-      content: [{ type: 'text', text: written.entry + action.summary }],
+      content: [{ type: 'text', text: written.entry + summary }],
       ...decision.additionalContexts === undefined ? {} : { additionalContexts: decision.additionalContexts },
     },
     outcome: { action: 'summarized' },
