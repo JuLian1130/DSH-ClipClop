@@ -1,5 +1,5 @@
 /**
- * 票 03 第 8、11 条：替换后的落盘内容被 token 计量器读到（自动压缩的触发随之推迟），且启用摘要不改变既有
+ * 票 03 第 10、11 条：替换后的落盘内容被 token 计量器读到（自动压缩的触发随之推迟），且启用摘要不改变既有
  * 助手消息（推理裁剪器的输入面）。
  *
  * 观察面是**真会话**：`tool/result` 事件的落盘投影与 `ctx.tokenMeter.measure(session)` 的表面读数。两臂
@@ -66,7 +66,7 @@ function assistantContent(fixture: LoopFixture): readonly (readonly ContentBlock
     .map(event => (event.data as { message: { content: readonly ContentBlock[] } }).message.content)
 }
 
-describe('票 03 第 8 条：替换后的落盘内容被 token 计量器读到', () => {
+describe('票 03 第 10 条：替换后的落盘内容被 token 计量器读到', () => {
   it('会话里落盘的是摘要，且计量器的表面读数按摘要计价（阴性对照：关闭摘要时按原文计价）', async () => {
     const on = await tracked({ summarize: true, routeProvider: 'mock', routeModel: 'mock' })
     const off = await tracked({ summarize: false })

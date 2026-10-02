@@ -1,5 +1,5 @@
 /**
- * 票 03 第 1–7、10–12 条：摘要最小闭环。
+ * 票 03 第 1–9 条：摘要最小闭环。
  *
  * 观察面只有两个：**工具执行的结果**（`ctx.tools.execute` 走完整个 post-execute 瀑布后模型拿到什么）与
  * **假 route 收到的请求**（`ctx.llm.stream` 的入参）。debug 取值从写出的 JSONL 读。每条阳性断言都要求
@@ -121,7 +121,7 @@ describe('票 03：候选之外的结果与原样透传', () => {
   })
 
   it('含图片等非文本块的结果透传、不发请求', async () => {
-    const { fixture, route } = await mounted()
+    const { fixture, route, path } = await mounted()
     const multimodal = [
       { type: 'text', text: LONG_BODY },
       { type: 'image', attachment: {} },
@@ -134,6 +134,7 @@ describe('票 03：候选之外的结果与原样透传', () => {
     expect(route.requests).toHaveLength(0)
     expect(result.content.some(block => block.type === 'image')).toBe(true)
     expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path)).toEqual([expect.objectContaining({ reason: 'not-candidate' })])
   })
 
   it('低于下限的结果原样保留、不发请求', async () => {
@@ -177,6 +178,7 @@ describe('票 03：摘要路径的失败一律原样透传且不抛出', () => {
     const { fixture, route, path } = await mounted({ routeProvider: '', routeModel: '' })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
+    expect(result.isError).toBe(false)
     expect(textOf(result.content)).toBe(LONG_BODY)
     expect(route.requests).toHaveLength(0)
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ reason: 'failed' }))

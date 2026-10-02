@@ -102,6 +102,8 @@ async function summarize(
   // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用。
   if (action.action === 'keep') return unchanged('kept')
 
+  // 比较基准取**模型可见投影**（下游决策的内容），不是候选资格用的原始投影：要被替换掉的是这一段，
+  // 只有摘要比它短才划算。默认部署下 spill 与本插件的上限同为 12500，候选内两者一致。
   const visible = decision.content ?? result.content
   if (action.summary.length >= textOf(visible).length) return unchanged('not-shorter')
   return {
