@@ -200,7 +200,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     expect(realSpill.saves).toHaveLength(1)
   })
 
-  it('干跑不写 memo：同一工具同一正文连续两次干跑各发一次请求；关掉干跑后仍重新发请求', async () => {
+  it('干跑既不写也不查 memo：干跑各发一次请求，真实运行写入后干跑仍不命中', async () => {
     const path = join(tempRoot(), 'debug.jsonl')
     const route = new FakeRoute([{ text: SUMMARY_REPLY }])
     const fixture = await booted({
@@ -210,7 +210,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
     await fixture.ctx.tools.execute(exec('bash'))
-    // 干跑既不写 memo 也不查它：第二次仍走完整流水线（若写了 memo，第二次会命中、请求数停在 1）。
+    // 查找侧：干跑不查 memo，所以连续两次干跑各发一次请求（若查且写过，第二次会命中、请求数停在 1）。
     expect(route.requests).toHaveLength(2)
 
     // 写入侧：关掉干跑后同一条正文再跑一次仍必须重新发请求（若干跑写过 memo，这里会命中、请求数停在 2）。
@@ -218,6 +218,12 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     expect(fixture.config.dryRun.get()).toBe(false)
     await fixture.ctx.tools.execute(exec('bash'))
     expect(route.requests).toHaveLength(3)
+
+    // 上面这次真实运行按（工具名, 正文 hash）写进了 memo；再开干跑跑同一条正文仍会发请求——
+    // 干跑若查 memo，这里会命中上面那条、请求数停在 3。
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['dryRun'], value: true }])
+    await fixture.ctx.tools.execute(exec('bash'))
+    expect(route.requests).toHaveLength(4)
   })
 
   it('干跑不占用失效提醒的名额：干跑时未判定放行不提醒，关掉干跑后同一条失效仍能得到提醒', async () => {
@@ -305,7 +311,7 @@ describe('票 08 第 3 条：干跑在 debug 日志里写出本应发生什么',
 })
 
 describe('票 08 第 4 条：干跑记录受同一条禁写约束', () => {
-  it('「本应替换」只记动作与原因：记录里没有摘要正文、没有原文，也没有入口 locator', async () => {
+  it('「本应替换」只记动作与原因：记录里没有摘要正文、原文、入口 locator、提示词与凭据', async () => {
     const path = join(tempRoot(), 'debug.jsonl')
     const spill = new FakeSpill()
     const fixture = await mounted(
@@ -313,13 +319,21 @@ describe('票 08 第 4 条：干跑记录受同一条禁写约束', () => {
       new FakeRoute([{ text: SUMMARY_REPLY }]), spill,
     )
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await fixture.ctx.tools.execute(exec('bash'))
+    // 提示词与凭据放进工具参数：监听器拿得到整个 `exec`，这是现实的泄漏面（与票 02 的字段集合用例同形）。
+    await fixture.ctx.tools.execute(exec('bash', undefined, { prompt: 'SECRET-PROMPT', apiKey: 'sk-credential' }))
 
+    // 「不写入口」的观察面：干跑一次 `saveText` 都不发，所以这条结果没有任何入口可记。
+    expect(spill.saves).toHaveLength(0)
     const raw = readFileSync(path, 'utf8')
     expect(raw).not.toContain(SUMMARY)
     expect(raw).not.toContain('x'.repeat(64))
-    // 入口由 `saveText` 产生、干跑不调用它，所以记录里也不可能出现接口 locator。
     expect(raw).not.toContain('/spill/')
-    expect(readRecords(path)[0]).toEqual(expect.objectContaining({ action: 'summarized', dryRun: true }))
+    expect(raw).not.toContain('SECRET-PROMPT')
+    expect(raw).not.toContain('sk-credential')
+    // 记录只留动作、结果取值与观测字段：没有放摘要文本、原文或入口的位置。
+    const [record] = readRecords(path)
+    expect(Object.keys(record!).sort()).toEqual([
+      'action', 'admission', 'cacheObservation', 'dryRun', 'durationMs', 'judgeInputTokens', 'resultBytes', 'toolName',
+    ])
   })
 })
