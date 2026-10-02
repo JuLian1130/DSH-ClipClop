@@ -3,8 +3,8 @@
  *
  * 记录**不含**原文、摘要正文、完整提示词与凭据（规格「契约 · debug JSONL 字段」），所以这里的字段只有
  * 元数据。`结果取值` 是封闭的两段式（动作 + 未改动原因）：本票引入 `not-candidate`、`kept`、`not-shorter`、
- * `failed`，加上 02 已有的 `summary-off`；其余取值由引入对应机制的票各自加入（`admission-no` 自 06、
- * `read-back` 自 04、`uncertain` / `failed-window` / `rejected` 自 07）。
+ * `failed`，加上 02 已有的 `summary-off`；04 引入 `read-back`；其余取值由引入对应机制的票各自加入
+ * （`admission-no` 自 06、`uncertain` / `failed-window` / `rejected` 自 07）。
  *
  * @module
  */
@@ -14,7 +14,13 @@ import { dirname } from 'node:path'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
 /** `unmodified` 的透传原因。新增取值随引入它的机制一起加到这里。 */
-export type UnmodifiedReason = 'summary-off' | 'not-candidate' | 'kept' | 'not-shorter' | 'failed'
+export type UnmodifiedReason =
+  | 'summary-off'
+  | 'not-candidate'
+  | 'kept'
+  | 'not-shorter'
+  | 'read-back'
+  | 'failed'
 
 /** 一条记录的「结果取值」：动作取闭集之一，`unmodified` 时必须附原因。 */
 export type DebugOutcome =

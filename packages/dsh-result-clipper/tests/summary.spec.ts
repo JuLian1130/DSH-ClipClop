@@ -17,6 +17,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { PostToolDecision } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
+import { composeEntry } from '../src/entry.ts'
 import { DEFAULT_SUMMARY_RULE } from '../src/summary.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
@@ -81,6 +82,16 @@ function records(path: string): Array<Record<string, unknown>> {
   return readFileSync(path, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
 }
 
+/**
+ * 替换后的模型可见文本：入口说明（04 起写盘产出）在最前，其后是摘要正文。
+ * @param fixture - 夹具。
+ * @returns 期望的替换文本。
+ */
+function replacedText(fixture: HostFixture): string {
+  if (fixture.spill === undefined) throw new Error('fixture: no spill backend')
+  return composeEntry(fixture.spill.refs[0]!) + SHORT_SUMMARY
+}
+
 describe('票 03：三类工具的长文本结果被改写成短说明、只替换 content', () => {
   it.each(['bash', 'web_fetch', 'read'])('%s 的长文本结果被替换为短说明，且假 route 收到过一次请求', async (toolName) => {
     const { fixture, route, path } = await mounted()
@@ -88,7 +99,7 @@ describe('票 03：三类工具的长文本结果被改写成短说明、只替�
     const result = await fixture.ctx.tools.execute(exec(toolName))
 
     expect(result.isError).toBe(false)
-    expect(result.content).toEqual([{ type: 'text', text: SHORT_SUMMARY }])
+    expect(result.content).toEqual([{ type: 'text', text: replacedText(fixture) }])
     expect(route.requests).toHaveLength(1)
     expect(records(path)).toEqual([
       expect.objectContaining({ toolName, action: 'summarized' }),
@@ -105,7 +116,7 @@ describe('票 03：三类工具的长文本结果被改写成短说明、只替�
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
     expect(route.requests).toHaveLength(1)
-    expect(result.content).toEqual([{ type: 'text', text: SHORT_SUMMARY }])
+    expect(result.content).toEqual([{ type: 'text', text: replacedText(fixture) }])
     expect(result.additionalContexts).toEqual([attached])
   })
 })
@@ -160,7 +171,7 @@ describe('票 03：候选之外的结果与原样透传', () => {
     const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('read', HUGE_BODY))
     const read = await fixture.ctx.tools.execute(exec('read'))
-    expect(textOf(read.content)).toBe(SHORT_SUMMARY)
+    expect(textOf(read.content)).toBe(composeEntry(fixture.spill!.refs[0]!) + SHORT_SUMMARY)
     expect(route.requests).toHaveLength(1)
   })
 })
@@ -232,7 +243,7 @@ describe("票 03：keep 与「没变短」", () => {
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'kept' }))
   })
 
-  it('摘要正文没比原文短时保留原文（本票只比摘要正文）', async () => {
+  it('摘要正文没比原文短时保留原文（04 起比较计入入口说明的预留上界）', async () => {
     const { fixture, path } = await mounted({}, [{ text: JSON.stringify({ action: 'summarize', summary: 'z'.repeat(LONG_BODY.length) }) }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))

@@ -22,6 +22,7 @@ import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import * as plugin from '../../src/index.ts'
 import type { Config } from '../../src/index.ts'
+import { FakeSpill } from './spill.ts'
 
 /** 本夹具注册的工具名；脚本里的工具调用写它。 */
 const TOOL = 'bash'
@@ -115,6 +116,8 @@ export interface LoopFixture {
   readonly agent: Agent
   /** 脚本化 route 收到的请求。 */
   readonly requests: readonly GenerateOptions[]
+  /** 摘要改写的替换值来自哪个假 spill 入口。 */
+  readonly spill: FakeSpill
   dispose(): Promise<void>
 }
 
@@ -135,6 +138,8 @@ export async function runLoop(
   await ctx.plugin(TokenMeter)
   const adapter = new ScriptedAdapter(summary)
   ctx.llm.registerAdapter(['mock'], adapter)
+  const spill = new FakeSpill()
+  ctx.provide('spillStore', spill as never)
   await ctx.plugin(plugin, config)
   const harness = await mountAgentLoopTestHarness(ctx)
   ctx.tools.register(defineContentToolFixture({
@@ -148,6 +153,7 @@ export async function runLoop(
     ctx,
     agent,
     get requests() { return adapter.requests },
+    spill,
     dispose: async () => { await ctx.fiber.dispose() },
   }
 }

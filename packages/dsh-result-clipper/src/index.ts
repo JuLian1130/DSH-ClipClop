@@ -2,18 +2,25 @@
  * dsh-result-clipper 的 Cordis 插件入口：具名导出 `name`、`inject`、`Config`、`apply`，按 DSH 原生插件
  * 写法由 profile 的 `cordis.patch.yml` 装载。
  *
- * 本票（03）在 02 的放行骨架之上接出**摘要最小闭环**：`exec.parent !== undefined` 的 PTC 子派发照旧直接
- * `next()`；其余普通派发先 `await next()` 让下游（含 spill）跑完，再按候选范围决定是否改写模型可见投影。
- * 只有三类目标工具、文本结果、长度在 [`minInlineTokens`, `maxSummarizeTokens`) 区间内（`read` 无上界）
- * 才发摘要请求；候选之外的、`bash`/`web_fetch` 超上限的、失败的、模型要求 `keep` 的、摘要没变短的，一律
- * 原样透传。替换只改 `content`，`additionalContexts` 原样保留（ADR 0003）。
+ * 本票（04）在 03 的摘要最小闭环之上接出**原结果入口与读回识别**：`exec.parent !== undefined` 的 PTC 子派发
+ * 照旧直接 `next()`；其余普通派发先 `await next()` 让下游（含 spill）跑完，再按候选范围决定是否改写模型可见
+ * 投影。只有三类目标工具、文本结果、长度在 [`minInlineTokens`, `maxSummarizeTokens`) 区间内（`read` 无上界）
+ * 才发摘要请求；候选之外的、`bash`/`web_fetch` 超上限的、失败的、模型要求 `keep` 的、摘要没变短的、按入口
+ * 读回的，一律原样透传。替换只改 `content`，`additionalContexts` 原样保留（ADR 0003）。
+ *
+ * 被替换的正文先写进 spill 存储，把 `locator` 与取回方法作为入口说明放在摘要正文最前；长度比较计入入口
+ * 说明的预留上界、发生在写盘之前（设计文档裁决 A），所以 `not-shorter` 与 `keep` 都不留无人引用的副本。
+ * 存储后端缺失、写入失败或调用没有会话归属时透传不摘要——「没有入口就不摘要」。
  *
  * 摘要请求的 route 与两个阈值、「关闭推理」开关与提示词规则正文由配置面给出（保存即生效）；模型不可用、
  * 未配置 route、超时、空结果与非法结果都是摘要路径的失败，等价于透传，且绝不抛出——`tools/post-execute`
  * 抛错会把整个工具调用变成错误结果。
  *
+ * 按入口读回（`read` 的 `file_path` 命中本会话写出的 `locator`）时跳过整个摘要路径、记 `read-back`；台账按
+ * 会话 id 分开，重启或 fork 后同一入口按普通 `read` 处理。
+ *
  * 每条普通派发在 debug 记录里留一条闭合的「结果取值」：摘要关闭 `summary-off`、非候选 `not-candidate`、
- * 保留全文 `kept`、没变短 `not-shorter`、失败 `failed`、已替换 `summarized`。
+ * 保留全文 `kept`、没变短 `not-shorter`、按入口读回 `read-back`、失败 `failed`、已替换 `summarized`。
  *
  * @module
  */
@@ -22,16 +29,18 @@ import type { Context } from '@deepseek-ai/cordis'
 // 类型专用：激活 `ctx.llm` 的 Context 声明。
 import type {} from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { PostToolDecision, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { candidateOf } from './candidate.ts'
 import type { Config } from './config.ts'
 import { appendDebugRecord, measureContent, type DebugOutcome, type DebugRecord } from './debug.ts'
+import { ENTRY_RESERVE, isReadBack, noteReadback, writeEntry, type ReadbackLedger } from './entry.ts'
 import { composeSummaryPrompt, requestSummary } from './summary.ts'
 
 export * from './config.ts'
 export * from './debug.ts'
 export * from './candidate.ts'
 export * from './summary.ts'
+export * from './entry.ts'
 
 export const name = 'dsh-result-clipper'
 
@@ -48,11 +57,13 @@ export const inject = ['tools']
  * @param config - 解析后的配置；字段都是 volatile 引用，每次调用时读当前值。
  */
 export function apply(ctx: Context, config: Required<Config>): void {
+  /** 本会话写出的入口 `locator`，按会话 id 分开（fork 出的新会话不继承父会话的入口）。 */
+  const readback: ReadbackLedger = new Map()
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     if (exec.parent !== undefined) return next()
     const startedAt = performance.now()
     const decision = await next()
-    const applied = await summarize(ctx, config, exec.name, result, decision)
+    const applied = await summarize(ctx, config, readback, exec, result, decision)
       // 摘要路径的任何意外都不得把工具调用变成错误结果：透传并记 `failed`。
       .catch((): Summarized => ({ decision, outcome: { action: 'unmodified', reason: 'failed' } }))
     await record(config, exec.name, result, startedAt, applied.outcome)
@@ -67,10 +78,11 @@ interface Summarized {
 }
 
 /**
- * 摘要路径：判定候选、发一次请求、按结论决定替换还是透传。
+ * 摘要路径：判定候选（含读回识别）、发一次请求、按结论决定替换还是透传；要替换时先写原结果入口。
  * @param ctx - 插件的 context。
  * @param config - 解析后的配置。
- * @param toolName - 工具名。
+ * @param readback - 本进程内各会话写出的入口台账。
+ * @param exec - 工具执行（会话归属与 `read` 的路径）。
  * @param result - 工具结果的原始投影（摘要资格按它测量）。
  * @param decision - 下游（含 spill）的决策。
  * @returns 交回的决策与结果取值。
@@ -78,7 +90,8 @@ interface Summarized {
 async function summarize(
   ctx: Context,
   config: Required<Config>,
-  toolName: string,
+  readback: ReadbackLedger,
+  exec: ToolExecution,
   result: Readonly<ToolExecutionResult>,
   decision: PostToolDecision,
 ): Promise<Summarized> {
@@ -87,7 +100,9 @@ async function summarize(
   if (!config.summarize.get()) return unchanged('summary-off')
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文，本插件不改写它。
   if (decision.kind === 'block') return unchanged('not-candidate')
-  const verdict = candidateOf(toolName, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
+  // 按入口读回：跳过整个摘要路径（含准入判断）。识别只做字符串比对，见 `entry.ts`。
+  if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
+  const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
   if (verdict.kind === 'skip') return unchanged('not-candidate')
 
   const provider = config.routeProvider.get()
@@ -99,17 +114,26 @@ async function summarize(
     composeSummaryPrompt(config.summaryPrompt.get(), verdict.text),
   )
   if (action === undefined) return unchanged('failed')
-  // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用。
+  // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储。
   if (action.action === 'keep') return unchanged('kept')
 
   // 比较基准取**模型可见投影**（下游决策的内容），不是候选资格用的原始投影：要被替换掉的是这一段，
   // 只有摘要比它短才划算。默认部署下 spill 与本插件的上限同为 12500，候选内两者一致。
   const visible = decision.content ?? result.content
-  if (action.summary.length >= textOf(visible).length) return unchanged('not-shorter')
+  const original = textOf(visible)
+  // 入口说明的实际值写盘前取不到，所以比较用它的预留上界（裁决 A）：不短就透传、一次 `saveText` 都不发。
+  if (action.summary.length + ENTRY_RESERVE >= original.length) return unchanged('not-shorter')
+
+  const store = ctx.get('spillStore')
+  if (store === undefined) return unchanged('failed')
+  // 存储失败与「没有会话归属」都由这一处兜住：抛出的错误走调用点的 catch，按 `failed` 透传。
+  const written = await writeEntry(store, exec, exec.name, original)
+  if (written === undefined) return unchanged('failed')
+  noteReadback(readback, written)
   return {
     decision: {
       kind: 'accept',
-      content: [{ type: 'text', text: action.summary }],
+      content: [{ type: 'text', text: written.entry + action.summary }],
       ...decision.additionalContexts === undefined ? {} : { additionalContexts: decision.additionalContexts },
     },
     outcome: { action: 'summarized' },
