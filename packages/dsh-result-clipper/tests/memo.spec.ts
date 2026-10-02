@@ -8,8 +8,9 @@
  * 会话隔离与上限用同一套夹具直接观测：换一个会话 id 即换一个会话；上限用例用 `minInlineTokens: 0` 让短正文
  * 也进候选，从而不必为 200 条上限造 200 段长正文。
  *
- * 「隐私开启时不写入 memo」这半句在单开关夹具里看不到——查找侧也会挡住命中，写没写观察面一样。那一条用真
- * profile 在同一份插件实例里把开关从隐私开启改到关闭：若写侧失守，第二次会命中并复用，断言随即为假。
+ * 「隐私开启时不查找、不写入 memo」这两半在单开关夹具里都看不到（写入守卫会让 memo 恒为空，查找守卫在或不在
+ * 观察面一样）。那两条用真 profile 在同一份插件实例里改写 volatile 开关：开启→关闭那臂观察写入侧，关闭→开启
+ * 那臂观察查找侧（隐私关闭期先缓存一条摘要，开隐私后必须不再命中）；任一侧失守都会命中并复用，断言随即为假。
  *
  * @module
  */
@@ -243,10 +244,10 @@ describe('票 05：memo 按会话隔离、LRU 上限 200 条', () => {
   })
 })
 
-describe('票 05：隐私开启时不写入 memo（同一夹具里跨开关）', () => {
+describe('票 05：隐私开关的切换不跨边界复用 memo（同一夹具里跨开关）', () => {
   it('隐私开启那一次不进 memo：随后关掉隐私，同一正文仍重新发请求', async () => {
-    // 两条单开关用例各用一份新夹具，观察到的是「不查找」；写入侧只有让两次执行落在**同一份插件实例**上、
-    // 且第二次隐私已关闭时才可见——否则隐私开启的第二次又被查找侧挡住，写没写都一样。
+    // 两条单开关用例各用一份新夹具，且写入守卫会使 memo 恒为空，查找守卫在或不在都一样；写入侧只有让两次
+    // 执行落在**同一份插件实例**上、且第二次隐私已关闭时才可见——否则隐私开启的第二次又被查找侧挡住。
     const fixture = await booted({
       summarize: true, privacyGate: true, routeProvider: 'mock', routeModel: 'mock',
     })
@@ -265,6 +266,31 @@ describe('票 05：隐私开启时不写入 memo（同一夹具里跨开关）',
     const second = await fixture.ctx.tools.execute(exec('bash'))
 
     // 隐私开启时若写进了 memo，这次（隐私已关闭）会命中并复用「摘要A」，请求数停在 1。
+    expect(route.requests).toHaveLength(2)
+    expect(textOf(second.content)).toContain('摘要B')
+  })
+
+  it('隐私关闭期缓存的摘要不进隐私开启后的查找：开隐私后同正文仍重新发请求', async () => {
+    // 反方向的同一件事：写入守卫在时，只有「隐私关闭期先缓存、会话中途开隐私」才会让查找守卫单独可观察——
+    // 否则 memo 恒为空，查不查都 miss。
+    const fixture = await booted({
+      summarize: true, privacyGate: false, routeProvider: 'mock', routeModel: 'mock',
+    })
+    const route = new FakeRoute([{ text: REPLY_A }, { text: REPLY_B }])
+    fixture.ctx.provide('llm', route as never)
+    fixture.ctx.provide('spillStore', new FakeSpill() as never)
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+
+    const first = await fixture.ctx.tools.execute(exec('bash'))
+    // 阳性对照：隐私关闭的这一次确实进了 memo（否则没有可被错误复用的摘要）。
+    expect(route.requests).toHaveLength(1)
+    expect(textOf(first.content)).toContain('摘要A')
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['privacyGate'], value: true }])
+    expect(fixture.config.privacyGate.get()).toBe(true)
+    const second = await fixture.ctx.tools.execute(exec('bash'))
+
+    // 隐私开启时若仍查找 memo，这次会命中并复用「摘要A」，请求数停在 1。
     expect(route.requests).toHaveLength(2)
     expect(textOf(second.content)).toContain('摘要B')
   })
