@@ -197,6 +197,22 @@ interface ReasoningPrunePayload {
   从 catalog 继承协议的 pi-ai 路由**判不准**，保守闸门把它当未知置灰，代价是可能误伤一条本可受益的路由；它会在该路由跑过一个步骤后用 replay 信封自愈。
 - 服务端另有硬强制作：裁剪只作用于**裁剪资格成立**的历史步骤（逐步骤读 replay 信封），资格不成立的步骤原样保留。界面的置灰只是提前告知，不是安全保证。
 
+### 激活点 ⑤：裁剪拒收 → 裁剪还原 + 会话裁剪停用
+
+**为什么需要它**：裁剪后线上发的是「字段在、内容为空」（或某些网关上是字段缺席）的形状。有外部报告表明 DeepSeek V4 Pro 类端点在思考模式 + 携带 `tools` 时**拒收空串**（见「验证状态 · 裁剪拒收的外部证据」）。一旦发生，该会话此后每个请求都带着同一个形状，会**持续 400**，而现有实现只在 `failure.code === CONTEXT_WINDOW_EXCEEDED` 上动作（`packages/dsh-reasoning-pruner/src/index.ts:87-90`）——也就是说会话会卡死，且裁掉的步骤无法自行恢复。
+
+- **触发判据**（三把锁）：`failure.code` 命中「请求被拒」这一支、`failure.message` 命中推理回传措辞、且本会话已存在裁剪事件。第一把锁的依据：pi-ai 把 400 与 `invalid request` 归一成 `INVALID_REQUEST`（`packages/llm/llm-pi-ai/src/stream.ts:49`，字面量、非导出常量），其余码已被 `classifyPiAiError` 分流到 AUTH / QUOTA / RATE_LIMIT / SERVER / TIMEOUT / TRANSPORT；**该路径上 `failure.status` 是空的**（failure 对象只带 `message`/`code`，`stream.ts:125`），所以判据只能建在 `code` + 文本上。放宽到 `PI_AI_ERROR` 是因为网关正文不含 `400`/`invalid request` 字样时会被归到那一档。
+- **还原的表达 = 追加一条新事件类型**，其投影把原文放回：`deriveEventMessage(event)` **不传**第二个参数时跳过投影、直接返回事件自带的 `event.data.message`（`packages/core/session/src/surface.ts:120-127`），而 fold 用普通 `Map.set` 写入 `projectedMessages`（`surface.ts:580`），**后来者覆盖先前的**。⇒ 不需要外部状态、不需要前瞻、增量折叠与全量折叠天然一致。两条纪律：
+  - 投影**不得**读 `context.events` 里候选及其之后的事件——这只是文档契约（`surface.ts:25-26`），结构上 `events` 就是整个日志数组（`surface.ts:606-607`、`:645-650`），靠纪律而不是靠长度保证。
+  - fold **不校验**投影返回的键是否仍是当前表面节点（`surface.ts:573-591` 只做 `Map.set`），任意 seq 都会被静默写入。
+- **还原范围**：只还原**仍是当前表面节点**的目标。被 surface replace（compaction）遮蔽过的 seq 不会从 `projectedMessages` 里被删除（`surface.ts:576-578` 只改 `nodes`，`:614` 只做整体拷贝，全文无 `.delete(`），但它已不在 `nodes` 里、不再进入请求，所以既不是肇因、写回也无效——不动它即可。
+- **停用**：`persist.ts` 的选区与去重本来就全部从日志重建，读到还原/停用事件后不再推进边界即可覆盖 ①②④ 三个入口。三个入口产生的是同一种事件与同一种线上形状，只停其一没有意义。
+- **重试**：返回 `{kind: 'retry'}`（`RequestErrorAction = { kind: 'retry' } | undefined`，`packages/core/agent/src/runtime-types.ts:122`）。waterfall 取**最外层**监听器的返回值（`vendor/cordis/src/events.ts:234-243`），本插件 `{ prepend: true }` 即最外层，因此可以在 `await next()` 之后改写决议。**同一步的重试能看到还原结果**：`buildRequest` 每次都重新 `session.deriveMessages()` 取表面（`packages/core/agent-loop/src/agent.ts:671`），而「钩子里 append、随后请求即携带」这条不变量已由 ② 证明（pre-step 落盘后本步请求就是裁剪版）。上界必须是**每 `(turn, step)` 一次**，否则一个另有成因的 400 会变成死循环。
+- **中止也落盘**：「端点拒收这个形状」是与「这次要不要立刻重试」无关的观测；不落盘会在下一次请求里再撞一次。
+- **同时收紧裁剪资格**（本激活点的前置修正）：要求移除推理块后**至少还剩一个内容块**。pi-ai 会整条丢弃「既无 content 也无 tool_calls」的 assistant 消息（`@earendil-works/pi-ai/dist/api/openai-completions.js:1048-1058`），否则裁剪会把一条只有推理块的消息**整条从请求里删掉**——那是「移除推理块」这个承诺之外的行为。
+- **用户可见提示只能由浏览器半渲染**。宿主侧没有任何提示面：113 个 `declare module '@deepseek-ai/cordis'` 里没有通知/提示服务；`session.notify` 属于 authorization 登录会话而非 chat session（`packages/credentials/authorization/src/index.ts:106,156`）。合法的瞬时提示面是客户端槽位 `shell.overlay`（`packages/extensions/cordis-client-runner/src/client/slot-catalog.ts:2764-2768`，文档原话把 toast stack 归在这里），注册先例 `packages/client/ui-plugin-manager/src/client/index.ts:102-108`、瞬态 toast 模板 `packages/client/ui-settings-session-log/src/client/index.ts:38-40`。该槽位是 `scope: 'root'`、**不按会话分区**，条目必须自己按当前会话过滤。
+- **客户端怎么获知这件事（机制 A）**：客户端**不为后台会话保有事件流**——`binding(id)` 对未 retain 的会话返回 `undefined`（`packages/api/session-controller/src/client/sessions/service.ts:529`），只有 `retain()` 才 materialize scope、开历史并给出事件流（`:282-292`、`:594`）。所以只 retain**当前显示**的会话（用插件自己的 source 标签——`SessionReferenceSourceMap` 是声明合并可扩展的，`packages/api/session-controller/src/client/index.ts:80-88`），会话变为当前时扫它的事件窗口即可。行为是「同一页面打开期间最多展示一次；重载后再打开该会话会再显示一次」。若改成 retain 每个后台会话以做真实时未读捕获，代价是要为未打开的会话建立并维护引用/订阅生命周期，首版不做。
+
 ## 被排除的替代方案
 
 - **用 surface replace 改 assistant 消息**：机制上不可能（见上，两条规则互斥）。这一条同时解释了为什么 DSH 要给「插件自有消息变更」单开一条 `contentGeneration` 计数。
@@ -234,6 +250,20 @@ interface ReasoningPrunePayload {
 - **A1（端点接受裁剪后的形状）**：从「未知」降为**有生产先例的强证据**，不再否决实现。一次性确认已由票 08 的 6 个变体完成（6 个变体全 200，见下），不再阻塞。其适用范围要写明：覆盖 **chat-completions 传输 + DeepSeek 目录判定**；**不含** `llm-deepseek` 的 Messages 传输（那条走 thinking + signature，裁剪即丢掉该块，机制更简单，且已被裁剪资格排除）。
 - **A2（被计费的输入真的下降）**：**已由票 08 实测**——DSH 侧两臂读 `assistant/message` 的 `usage` 三者之和，649 → 474（Δ = 175），同一命令连跑五次 Δ 全为正（151–190）；探针侧 A1↔B1 与 A2↔B2 的 `prompt_tokens` 各降 20。跑法与读数见 `.scratch/historical-reasoning-pruning/gate-a-record.md` §一 / §三。**不得外推**：结论只在该记录实测的那个网关上成立，且覆盖 chat-completions 传输——**不含** `llm-deepseek` 的 Messages 传输。
 - 附带记录本机实际路由的更省形态：`cline-pass` 的自有适配器只在推理非空时才写该字段（`~/.dsh/profiles/web/node_modules/dsh-cline-pass/lib/adapter.js:204-213` 的 `...(reasoning.length > 0 ? { reasoning_content: reasoning } : {})`），即裁剪后走的是**变体 C（字段整个省略）**，比 B 更干净。
+
+**裁剪拒收的外部证据（外部报告，不是本仓实测）**
+
+- 官方语义：[Thinking Mode 文档](https://api-docs.deepseek.com/guides/thinking_mode) 写明「请求携带 `tools` 时，所有历史轮的 `reasoning_content` 都必须回传，包括没有发生工具调用的轮次；不回传则返回 400」。它只规定「必须回传」，没有规定空串是否算回传。
+- 空串被拒的报告：[hermes-agent PR #17341](https://github.com/NousResearch/hermes-agent/pull/17341)/[#18263](https://github.com/NousResearch/hermes-agent/pull/18263) 明确写着 DeepSeek V4 Pro 拒收空串并把占位从 `""` 改成 `" "`；[LiteLLM issue #37629](https://github.com/BerriAI/litellm/issues/37629) 对空的历史值注入单空格占位；[OmniRoute commit 21ad0bc](https://github.com/diegosouzapw/OmniRoute/commit/21ad0bc74f58422631a2f86578196f8d81c251f7) 改用非空文本占位。
+- **反例存在**：[new-api PR #7153](https://github.com/QuantumNous/new-api/pull/7153) 的注释称「空字符串即可通过该校验」。与上述冲突，最合理的解释是**端点/模型/版本差异**。
+- ⇒ 结论：接受度是**按端点**的属性，本仓**不能**对它下全局断言。这正是第五个激活点做成「运行期兜底」而不是配置开关的原因：不预判端点，谁拒收谁停用，且只影响那一个会话。注意 pi-ai 的填充条件是「DeepSeek 判定 + `model.reasoning` + 字段仍缺席」（填充在 `openai-completions.js:1044-1047`，判定在 `:1232`、赋入 compat 位在 `:1268`），非 DeepSeek 判定的网关走的是**字段缺席**那一支，同样是官方语义下会被拒收的形状。
+
+**未验证、明确不断言**（与上一节并列，均属激活点 ⑤ 的前置）
+
+- `retain()` 之后 host 侧是否为每个引用建立订阅（`retainedBy` 计数暗示按 `referenceCount > 0` 建，未证实）；机制 A 只 retain 当前会话，所以不依赖这条。
+- 客户端半的类型图能否看到宿主半对 `SessionEventMap` 的增强（新事件类型的合并声明先例：`packages/session/session-title/src/index.ts:72`）。看不到就得在客户端半本地再合并一次；这是实现细节，不影响设计。
+- 会话事件窗口带 `hasMore` 分页（`SessionEventWindow`，`packages/extensions/cordis-client-runner/src/client/api-catalog.ts:859-862`）：极端长会话 + 重载后，停用事件可能落在已加载窗口之外，机制 A 会漏提示。**不影响裁剪功能本身**，只影响那一次提示。
+- 本仓**没有**任何断言「被投影消息对象身份」的测试（只有深比较、源事件不被改动、以及未投影路径的 `toBe`：`packages/core/session/tests/message-projections.spec.ts:52,59,115`）。「还原拿到的是原文对象」是插件侧新引入的契约，必须由本插件自己的测试钉住。
 
 **基准：最新版本是一个下限**
 
