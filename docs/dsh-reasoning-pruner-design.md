@@ -199,6 +199,8 @@ interface ReasoningPrunePayload {
 
 ### 激活点 ⑤：裁剪拒收 → 裁剪还原 + 会话裁剪停用
 
+**版本边界**：本激活点属 **0.1.1**。0.1.0 的「先发裁剪版，报错再发完整版」被否掉的是**把它当作静默分叉的保护**这个用法——静默分叉根本不报错，任何错误兜底都盖不到它；这里处理的是端点**响亮**的 400，是另一个问题，也与仓库既有先例同向（路由以结构化失败声明要减多少，插件持久记录后重试）。
+
 **为什么需要它**：裁剪后线上发的是「字段在、内容为空」（或某些网关上是字段缺席）的形状。有外部报告表明 DeepSeek V4 Pro 类端点在思考模式 + 携带 `tools` 时**拒收空串**（见「验证状态 · 裁剪拒收的外部证据」）。一旦发生，该会话此后每个请求都带着同一个形状，会**持续 400**，而现有实现只在 `failure.code === CONTEXT_WINDOW_EXCEEDED` 上动作（`packages/dsh-reasoning-pruner/src/index.ts:87-90`）——也就是说会话会卡死，且裁掉的步骤无法自行恢复。
 
 - **触发判据**（三把锁）：`failure.code` 命中「请求被拒」这一支、`failure.message` 命中推理回传措辞、且本会话已存在裁剪事件。第一把锁的依据：pi-ai 把 400 与 `invalid request` 归一成 `INVALID_REQUEST`（`packages/llm/llm-pi-ai/src/stream.ts:49`，字面量、非导出常量），其余码已被 `classifyPiAiError` 分流到 AUTH / QUOTA / RATE_LIMIT / SERVER / TIMEOUT / TRANSPORT；**该路径上 `failure.status` 是空的**（failure 对象只带 `message`/`code`，`stream.ts:125`），所以判据只能建在 `code` + 文本上。放宽到 `PI_AI_ERROR` 是因为网关正文不含 `400`/`invalid request` 字样时会被归到那一档。
