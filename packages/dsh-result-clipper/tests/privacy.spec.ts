@@ -239,7 +239,7 @@ describe('票 07 第 2 条：每个标准工具结果的隐私判断', () => {
     expect(records(path)).toEqual([expect.objectContaining({ action: 'unmodified', reason: 'kept' })])
   })
 
-  it('摘要能力关闭时只发那一次隐私请求，放行后记 summary-off', async () => {
+  it('摘要能力关闭时只发那一次隐私请求，判 safe 与按 passthrough 放行都记 summary-off', async () => {
     const { fixture, route, path } = await mounted({ summarize: false })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
@@ -247,6 +247,15 @@ describe('票 07 第 2 条：每个标准工具结果的隐私判断', () => {
     expect(route.requests).toHaveLength(1)
     expect(textOf(result.content)).toBe(LONG_BODY)
     expect(records(path)).toEqual([expect.objectContaining({ action: 'unmodified', reason: 'summary-off' })])
+
+    // 放行侧同理（规格「契约 · 判定顺序」：摘要关闭时判 `safe` 或按 `passthrough` 放行都记 `summary-off`）：
+    // 隐私判断照常发出，但「为什么这条结果没被改动」的取值仍是摘要能力关闭。
+    const uncertain = await mounted({ summarize: false }, [{ text: UNCERTAIN }])
+    uncertain.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const passed = await uncertain.fixture.ctx.tools.execute(exec('bash'))
+    expect(uncertain.route.requests).toHaveLength(1)
+    expect(textOf(passed.content)).toBe(LONG_BODY)
+    expect(records(uncertain.path)).toEqual([expect.objectContaining({ action: 'unmodified', reason: 'summary-off' })])
   })
 })
 

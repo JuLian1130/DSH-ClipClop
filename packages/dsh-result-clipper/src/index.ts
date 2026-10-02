@@ -148,16 +148,20 @@ async function process(
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文；它也不是本次要判断的工具内容。
   if (decision.kind === 'block') return unchanged('not-candidate')
 
-  // 判断与替换的对象都是**模型即将看到的投影**：下游决策的正文加两边交回的附加上下文（图片块不参与判断）。
+  // 要替换掉的那段**模型即将看到的投影**是下游决策的正文；附加上下文与图片块只影响隐私判断的文本投影。
   const visible = decision.content ?? result.content
-  const projection = projectionText(visible, [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []])
 
   if (config.privacyGate.get()) {
+    const projection = projectionText(
+      visible,
+      [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],
+    )
     const judgement = await judgePrivacy(ctx, config, reminders, exec, projection)
     if (judgement.kind === 'block') return rejected(exec.name)
-    if (judgement.kind === 'passthrough') return unchanged(judgement.reason)
-    // 隐私通过：摘要能力关闭时不再发任何摘要路径请求（判 safe 与放行都记 summary-off）。
+    // 摘要能力关闭时整条摘要路径都不发请求，所以「为什么这条结果没改动」的取值是摘要关闭——判 `safe` 与按
+    // `passthrough` 放行都一样（规格「契约 · 判定顺序」）；隐私判断本身照常发出。
     if (!config.summarize.get()) return unchanged('summary-off')
+    if (judgement.kind === 'passthrough') return unchanged(judgement.reason)
     // 按入口读回跳过整个摘要路径（含准入），但仍经过刚做完的隐私判断。
     if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
     const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
