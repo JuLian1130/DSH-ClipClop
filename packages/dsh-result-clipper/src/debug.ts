@@ -2,8 +2,9 @@
  * debug 记录管道：把一条工具结果的处理去向写成一行 metadata JSONL。
  *
  * 记录**不含**原文、摘要正文、完整提示词与凭据（规格「契约 · debug JSONL 字段」），所以这里的字段只有
- * 元数据。`结果取值` 是封闭的两段式（动作 + 未改动原因），本票唯一引入的取值是 `summary-off`——摘要能力
- * 关闭时每条结果都落它；其余取值由引入对应机制的票各自加入（`not-candidate` 自 03 起）。
+ * 元数据。`结果取值` 是封闭的两段式（动作 + 未改动原因）：本票引入 `not-candidate`、`kept`、`not-shorter`、
+ * `failed`，加上 02 已有的 `summary-off`；其余取值由引入对应机制的票各自加入（`admission-no` 自 06、
+ * `read-back` 自 04、`uncertain` / `failed-window` / `rejected` 自 07）。
  *
  * @module
  */
@@ -12,16 +13,16 @@ import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
+/** `unmodified` 的透传原因。新增取值随引入它的机制一起加到这里。 */
+export type UnmodifiedReason = 'summary-off' | 'not-candidate' | 'kept' | 'not-shorter' | 'failed'
+
 /** 一条记录的「结果取值」：动作取闭集之一，`unmodified` 时必须附原因。 */
-export interface DebugOutcome {
-  /** 结果的去向。本票只产出 `unmodified`（插件不改变内容）。 */
-  action: 'unmodified'
-  /** 未改动的原因。本票只引入 `summary-off`（摘要能力关闭）。 */
-  reason: 'summary-off'
-}
+export type DebugOutcome =
+  | { readonly action: 'summarized' }
+  | { readonly action: 'unmodified'; readonly reason: UnmodifiedReason }
 
 /** 一行 debug JSONL。 */
-export interface DebugRecord extends DebugOutcome {
+export type DebugRecord = DebugOutcome & {
   /** 工具名。 */
   toolName: string
   /** 结果大小：文本块的 UTF-8 字节数（图片等非文本块不计入）。 */

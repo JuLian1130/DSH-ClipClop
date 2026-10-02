@@ -27,7 +27,7 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 // 类型专用：`ctx.slots` 的 Context 合并（槽位服务由渲染器提供）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { ResultClipperCard } from './card.tsx'
+import { ResultClipperCard, type ResultClipperCardField } from './card.tsx'
 import { en, zh, type ResultClipperLocaleKey } from './locales.ts'
 import { ResultClipperTab, type ResultClipperToggle } from './tab.tsx'
 
@@ -62,6 +62,12 @@ interface PreferenceSection {
   privacyGate: boolean
   debug: boolean
   debugPath: string
+  routeProvider: string
+  routeModel: string
+  minInlineTokens: number
+  maxSummarizeTokens: number
+  summaryDisableReasoning: boolean
+  summaryPrompt: string
 }
 
 /** 注册这两处所需的客户端服务（host 服务不在其中——它们在 host 半）。 */
@@ -103,25 +109,36 @@ export function apply(ctx: Context): void {
       label: () => t('title'),
       locale: LOCALE_NAMESPACE,
       inject: () => ({
-        hooks: { debugPath: stringField(form, 'debugPath') },
-        setDebugPath: (value: string) => form.set('debugPath', value),
+        hooks: {
+          routeProvider: stringField(form, 'routeProvider'),
+          routeModel: stringField(form, 'routeModel'),
+          minInlineTokens: numberField(form, 'minInlineTokens', 1024),
+          maxSummarizeTokens: numberField(form, 'maxSummarizeTokens', 12500),
+          summaryDisableReasoning: booleanField(form, 'summaryDisableReasoning', true),
+          summaryPrompt: stringField(form, 'summaryPrompt'),
+          debugPath: stringField(form, 'debugPath'),
+        },
+        setField: (field: ResultClipperCardField, value: string | number | boolean) => form.set(field, value),
+        resetSummaryPrompt: () => form.unset('summaryPrompt'),
       }),
     }, ResultClipperCard),
   )), 'dsh-result-clipper: plugin detail card')
 }
 
 /**
- * 一个布尔字段的读数：镜像还没给出 section 时回落到 schema 的默认（三个开关都默认关闭）。
+ * 一个布尔字段的读数：镜像还没给出 section 时回落到给定默认。
  * @param form - 本插件的 settings 表单。
  * @param field - 字段名。
+ * @param fallback - section 缺席时的取值。
  * @returns 供控件绑定的读数。
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'debug',
+  field: 'summarize' | 'privacyGate' | 'debug' | 'summaryDisableReasoning',
+  fallback = false,
 ): ObservableSnapshot<boolean> {
   return {
-    getSnapshot: () => form.getSnapshot().value?.[field] ?? false,
+    getSnapshot: () => form.getSnapshot().value?.[field] ?? fallback,
     subscribe: (listener) => form.subscribe(listener),
   }
 }
@@ -132,9 +149,30 @@ function booleanField(
  * @param field - 字段名。
  * @returns 供控件绑定的读数。
  */
-function stringField(form: ConfigForm<PreferenceSection>, field: 'debugPath'): ObservableSnapshot<string> {
+function stringField(
+  form: ConfigForm<PreferenceSection>,
+  field: 'debugPath' | 'routeProvider' | 'routeModel' | 'summaryPrompt',
+): ObservableSnapshot<string> {
   return {
     getSnapshot: () => form.getSnapshot().value?.[field] ?? '',
+    subscribe: (listener) => form.subscribe(listener),
+  }
+}
+
+/**
+ * 一个数字字段的读数：镜像还没给出 section 时回落到 schema 的默认。
+ * @param form - 本插件的 settings 表单。
+ * @param field - 字段名。
+ * @param fallback - section 缺席时的取值（与 host 半 schema 的默认一致）。
+ * @returns 供控件绑定的读数。
+ */
+function numberField(
+  form: ConfigForm<PreferenceSection>,
+  field: 'minInlineTokens' | 'maxSummarizeTokens',
+  fallback: number,
+): ObservableSnapshot<number> {
+  return {
+    getSnapshot: () => form.getSnapshot().value?.[field] ?? fallback,
     subscribe: (listener) => form.subscribe(listener),
   }
 }

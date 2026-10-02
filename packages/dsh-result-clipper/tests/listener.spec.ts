@@ -77,14 +77,14 @@ describe('票 02 第 1 条：结果与未装时逐字相同', () => {
     expect(records(path).map(record => record.toolName)).toEqual(['grep'])
   })
 
-  it('两个能力开关开启时结果同样逐字相同（本票还没有摘要与隐私路径）', async () => {
+  it('两个能力开关开启时结果同样逐字相同（本票没有隐私路径，摘要也不改写短结果）', async () => {
     const { fixture, path } = await mounted(undefined, { summarize: true, privacyGate: true })
     fixture.ctx.tools.register(textTool('bash', 'on-body'))
     const result = await fixture.ctx.tools.execute(exec('bash'))
     expect(result.isError).toBe(false)
     expect(textOf(result.content)).toBe('on-body')
-    // 摘要开启时本票没有可记录的取值（边界见 debug-log.spec.ts），隐私开启不影响结果。
-    expect(records(path)).toHaveLength(0)
+    // 短结果进不了摘要候选（03 起有候选判断），所以仍逐字透传并留下 not-candidate。
+    expect(records(path).map(record => record.toolName)).toEqual(['bash'])
   })
 
   it('结果的内容块形状不变', async () => {

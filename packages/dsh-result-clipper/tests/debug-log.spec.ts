@@ -5,8 +5,7 @@
  * 记 `summary-off`；关闭或路径为空时零写盘。第 5 条把记录反序列化后逐键核对——字段集合里没有正文、摘要
  * 正文、提示词与凭据的位置，另外再断言原文不出现在整行文本里。
  *
- * 摘要能力开启时本票没有候选判断，因而没有可记录的结果取值（`not-candidate` 等自 03 起引入）；这条边界在
- * 下面的用例里写死，好让 03 接手时知道要改哪里。
+ * 摘要能力开启时的候选与透传取值自 03 起引入：短结果落 `not-candidate`（其余取值见 `summary.spec.ts`）。
  *
  * @module
  */
@@ -189,18 +188,18 @@ describe('票 02 第 4 条：关闭时零写盘', () => {
   })
 })
 
-describe('票 02 第 4 条：本票边界——摘要开启时没有取值可记', () => {
-  it('摘要开启时报不出候选结论，因此不写记录（not-candidate 等取值自 03 起引入）', async () => {
+describe('票 02 第 4 条：记录字段与取值随 03 的候选判断扩展', () => {
+  it('摘要开启后短结果记 not-candidate（03 起候选判断引入该取值），结果仍逐字透传', async () => {
     const root = tempRoot()
     const path = join(root, 'debug.jsonl')
     const fixture = await mounted({ summarize: true, debug: true, debugPath: path })
     fixture.ctx.tools.register(textTool('bash', 'body'))
     const result = await fixture.ctx.tools.execute(exec('bash'))
-    // 没有候选判断不等于可以改结果：开启态同样必须逐字透传。
     expect(result.isError).toBe(false)
     expect(result.content).toEqual([{ type: 'text', text: 'body' }])
-    expect(existsSync(path)).toBe(false)
-    expect(appendFile).not.toHaveBeenCalled()
+    expect(readRecords(path)).toEqual([
+      expect.objectContaining({ toolName: 'bash', action: 'unmodified', reason: 'not-candidate' }),
+    ])
   })
 })
 

@@ -48,13 +48,19 @@ describe('插件入口', () => {
 })
 
 describe('配置契约', () => {
-  it('默认配置合法且可装载，两个能力与 debug 都默认关闭、路径为空', async () => {
+  it('默认配置合法且可装载，两个能力与 debug 都默认关闭、路径为空，route/阈值/提示词取首版默认', async () => {
     const { fiber, error } = await load({})
     expect(error).toBeUndefined()
     expect(fiber.config?.summarize.get()).toBe(false)
     expect(fiber.config?.privacyGate.get()).toBe(false)
     expect(fiber.config?.debug.get()).toBe(false)
     expect(fiber.config?.debugPath.get()).toBe('')
+    expect(fiber.config?.routeProvider.get()).toBe('')
+    expect(fiber.config?.routeModel.get()).toBe('')
+    expect(fiber.config?.minInlineTokens.get()).toBe(1024)
+    expect(fiber.config?.maxSummarizeTokens.get()).toBe(12500)
+    expect(fiber.config?.summaryDisableReasoning.get()).toBe(true)
+    expect(fiber.config?.summaryPrompt.get()).toBe('')
   })
 
   it('显式取值覆盖默认值（volatile 引用，装载后按它读）', async () => {
@@ -63,6 +69,17 @@ describe('配置契约', () => {
     expect(fiber.config?.debug.get()).toBe(true)
     expect(fiber.config?.debugPath.get()).toBe('/tmp/result-clipper.jsonl')
     expect(fiber.config?.privacyGate.get()).toBe(false)
+
+    const tuned = await load({
+      routeProvider: 'local', routeModel: 'qwen', minInlineTokens: 0,
+      maxSummarizeTokens: 9000, summaryDisableReasoning: false, summaryPrompt: '只看目标',
+    })
+    expect(tuned.fiber.config?.routeProvider.get()).toBe('local')
+    expect(tuned.fiber.config?.routeModel.get()).toBe('qwen')
+    expect(tuned.fiber.config?.minInlineTokens.get()).toBe(0)
+    expect(tuned.fiber.config?.maxSummarizeTokens.get()).toBe(9000)
+    expect(tuned.fiber.config?.summaryDisableReasoning.get()).toBe(false)
+    expect(tuned.fiber.config?.summaryPrompt.get()).toBe('只看目标')
   })
 
   it('装上插件后工具运行时仍可用，且监听器没有替换任何结果', async () => {

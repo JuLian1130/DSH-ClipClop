@@ -19,13 +19,35 @@ export interface StubSection {
   privacyGate: boolean
   debug: boolean
   debugPath: string
+  routeProvider: string
+  routeModel: string
+  minInlineTokens: number
+  maxSummarizeTokens: number
+  summaryDisableReasoning: boolean
+  summaryPrompt: string
+}
+
+/** section 缺席时控件读到的默认值（与 host 半 schema 的默认一致）。 */
+export const SECTION_DEFAULTS: StubSection = {
+  summarize: false,
+  privacyGate: false,
+  debug: false,
+  debugPath: '',
+  routeProvider: '',
+  routeModel: '',
+  minInlineTokens: 1024,
+  maxSummarizeTokens: 12500,
+  summaryDisableReasoning: true,
+  summaryPrompt: '',
 }
 
 /** settings section 的替身：记账写入、可切换「Host 是否接受」。 */
 export class StubForm {
-  value: StubSection = { summarize: false, privacyGate: false, debug: false, debugPath: '' }
+  value: StubSection = { ...SECTION_DEFAULTS }
   /** 按顺序记下每一次写入。 */
   writes: Array<{ field: string; value: unknown }> = []
+  /** 按顺序记下每一次字段清空（恢复默认走的是它）。 */
+  resets: string[] = []
   /** Host 是否接受写入；置为 false 即模拟业务拒绝。 */
   accepted = true
   private readonly listeners = new Set<() => void>()
@@ -46,8 +68,20 @@ export class StubForm {
     this.writes.push({ field, value })
     if (!this.accepted) return false
     this.value = { ...this.value, [field]: value }
-    for (const listener of [...this.listeners]) listener()
+    this.#publish()
     return true
+  }
+
+  async unset(field: string): Promise<boolean> {
+    this.resets.push(field)
+    if (!this.accepted) return false
+    this.value = { ...this.value, [field]: SECTION_DEFAULTS[field as keyof StubSection] }
+    this.#publish()
+    return true
+  }
+
+  #publish(): void {
+    for (const listener of [...this.listeners]) listener()
   }
 
   /** 按发布契约把它当 `ConfigForm` 交出（夹具不需要 `ConfigForm` 的全部成员）。 */

@@ -177,29 +177,90 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
   })
 })
 
-describe('票 02 第 2 条：debug 路径参数在详情卡片上', () => {
+describe('票 02 第 2 条 / 票 03 第 8 条：debug 路径与摘要参数在详情卡片上', () => {
+  /** 按详情卡片页的形状渲染一次，返回容器与注入面。 */
+  async function renderPage(): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
+    const fixture = await mounted()
+    const entry = only(fixture, 'plugins.item')
+    const face = entry.options.inject!() as ResultClipperCardInjected
+    const props = { view: 'page', t: fixture.t, ...boundHooks(face.hooks), setField: face.setField, resetSummaryPrompt: face.resetSummaryPrompt } as unknown as ResultClipperCardProps
+    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
+    const { container } = render(<CardComponent {...props} />)
+    return { fixture, container, face }
+  }
+
   it('summary 视图只给一行简介，不渲染输入控件', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'plugins.item')
     const face = entry.options.inject!() as ResultClipperCardInjected
-    const props = { view: 'summary', t: fixture.t, ...boundHooks(face.hooks), setDebugPath: face.setDebugPath } as unknown as ResultClipperCardProps
+    const props = { view: 'summary', t: fixture.t, ...boundHooks(face.hooks), setField: face.setField, resetSummaryPrompt: face.resetSummaryPrompt } as unknown as ResultClipperCardProps
     const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
     const { container } = render(<CardComponent {...props} />)
     expect(container.querySelector('input')).toBeNull()
     expect(container.textContent).toBe(fixture.t('description'))
   })
 
-  it('page 视图渲染路径输入框，编辑后失焦写回 debugPath', async () => {
-    const fixture = await mounted()
-    fixture.form.value.debugPath = '/tmp/result-clipper.jsonl'
-    const entry = only(fixture, 'plugins.item')
-    const face = entry.options.inject!() as ResultClipperCardInjected
-    const props = { view: 'page', t: fixture.t, ...boundHooks(face.hooks), setDebugPath: face.setDebugPath } as unknown as ResultClipperCardProps
-    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
-    const { container } = render(<CardComponent {...props} />)
+  it('page 视图显示「摘要会把工具正文发送给所选 route」与 schema 的默认值', async () => {
+    const { container } = await renderPage()
+    expect(container.textContent).toContain('摘要会把工具正文发送给所选 route')
+    // 默认值来自 schema：阈值 1024 / 12500，摘要请求默认关闭推理。
+    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
+    expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
+    expect(container.querySelector('[role="switch"]')?.getAttribute('aria-checked')).toBe('true')
+  })
 
-    const input = container.querySelector('input')!
-    expect(input.value).toBe('/tmp/result-clipper.jsonl')
+  it('编辑主 route 与两个阈值后各写回自己的字段', async () => {
+    const { fixture, container } = await renderPage()
+    const provider = container.querySelector('#plugin-config-result-clipper-route-provider')!
+    const model = container.querySelector('#plugin-config-result-clipper-route-model')!
+    const min = container.querySelector('#plugin-config-result-clipper-min-inline')!
+    const max = container.querySelector('#plugin-config-result-clipper-max-summarize')!
+
+    await fireEvent.change(provider, { target: { value: 'local' } })
+    await fireEvent.blur(provider)
+    await fireEvent.change(model, { target: { value: 'qwen' } })
+    await fireEvent.blur(model)
+    await fireEvent.change(min, { target: { value: '256' } })
+    await fireEvent.blur(min)
+    await fireEvent.change(max, { target: { value: '9000' } })
+    await fireEvent.blur(max)
+
+    expect(fixture.form.writes).toEqual([
+      { field: 'routeProvider', value: 'local' },
+      { field: 'routeModel', value: 'qwen' },
+      { field: 'minInlineTokens', value: 256 },
+      { field: 'maxSummarizeTokens', value: 9000 },
+    ])
+    expect(fixture.form.value).toMatchObject({ routeProvider: 'local', minInlineTokens: 256, maxSummarizeTokens: 9000 })
+  })
+
+  it('点「关闭推理」开关写 summaryDisableReasoning=false', async () => {
+    const { fixture, container } = await renderPage()
+    await fireEvent.click(container.querySelector('[role="switch"]')!)
+    expect(fixture.form.writes).toEqual([{ field: 'summaryDisableReasoning', value: false }])
+  })
+
+  it('编辑摘要提示词失焦写 summaryPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+    const { fixture, container } = await renderPage()
+    const prompt = container.querySelector('#plugin-config-result-clipper-summary-prompt')!
+    await fireEvent.change(prompt, { target: { value: '只看目标' } })
+    await fireEvent.blur(prompt)
+    expect(fixture.form.writes).toEqual([{ field: 'summaryPrompt', value: '只看目标' }])
+
+    // 上一次写入把它自己置成 busy（按钮被禁用）直到 promise 结算，等一个宏任务让 busy 落下。
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    // `Switch` 也是 button，所以按文案取「恢复默认」那一个。
+    const reset = [...container.querySelectorAll('button')]
+      .find(button => button.textContent === fixture.t('resetPrompt'))
+    if (reset === undefined) throw new Error('fixture: no reset button')
+    await fireEvent.click(reset)
+    expect(fixture.form.resets).toEqual(['summaryPrompt'])
+    expect(fixture.form.value.summaryPrompt).toBe('')
+  })
+
+  it('page 视图渲染路径输入框，编辑后失焦写回 debugPath', async () => {
+    const { fixture, container } = await renderPage()
+    const input = container.querySelector('#plugin-config-result-clipper-debug-path')!
     await fireEvent.change(input, { target: { value: '/tmp/other.jsonl' } })
     await fireEvent.blur(input)
     expect(fixture.form.writes).toEqual([{ field: 'debugPath', value: '/tmp/other.jsonl' }])
@@ -207,16 +268,11 @@ describe('票 02 第 2 条：debug 路径参数在详情卡片上', () => {
   })
 
   it('Host 拒绝路径写入时卡片显示 role="alert"', async () => {
-    const fixture = await mounted()
+    const { fixture, container } = await renderPage()
     fixture.form.accepted = false
-    const entry = only(fixture, 'plugins.item')
-    const face = entry.options.inject!() as ResultClipperCardInjected
-    const props = { view: 'page', t: fixture.t, ...boundHooks(face.hooks), setDebugPath: face.setDebugPath } as unknown as ResultClipperCardProps
-    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
-    const { container } = render(<CardComponent {...props} />)
-
-    await fireEvent.change(container.querySelector('input')!, { target: { value: '/tmp/x.jsonl' } })
-    await fireEvent.blur(container.querySelector('input')!)
+    const input = container.querySelector('#plugin-config-result-clipper-debug-path')!
+    await fireEvent.change(input, { target: { value: '/tmp/x.jsonl' } })
+    await fireEvent.blur(input)
     await Promise.resolve()
     expect(container.querySelector('[role="alert"]')).not.toBeNull()
   })

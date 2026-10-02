@@ -1,9 +1,12 @@
 /**
  * 本插件的配置契约。
  *
- * 四个字段全部 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
+ * 全部字段都 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
- * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、debug 关闭且不自动改用临时路径。
+ * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、主 route 未配置、阈值 1024/12500、摘要请求关闭
+ * 推理、摘要提示词留空（用内置规则正文）、debug 关闭且不自动改用临时路径。
+ *
+ * 摘要提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts`；「恢复默认」就是把该字段清回空串。
  *
  * @module
  */
@@ -27,6 +30,18 @@ export interface Config {
   debug?: Volatile<boolean>
   /** debug JSONL 路径；空串表示没有配置路径，此时不开 debug 也不写盘。 */
   debugPath?: Volatile<string>
+  /** 主 route 的 provider（摘要与隐私共用）；空串表示未配置，此时摘要路径失败并透传。 */
+  routeProvider?: Volatile<string>
+  /** 主 route 的 model id；与 provider 一起决定请求发往哪条 route。 */
+  routeModel?: Volatile<string>
+  /** 摘要候选的下限（估算器单位）；低于它的结果原样透传。`0` 表示不设下限。 */
+  minInlineTokens?: Volatile<number>
+  /** `bash` / `web_fetch` 的上限；达到或超过它的结果原样交给 spill。`read` 不受它约束。 */
+  maxSummarizeTokens?: Volatile<number>
+  /** 摘要请求是否关闭推理，默认关闭推理（用户故事 47）。 */
+  summaryDisableReasoning?: Volatile<boolean>
+  /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
+  summaryPrompt?: Volatile<string>
 }
 
 /** 配置 schema：字段全部可选并在装载时解析成默认值。 */
@@ -35,4 +50,10 @@ export const Config = z.object({
   privacyGate: z.boolean().default(false).volatile(),
   debug: z.boolean().default(false).volatile(),
   debugPath: z.string().default('').volatile(),
+  routeProvider: z.string().default('').volatile(),
+  routeModel: z.string().default('').volatile(),
+  minInlineTokens: z.number().default(1024).volatile(),
+  maxSummarizeTokens: z.number().default(12500).volatile(),
+  summaryDisableReasoning: z.boolean().default(true).volatile(),
+  summaryPrompt: z.string().default('').volatile(),
 })

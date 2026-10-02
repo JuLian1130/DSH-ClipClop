@@ -11,6 +11,20 @@ export type ResultClipperLocaleKey =
   | 'privacyGateHint'
   | 'debug'
   | 'debugHint'
+  | 'flowWarning'
+  | 'routeProvider'
+  | 'routeProviderHint'
+  | 'routeModel'
+  | 'routeModelHint'
+  | 'minInlineTokens'
+  | 'minInlineTokensHint'
+  | 'maxSummarizeTokens'
+  | 'maxSummarizeTokensHint'
+  | 'summaryDisableReasoning'
+  | 'summaryDisableReasoningHint'
+  | 'summaryPrompt'
+  | 'summaryPromptHint'
+  | 'resetPrompt'
   | 'debugPath'
   | 'debugPathHint'
   | 'failedHint'
@@ -26,6 +40,20 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   privacyGateHint: '开启后每个标准工具结果先经本地模型判断；默认关闭。',
   debug: 'debug 记录',
   debugHint: '开启后向下面的日志路径追加 metadata 记录；关闭时不写盘。',
+  flowWarning: '摘要会把工具正文发送给所选 route。',
+  routeProvider: '摘要 route 的 provider',
+  routeProviderHint: '摘要与隐私请求发往这条 provider 路由；留空时摘要路径失败并原样透传。',
+  routeModel: '摘要 route 的 model',
+  routeModelHint: '与 provider 一起决定请求发往哪条 route。',
+  minInlineTokens: '摘要下限（估算单位）',
+  minInlineTokensHint: '低于它的结果原样保留；0 表示不设下限。',
+  maxSummarizeTokens: '摘要上限（估算单位）',
+  maxSummarizeTokensHint: 'bash 与 web_fetch 达到或超过它的结果交给 spill；read 不受它约束。',
+  summaryDisableReasoning: '摘要请求关闭推理',
+  summaryDisableReasoningHint: '默认开启，让本地模型更快响应。',
+  summaryPrompt: '摘要提示词规则正文',
+  summaryPromptHint: '只改规则正文；安全外壳与输出格式由插件固定，不可编辑。留空时用内置默认。',
+  resetPrompt: '恢复默认',
   debugPath: '调试日志路径',
   debugPathHint: 'metadata JSONL 的写入位置；留空时 debug 不写盘。不会自动改用临时路径。',
   failedHint: '设置未能保存。',
@@ -42,6 +70,20 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   privacyGateHint: 'Judges every standard tool result locally before it reaches the model; off by default.',
   debug: 'Debug records',
   debugHint: 'Appends metadata records to the log path below; nothing is written while off.',
+  flowWarning: 'Summarization sends the tool body to the selected route.',
+  routeProvider: 'Summary route provider',
+  routeProviderHint: 'Summary and privacy requests go to this provider route; while empty the summary path fails and passes the result through.',
+  routeModel: 'Summary route model',
+  routeModelHint: 'Together with the provider this picks the exact route requests go to.',
+  minInlineTokens: 'Summarize floor (estimated units)',
+  minInlineTokensHint: 'Results below it are kept as-is; 0 removes the floor.',
+  maxSummarizeTokens: 'Summarize ceiling (estimated units)',
+  maxSummarizeTokensHint: 'bash and web_fetch results at or above it go to spill; read is not bound by it.',
+  summaryDisableReasoning: 'Disable reasoning for summary requests',
+  summaryDisableReasoningHint: 'On by default, so local models answer faster.',
+  summaryPrompt: 'Summary prompt rule text',
+  summaryPromptHint: 'Only the rule text is editable; the safety shell and output format are fixed by the plugin. Empty uses the built-in default.',
+  resetPrompt: 'Reset to default',
   debugPath: 'Debug log path',
   debugPathHint: 'Where the metadata JSONL is written; an empty path writes nothing. The plugin never falls back to a temporary path.',
   failedHint: 'The setting was not saved.',

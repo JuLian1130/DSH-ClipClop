@@ -32,6 +32,12 @@ export interface LiveConfig {
   readonly privacyGate: { get(): boolean }
   readonly debug: { get(): boolean }
   readonly debugPath: { get(): string }
+  readonly routeProvider: { get(): string }
+  readonly routeModel: { get(): string }
+  readonly minInlineTokens: { get(): number }
+  readonly maxSummarizeTokens: { get(): number }
+  readonly summaryDisableReasoning: { get(): boolean }
+  readonly summaryPrompt: { get(): string }
 }
 
 /** 一条装好的 profile。 */
@@ -109,7 +115,10 @@ function resolvedConfig(ctx: Context): LiveConfig {
   const entry = [...ctx.loader.entries()].find(candidate => candidate.options.id === PREFERENCE_NAMESPACE)
   const config = entry?.fiber?.config as Partial<LiveConfig> | undefined
   if (config?.summarize === undefined || config.privacyGate === undefined
-    || config.debug === undefined || config.debugPath === undefined) {
+    || config.debug === undefined || config.debugPath === undefined
+    || config.routeProvider === undefined || config.routeModel === undefined
+    || config.minInlineTokens === undefined || config.maxSummarizeTokens === undefined
+    || config.summaryDisableReasoning === undefined || config.summaryPrompt === undefined) {
     throw new Error('profile fixture: the result-clipper row has no resolved volatile config')
   }
   return config as LiveConfig

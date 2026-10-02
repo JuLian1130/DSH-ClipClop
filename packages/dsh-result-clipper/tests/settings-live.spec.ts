@@ -91,15 +91,66 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
   it('host 每次处理结果都重读 summarize，而不是装载期读一次', async () => {
     const root = tempRoot()
     const logPath = join(root, 'debug.jsonl')
-    // 本票里 summarize 唯一的可观察行为：关闭时每条结果记一条 `summary-off`，开启后没有可记录的取值。
+    // 摘要关闭时每条结果记一条 `summary-off`；开启后短结果落 `not-candidate`——两次运行都写一行，
+    // 但**取值不同**，这就是「重读开关」的可观察面（若 apply 在装载期把它捕获成常量，第二行仍是 summary-off）。
     const fixture = await booted({ summarize: false, privacyGate: false, debug: true, debugPath: logPath })
     fixture.ctx.tools.register(textTool('bash', 'body'))
     await fixture.ctx.tools.execute(exec('bash'))
-    expect(readFileSync(logPath, 'utf8').trimEnd().split('\n')).toHaveLength(1)
+    expect(readFileSync(logPath, 'utf8')).toContain('"summary-off"')
 
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['summarize'], value: true }])
     await fixture.ctx.tools.execute(exec('bash'))
-    // 若 apply 在装载期把该开关捕获成常量，这里会多出第二行。
-    expect(readFileSync(logPath, 'utf8').trimEnd().split('\n')).toHaveLength(1)
+    const lines = readFileSync(logPath, 'utf8').trimEnd().split('\n')
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toContain('"not-candidate"')
+  })
+
+  it('写入摘要下限后 host 行为立刻跟着变（同一个长结果先落 failed、调高下限后落 not-candidate）', async () => {
+    const root = tempRoot()
+    const logPath = join(root, 'debug.jsonl')
+    const fixture = await booted({ summarize: true, privacyGate: false, debug: true, debugPath: logPath })
+    fixture.ctx.tools.register(textTool('bash', 'x'.repeat(5000)))
+    // profile 里没有 llm 服务：候选命中后摘要路径失败，落 failed。
+    await fixture.ctx.tools.execute(exec('bash'))
+    expect(readFileSync(logPath, 'utf8')).toContain('"failed"')
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['minInlineTokens'], value: 999_999 }])
+    await fixture.ctx.tools.execute(exec('bash'))
+    // 同一条结果在新阈值下进不了候选：落 not-candidate（若阈值仍是装载期的常量，这里还会是 failed）。
+    const lines = readFileSync(logPath, 'utf8').trimEnd().split('\n')
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toContain('"not-candidate"')
+  })
+
+  it('写入主 route、阈值与提示词后引用立刻变化（保存即生效的引用侧）', async () => {
+    const fixture = await booted({})
+    expect(fixture.config.routeProvider.get()).toBe('')
+    expect(fixture.config.minInlineTokens.get()).toBe(1024)
+    expect(fixture.config.maxSummarizeTokens.get()).toBe(12500)
+    expect(fixture.config.summaryDisableReasoning.get()).toBe(true)
+    expect(fixture.config.summaryPrompt.get()).toBe('')
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [
+      { op: 'set', path: ['routeProvider'], value: 'local' },
+      { op: 'set', path: ['routeModel'], value: 'qwen' },
+      { op: 'set', path: ['minInlineTokens'], value: 256 },
+      { op: 'set', path: ['maxSummarizeTokens'], value: 9000 },
+      { op: 'set', path: ['summaryDisableReasoning'], value: false },
+      { op: 'set', path: ['summaryPrompt'], value: '只看目标' },
+    ])
+    expect(fixture.config.routeProvider.get()).toBe('local')
+    expect(fixture.config.routeModel.get()).toBe('qwen')
+    expect(fixture.config.minInlineTokens.get()).toBe(256)
+    expect(fixture.config.maxSummarizeTokens.get()).toBe(9000)
+    expect(fixture.config.summaryDisableReasoning.get()).toBe(false)
+    expect(fixture.config.summaryPrompt.get()).toBe('只看目标')
+  })
+
+  it('清掉摘要提示词的覆盖后回落到空串（= 用内置规则正文）', async () => {
+    const fixture = await booted({})
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['summaryPrompt'], value: '只看目标' }])
+    expect(fixture.config.summaryPrompt.get()).toBe('只看目标')
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'unset', path: ['summaryPrompt'] }])
+    expect(fixture.config.summaryPrompt.get()).toBe('')
   })
 })

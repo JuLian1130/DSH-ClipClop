@@ -16,6 +16,7 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import * as plugin from '../../src/index.ts'
 import { Config } from '../../src/index.ts'
+import type { FakeRoute } from './route.ts'
 
 /** 装好的夹具。 */
 export interface HostFixture {
@@ -28,15 +29,18 @@ export interface HostFixture {
  * 装出 ToolRuntime 并挂上被测插件。
  * @param config - 插件装载配置（loader 解析前的形状）。
  * @param before - 在装载被测插件**之前**跑一次的钩子（用来先注册别的 post-execute 监听器，从而观察本插件的注册位置）。
+ * @param llm - 摘要请求要用的假 route；不给时 context 里没有 `llm` 服务。
  * @returns 夹具。
  */
 export async function mount(
   config: Schemastery.TypeS<typeof Config> = {},
   before?: (ctx: Context) => void,
+  llm?: FakeRoute,
 ): Promise<HostFixture> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  if (llm !== undefined) ctx.provide('llm', llm as never)
   before?.(ctx)
   await ctx.plugin(plugin, config)
   return { ctx, dispose: async () => { await ctx.fiber.dispose() } }
