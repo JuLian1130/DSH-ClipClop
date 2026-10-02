@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "lib",
+    "rootDir": "src",
+    // host 半直接读写文件系统（debug JSONL），所以构建配置也要显式带上 node 的类型。
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  // 浏览器半由 esbuild 打成一个闭包工厂产物（`scripts/build-client.mjs`），不走 tsc 直出 `lib/`；它的类型由
+  // `tsconfig.typecheck.json` 覆盖。
+  "exclude": ["src/client/**"]
+}

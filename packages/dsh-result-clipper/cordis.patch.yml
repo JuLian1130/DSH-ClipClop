@@ -1,0 +1,12 @@
+# dsh-result-clipper 的 profile bundle patch 示例。顶层是数组，每个元素是一个 patch 条目；
+# 新增插件用 insert 行并显式给出 id 与 name。请将本文件内容合并到你的 profile patch 中。
+- insert:
+    - id: dsh-result-clipper
+      name: '@dsh-clipclop/dsh-result-clipper'
+      config:
+        # 两项能力都默认关闭；这里是 schema 的默认值，写出来只是让这份示例自足。
+        summarize: false
+        privacyGate: false
+        # debug 默认关闭且不自动改用临时路径；开启后必须填写日志路径。
+        debug: false
+        debugPath: ''

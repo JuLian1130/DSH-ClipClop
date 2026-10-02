@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Result Clipper",
+    "description": "Rewrite tool results that are worth continuing with into a shorter note while keeping an entry back to the original; optionally add a local privacy gate. Both abilities are off by default."
+  }
+}

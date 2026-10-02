@@ -1,0 +1,75 @@
+/**
+ * 票 02 第 1、2 条：插件入口与配置契约。
+ *
+ * 判据要对上票面「两个能力默认关闭」与「设置页保存即生效」的 host 半：四个字段都是 volatile 引用，装载后按
+ * `.get()` 读到的就是当前值——这正是「不需要重启」的实现方式。观察面是 `fiber.config`（装载期解析结果），
+ * 不是包内函数。
+ *
+ * @module
+ */
+
+import { afterEach, describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as plugin from '../src/index.ts'
+import { Config, inject, name } from '../src/index.ts'
+import { exec, textOf, textTool } from './support/host.ts'
+
+const contexts: Context[] = []
+
+afterEach(async () => {
+  await Promise.all(contexts.splice(0).map(async (ctx) => { await ctx.fiber.dispose() }))
+})
+
+/**
+ * 装载被测插件（先装好它 inject 的工具运行时与 systemPrompt）。
+ * @param config - 装载配置。
+ * @returns fiber 与 rejection 的原因；装载成功时原因为 `undefined`。
+ */
+async function load(config: Schemastery.TypeS<typeof Config>) {
+  const ctx = new Context()
+  contexts.push(ctx)
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  const fiber = ctx.plugin(plugin, config)
+  const error = await fiber.then(() => undefined, (reason: unknown) => reason)
+  return { ctx, fiber, error }
+}
+
+describe('插件入口', () => {
+  it('具名导出 name、inject、Config、apply', () => {
+    expect(name).toBe('dsh-result-clipper')
+    expect(typeof plugin.apply).toBe('function')
+    expect(Config).toBeDefined()
+    // 监听 tools/post-execute 的插件要等工具运行时在场。
+    expect(inject).toContain('tools')
+  })
+})
+
+describe('配置契约', () => {
+  it('默认配置合法且可装载，两个能力与 debug 都默认关闭、路径为空', async () => {
+    const { fiber, error } = await load({})
+    expect(error).toBeUndefined()
+    expect(fiber.config?.summarize.get()).toBe(false)
+    expect(fiber.config?.privacyGate.get()).toBe(false)
+    expect(fiber.config?.debug.get()).toBe(false)
+    expect(fiber.config?.debugPath.get()).toBe('')
+  })
+
+  it('显式取值覆盖默认值（volatile 引用，装载后按它读）', async () => {
+    const { fiber } = await load({ summarize: true, debug: true, debugPath: '/tmp/result-clipper.jsonl' })
+    expect(fiber.config?.summarize.get()).toBe(true)
+    expect(fiber.config?.debug.get()).toBe(true)
+    expect(fiber.config?.debugPath.get()).toBe('/tmp/result-clipper.jsonl')
+    expect(fiber.config?.privacyGate.get()).toBe(false)
+  })
+
+  it('装上插件后工具运行时仍可用，且监听器没有替换任何结果', async () => {
+    const { ctx } = await load({ summarize: false })
+    ctx.tools.register(textTool('bash', 'unchanged'))
+    const result = await ctx.tools.execute(exec('bash'))
+    expect(result.isError).toBe(false)
+    expect(textOf(result.content)).toBe('unchanged')
+  })
+})
