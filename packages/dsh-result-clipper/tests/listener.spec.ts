@@ -101,22 +101,31 @@ describe('票 02 第 3 条：PTC 子派发原样放行', () => {
   it('下游监听器返回 block 时子派发照常结算，插件不抛错也不改写它的决策', async () => {
     const { fixture, path } = await mounted()
     fixture.ctx.tools.register(textTool('bash', 'sub-dispatch body'))
-    // 阳性对照：block 监听器注册之前先跑一次普通派发，证明本插件在链上。
+    // 阳性对照：普通派发留下一条记录，证明本插件的 prepend 监听器在这条瀑布上。
     await fixture.ctx.tools.execute(exec('bash'))
     expect(records(path)).toHaveLength(1)
 
-    // 后注册的 prepend 监听器在本插件**内层**：它的 block 就是本插件 `next()` 拿到的决策。
+    // cordis 的 waterfall 按列表从前到后跑：`prepend: true` 走 `unshift` 排在最前＝最外层，后注册的更靠前；
+    // 不带 prepend 的走 `push` 排最后＝最内层。所以这里的 block 监听器是本插件的**下游**，插件先跑并 `next()`
+    // 到它；反过来给它加 prepend 会把插件挡在链外，这条判据就空转了。
     let innerCalls = 0
     fixture.ctx.on('tools/post-execute', async (): Promise<PostToolDecision> => {
       innerCalls += 1
       return { kind: 'block', feedback: [{ type: 'text', text: 'blocked by the inner policy' }] }
-    }, { prepend: true })
-    const result = await fixture.ctx.tools.execute(exec('bash', 'parent-token'))
+    })
+    // 非父派发 + 下游 block：插件作为外层跑过、额外留一条记录，说明它没有因下游 block 而抛错或改写决策。
+    const blocked = await fixture.ctx.tools.execute(exec('bash'))
     expect(innerCalls).toBe(1)
-    // block 结算成失败结果（原生语义），而不是把异常抛给调用方。
+    expect(blocked.isError).toBe(true)
+    expect(textOf(blocked.content)).toBe('blocked by the inner policy')
+    expect(records(path)).toHaveLength(2)
+
+    // 父派发：同样结算成下游的 block，且 `innerCalls` 前进证明链确实穿过了插件（它调用了 next()、没有自己抛错
+    // 或自己返回 block）；插件在父派发上早退，所以记录不增。
+    const result = await fixture.ctx.tools.execute(exec('bash', 'parent-token'))
+    expect(innerCalls).toBe(2)
     expect(result.isError).toBe(true)
     expect(textOf(result.content)).toBe('blocked by the inner policy')
-    // 子派发仍然不产出记录。
-    expect(records(path)).toHaveLength(1)
+    expect(records(path)).toHaveLength(2)
   })
 })
