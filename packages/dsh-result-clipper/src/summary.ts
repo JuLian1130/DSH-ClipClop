@@ -1,6 +1,10 @@
 /**
  * 摘要请求的装配与解析：内置规则正文、固定安全外壳、严格输出解析，以及一次摘要调用本身。
  *
+ * 本文件还提供摘要路径两次请求（准入与摘要）共用的两件东西：逐字相同的固定前缀
+ * {@link composeRequestPrefix}（准入请求由 `admission.ts` 在它之后接自己的规则正文）与一次起落的模型请求
+ * {@link requestModelText}。
+ *
  * **外壳与输出格式不可改**：页面只编辑规则正文（本文件的 {@link DEFAULT_SUMMARY_RULE} 是它的默认值），
  * 工具正文始终作为不可信数据分隔输入，输出的 JSON schema 由这里写死。摘要模型可以要求保留全文
  * （`action: 'keep'`），程序不复用它的任何正文——`keep` 只是信号。
@@ -42,14 +46,27 @@ const FIXED_SHELL = [
 ].join('\n')
 
 /**
+ * 摘要路径上准入与摘要两次请求共用的固定前缀（含这次结果的估算大小那一行）。
+ *
+ * 两次请求用它开头、逐字相同：准入请求在它之后接准入规则正文，摘要请求接摘要规则正文、外壳与工具正文。
+ * 「结果大小」是元数据而非正文，所以准入请求带上它不违反「准入不读取工具正文」（设计文档「摘要」的准入条）。
+ * @param estimatedSize - 这次结果的估算大小（估算器单位）。
+ * @returns 两次请求逐字相同的前缀。
+ */
+export function composeRequestPrefix(estimatedSize: number): string {
+  return `这次工具结果的估算大小：${estimatedSize} 估算单位。`
+}
+
+/**
  * 把可编辑的规则正文与固定外壳、工具正文拼成一次请求的用户输入。
  * @param rule - 可编辑的规则正文；空串时用 {@link DEFAULT_SUMMARY_RULE}。
+ * @param estimatedSize - 这次结果的估算大小；与准入请求共用同一行前缀。
  * @param body - 工具的文本正文。
  * @returns 请求用的提示词文本。
  */
-export function composeSummaryPrompt(rule: string, body: string): string {
+export function composeSummaryPrompt(rule: string, estimatedSize: number, body: string): string {
   const edited = rule === '' ? DEFAULT_SUMMARY_RULE : rule
-  return `${edited}\n\n${FIXED_SHELL}\n\n${BODY_OPEN}\n${body}\n${BODY_CLOSE}\n`
+  return `${composeRequestPrefix(estimatedSize)}\n\n${edited}\n\n${FIXED_SHELL}\n\n${BODY_OPEN}\n${body}\n${BODY_CLOSE}\n`
 }
 
 /** 摘要请求的结论：改写正文，或要求保留全文（`keep` 是信号，不是复述）。 */
@@ -78,6 +95,24 @@ export function parseSummaryOutput(text: string): SummaryAction | undefined {
 }
 
 /**
+ * 发一次摘要路径的模型请求并取回文本正文。准入与摘要两次请求共用它。
+ * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
+ * @param options - 请求参数。
+ * @returns 组装出的文本正文；模型不可用、请求中止、错误结束或抛出时为 `undefined`。
+ */
+export async function requestModelText(llm: LlmRuntime, options: GenerateOptions): Promise<string | undefined> {
+  const assembler = new BlockAssembler()
+  try {
+    for await (const chunk of llm.stream(options)) assembler.push(chunk)
+  } catch {
+    return undefined
+  }
+  const finish = assembler.finish
+  if (finish.kind === 'aborted' || finish.kind === 'error') return undefined
+  return textOf(assembler.blocks())
+}
+
+/**
  * 发一次摘要请求并解析结论。请求只带规则正文、固定外壳与工具正文。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param provider - 主 route 的 provider。
@@ -102,15 +137,8 @@ export async function requestSummary(
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
-  const assembler = new BlockAssembler()
-  try {
-    for await (const chunk of llm.stream(options)) assembler.push(chunk)
-  } catch {
-    return undefined
-  }
-  const finish = assembler.finish
-  if (finish.kind === 'aborted' || finish.kind === 'error') return undefined
-  return parseSummaryOutput(textOf(assembler.blocks()))
+  const text = await requestModelText(llm, options)
+  return text === undefined ? undefined : parseSummaryOutput(text)
 }
 
 /**

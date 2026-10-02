@@ -1,6 +1,7 @@
 /**
- * dsh-result-clipper 的浏览器半：把两项能力开关与 debug 开关注册成「设置 → 内置插件」里的一个页签，并把
- * debug 日志路径注册成插件详情卡片上的一个参数。
+ * dsh-result-clipper 的浏览器半：把两项能力开关、摘要准入判断开关与 debug 开关注册成「设置 → 内置插件」里的
+ * 一个页签，并把摘要与准入两路参数（route、阈值、「关闭推理」、提示词）与 debug 日志路径注册成插件详情卡片
+ * 上的参数。
  *
  * 座位分两处的依据是设计文档「配置面与设置座位」：开关在插件页签，参数在插件自己的详情卡片；两处都经
  * `ctx.configForms.get(ns)` 取得同一个 settings 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口
@@ -60,14 +61,19 @@ const LOCALE_NAMESPACE = 'resultClipper'
 interface PreferenceSection {
   summarize: boolean
   privacyGate: boolean
+  admissionJudge: boolean
   debug: boolean
   debugPath: string
   routeProvider: string
   routeModel: string
+  admissionProvider: string
+  admissionModel: string
   minInlineTokens: number
   maxSummarizeTokens: number
   summaryDisableReasoning: boolean
+  admissionDisableReasoning: boolean
   summaryPrompt: string
+  admissionPrompt: string
 }
 
 /** 注册这两处所需的客户端服务（host 服务不在其中——它们在 host 半）。 */
@@ -93,6 +99,7 @@ export function apply(ctx: Context): void {
       inject: () => ({
         hooks: {
           summarize: booleanField(form, 'summarize'),
+          admissionJudge: booleanField(form, 'admissionJudge'),
           privacyGate: booleanField(form, 'privacyGate'),
           debug: booleanField(form, 'debug'),
         },
@@ -112,14 +119,19 @@ export function apply(ctx: Context): void {
         hooks: {
           routeProvider: stringField(form, 'routeProvider'),
           routeModel: stringField(form, 'routeModel'),
+          admissionProvider: stringField(form, 'admissionProvider'),
+          admissionModel: stringField(form, 'admissionModel'),
           minInlineTokens: numberField(form, 'minInlineTokens', 1024),
           maxSummarizeTokens: numberField(form, 'maxSummarizeTokens', 12500),
           summaryDisableReasoning: booleanField(form, 'summaryDisableReasoning', true),
+          admissionDisableReasoning: booleanField(form, 'admissionDisableReasoning', true),
           summaryPrompt: stringField(form, 'summaryPrompt'),
+          admissionPrompt: stringField(form, 'admissionPrompt'),
           debugPath: stringField(form, 'debugPath'),
         },
         setField: (field: ResultClipperCardField, value: string | number | boolean) => form.set(field, value),
         resetSummaryPrompt: () => form.unset('summaryPrompt'),
+        resetAdmissionPrompt: () => form.unset('admissionPrompt'),
       }),
     }, ResultClipperCard),
   )), 'dsh-result-clipper: plugin detail card')
@@ -134,7 +146,7 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'debug' | 'summaryDisableReasoning',
+  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'summaryDisableReasoning' | 'admissionDisableReasoning',
   fallback = false,
 ): ObservableSnapshot<boolean> {
   return {
@@ -151,7 +163,8 @@ function booleanField(
  */
 function stringField(
   form: ConfigForm<PreferenceSection>,
-  field: 'debugPath' | 'routeProvider' | 'routeModel' | 'summaryPrompt',
+  field: 'debugPath' | 'routeProvider' | 'routeModel' | 'summaryPrompt'
+    | 'admissionProvider' | 'admissionModel' | 'admissionPrompt',
 ): ObservableSnapshot<string> {
   return {
     getSnapshot: () => form.getSnapshot().value?.[field] ?? '',

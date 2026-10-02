@@ -53,14 +53,19 @@ describe('配置契约', () => {
     expect(error).toBeUndefined()
     expect(fiber.config?.summarize.get()).toBe(false)
     expect(fiber.config?.privacyGate.get()).toBe(false)
+    expect(fiber.config?.admissionJudge.get()).toBe(false)
     expect(fiber.config?.debug.get()).toBe(false)
     expect(fiber.config?.debugPath.get()).toBe('')
     expect(fiber.config?.routeProvider.get()).toBe('')
     expect(fiber.config?.routeModel.get()).toBe('')
+    expect(fiber.config?.admissionProvider.get()).toBe('')
+    expect(fiber.config?.admissionModel.get()).toBe('')
     expect(fiber.config?.minInlineTokens.get()).toBe(1024)
     expect(fiber.config?.maxSummarizeTokens.get()).toBe(12500)
     expect(fiber.config?.summaryDisableReasoning.get()).toBe(true)
+    expect(fiber.config?.admissionDisableReasoning.get()).toBe(true)
     expect(fiber.config?.summaryPrompt.get()).toBe('')
+    expect(fiber.config?.admissionPrompt.get()).toBe('')
   })
 
   it('显式取值覆盖默认值（volatile 引用，装载后按它读）', async () => {
@@ -80,6 +85,16 @@ describe('配置契约', () => {
     expect(tuned.fiber.config?.maxSummarizeTokens.get()).toBe(9000)
     expect(tuned.fiber.config?.summaryDisableReasoning.get()).toBe(false)
     expect(tuned.fiber.config?.summaryPrompt.get()).toBe('只看目标')
+
+    const admitted = await load({
+      admissionJudge: true, admissionProvider: 'local', admissionModel: 'small',
+      admissionDisableReasoning: false, admissionPrompt: '只看体积',
+    })
+    expect(admitted.fiber.config?.admissionJudge.get()).toBe(true)
+    expect(admitted.fiber.config?.admissionProvider.get()).toBe('local')
+    expect(admitted.fiber.config?.admissionModel.get()).toBe('small')
+    expect(admitted.fiber.config?.admissionDisableReasoning.get()).toBe(false)
+    expect(admitted.fiber.config?.admissionPrompt.get()).toBe('只看体积')
   })
 
   it('装上插件后工具运行时仍可用，且监听器没有替换任何结果', async () => {

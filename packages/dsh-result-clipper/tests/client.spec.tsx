@@ -89,7 +89,7 @@ describe('票 02 第 2 条：两处座位注册在设置页里', () => {
 })
 
 describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () => {
-  it('页面上有摘要、隐私闸门、debug 三个开关，初始都读 host 的默认值（关闭）', async () => {
+  it('页面上有摘要、摘要准入判断、隐私闸门、debug 四个开关，初始都读 host 的默认值（关闭）', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
@@ -98,13 +98,15 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const { container } = render(<TabComponent {...props} />)
 
     const switches = [...container.querySelectorAll('[role="switch"]')]
-    expect(switches).toHaveLength(3)
-    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false'])
+    expect(switches).toHaveLength(4)
+    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'false'])
     expect(container.textContent).toContain('工具结果摘要')
+    expect(container.textContent).toContain('摘要准入判断')
     expect(container.textContent).toContain('隐私闸门')
     expect(container.textContent).toContain('debug 记录')
-    // 三个开关各自都在**自己那一行**里，行文案与控件成对出现。
+    // 四个开关各自都在**自己那一行**里，行文案与控件成对出现。
     expect(rowSwitch(container, '工具结果摘要')).not.toBeNull()
+    expect(rowSwitch(container, '摘要准入判断')).not.toBeNull()
     expect(rowSwitch(container, '隐私闸门')).not.toBeNull()
     expect(rowSwitch(container, 'debug 记录')).not.toBeNull()
   })
@@ -160,6 +162,22 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     expect(face.hooks.debug.getSnapshot()).toBe(true)
   })
 
+  it('点摘要准入判断开关写 admissionJudge=true（不是摘要或隐私那一路）', async () => {
+    const fixture = await mounted()
+    const entry = only(fixture, 'settings.plugins.tab')
+    const face = entry.options.inject!() as ResultClipperTabInjected
+    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...props} />)
+
+    await fireEvent.click(rowSwitch(container, '摘要准入判断'))
+    expect(fixture.form.writes).toEqual([{ field: 'admissionJudge', value: true }])
+    // 读回绑定也要落在准入那个字段上：只断言写入数组的话，把 hook 映射到别的字段仍会绿。
+    expect(face.hooks.admissionJudge.getSnapshot()).toBe(true)
+    expect(face.hooks.summarize.getSnapshot()).toBe(false)
+    expect(face.hooks.privacyGate.getSnapshot()).toBe(false)
+  })
+
   it('Host 业务拒绝（resolve false）时该行出现 role="alert"', async () => {
     const fixture = await mounted()
     fixture.form.accepted = false
@@ -177,23 +195,51 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
   })
 })
 
-describe('票 02 第 2 条 / 票 03 第 8 条：debug 路径与摘要参数在详情卡片上', () => {
+describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06：debug 路径与摘要、准入参数在详情卡片上', () => {
   /** 按详情卡片页的形状渲染一次，返回容器与注入面。 */
   async function renderPage(): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
     const fixture = await mounted()
     const entry = only(fixture, 'plugins.item')
     const face = entry.options.inject!() as ResultClipperCardInjected
-    const props = { view: 'page', t: fixture.t, ...boundHooks(face.hooks), setField: face.setField, resetSummaryPrompt: face.resetSummaryPrompt } as unknown as ResultClipperCardProps
+    const props = {
+      view: 'page',
+      t: fixture.t,
+      ...boundHooks(face.hooks),
+      setField: face.setField,
+      resetSummaryPrompt: face.resetSummaryPrompt,
+      resetAdmissionPrompt: face.resetAdmissionPrompt,
+    } as unknown as ResultClipperCardProps
     const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
     const { container } = render(<CardComponent {...props} />)
     return { fixture, container, face }
+  }
+
+  /**
+   * 某一行提示词里的「恢复默认」按钮。同一张卡片有多份提示词、按钮文案相同，所以按文本域所在的那一行取。
+   * @param container - 渲染出来的页面。
+   * @param textareaId - 该行文本域的 id。
+   * @param label - 按钮文案。
+   * @returns 该行里的恢复默认按钮。
+   */
+  function promptReset(container: HTMLElement, textareaId: string, label: string): Element {
+    const section = container.querySelector(`#${textareaId}`)?.closest('section')
+    const button = [...(section?.querySelectorAll('button') ?? [])].find(candidate => candidate.textContent === label)
+    if (button === undefined) throw new Error(`fixture: no reset button in row ${textareaId}`)
+    return button
   }
 
   it('summary 视图只给一行简介，不渲染输入控件', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'plugins.item')
     const face = entry.options.inject!() as ResultClipperCardInjected
-    const props = { view: 'summary', t: fixture.t, ...boundHooks(face.hooks), setField: face.setField, resetSummaryPrompt: face.resetSummaryPrompt } as unknown as ResultClipperCardProps
+    const props = {
+      view: 'summary',
+      t: fixture.t,
+      ...boundHooks(face.hooks),
+      setField: face.setField,
+      resetSummaryPrompt: face.resetSummaryPrompt,
+      resetAdmissionPrompt: face.resetAdmissionPrompt,
+    } as unknown as ResultClipperCardProps
     const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
     const { container } = render(<CardComponent {...props} />)
     expect(container.querySelector('input')).toBeNull()
@@ -249,13 +295,45 @@ describe('票 02 第 2 条 / 票 03 第 8 条：debug 路径与摘要参数在�
 
     // 上一次写入把它自己置成 busy（按钮被禁用）直到 promise 结算，等一个宏任务让 busy 落下。
     await new Promise((resolve) => { setTimeout(resolve, 0) })
-    // `Switch` 也是 button，所以按文案取「恢复默认」那一个。
-    const reset = [...container.querySelectorAll('button')]
-      .find(button => button.textContent === fixture.t('resetPrompt'))
-    if (reset === undefined) throw new Error('fixture: no reset button')
-    await fireEvent.click(reset)
+    await fireEvent.click(promptReset(container, 'plugin-config-result-clipper-summary-prompt', fixture.t('resetPrompt')))
     expect(fixture.form.resets).toEqual(['summaryPrompt'])
     expect(fixture.form.value.summaryPrompt).toBe('')
+  })
+
+  it('编辑准入 route 与「关闭推理」开关后各写回自己的字段（不是摘要那一路）', async () => {
+    const { fixture, container } = await renderPage()
+    const provider = container.querySelector('#plugin-config-result-clipper-admission-provider')!
+    const model = container.querySelector('#plugin-config-result-clipper-admission-model')!
+    await fireEvent.change(provider, { target: { value: 'local' } })
+    await fireEvent.blur(provider)
+    await fireEvent.change(model, { target: { value: 'small' } })
+    await fireEvent.blur(model)
+    expect(fixture.form.writes).toEqual([
+      { field: 'admissionProvider', value: 'local' },
+      { field: 'admissionModel', value: 'small' },
+    ])
+    // 卡片上两个「关闭推理」开关：默认都关推理（aria-checked=true），各自只写自己那一路的字段。
+    const initials = [...container.querySelectorAll('[role="switch"]')] as HTMLElement[]
+    expect(initials.map(control => control.getAttribute('aria-checked'))).toEqual(['true', 'true'])
+    await fireEvent.click(initials[0]!)
+    expect(fixture.form.writes.at(-1)).toEqual({ field: 'summaryDisableReasoning', value: false })
+    // 第一次点击后 React 重渲染，重新取一次第二批控件（不拿旧节点引用）。
+    const after = [...container.querySelectorAll('[role="switch"]')] as HTMLElement[]
+    await fireEvent.click(after[1]!)
+    expect(fixture.form.writes.at(-1)).toEqual({ field: 'admissionDisableReasoning', value: false })
+  })
+
+  it('编辑准入提示词失焦写 admissionPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+    const { fixture, container } = await renderPage()
+    const prompt = container.querySelector('#plugin-config-result-clipper-admission-prompt')!
+    await fireEvent.change(prompt, { target: { value: '只看体积与工具名' } })
+    await fireEvent.blur(prompt)
+    expect(fixture.form.writes).toEqual([{ field: 'admissionPrompt', value: '只看体积与工具名' }])
+
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    await fireEvent.click(promptReset(container, 'plugin-config-result-clipper-admission-prompt', fixture.t('resetPrompt')))
+    expect(fixture.form.resets).toEqual(['admissionPrompt'])
+    expect(fixture.form.value.admissionPrompt).toBe('')
   })
 
   it('page 视图渲染路径输入框，编辑后失焦写回 debugPath', async () => {

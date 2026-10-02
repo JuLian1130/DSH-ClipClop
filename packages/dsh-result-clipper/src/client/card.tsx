@@ -1,6 +1,6 @@
 /**
- * `plugins.item` 的插件详情卡片：摘要参数（主 route、两个阈值、「关闭推理」开关、提示词规则正文）与
- * debug 日志路径。
+ * `plugins.item` 的插件详情卡片：摘要参数（主 route、两个阈值、「关闭推理」开关、提示词规则正文）、准入参数
+ * （准入 route、「关闭推理」开关、提示词规则正文）与 debug 日志路径。
  *
  * 卡片与页签分座是设计文档「配置面与设置座位」的座位约定——开关在插件页签、参数在插件详情卡片。写入走
  * `configForms` 的立即写：这些字段在 schema 上都是 `volatile`，失焦即写、保存即生效。失败形态与页签同源
@@ -21,27 +21,39 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 export type ResultClipperCardField =
   | 'routeProvider'
   | 'routeModel'
+  | 'admissionProvider'
+  | 'admissionModel'
   | 'minInlineTokens'
   | 'maxSummarizeTokens'
   | 'summaryDisableReasoning'
+  | 'admissionDisableReasoning'
   | 'summaryPrompt'
+  | 'admissionPrompt'
   | 'debugPath'
 
-/** 注册者自己的业务面：逐字段读数与写入，加上提示词的清空。 */
+/** 注册者自己的业务面：逐字段读数与写入，加上两份提示词的清空。 */
 export interface ResultClipperCardInjected {
   hooks: {
     /** 主 route 的 provider。 */
     routeProvider: ObservableSnapshot<string>
     /** 主 route 的 model id。 */
     routeModel: ObservableSnapshot<string>
+    /** 准入 route 的 provider；空串表示跟随主 route。 */
+    admissionProvider: ObservableSnapshot<string>
+    /** 准入 route 的 model id；空串表示跟随主 route。 */
+    admissionModel: ObservableSnapshot<string>
     /** 摘要候选下限（估算器单位）。 */
     minInlineTokens: ObservableSnapshot<number>
     /** `bash` / `web_fetch` 的摘要上限。 */
     maxSummarizeTokens: ObservableSnapshot<number>
     /** 摘要请求是否关闭推理。 */
     summaryDisableReasoning: ObservableSnapshot<boolean>
+    /** 准入请求是否关闭推理。 */
+    admissionDisableReasoning: ObservableSnapshot<boolean>
     /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
     summaryPrompt: ObservableSnapshot<string>
+    /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
+    admissionPrompt: ObservableSnapshot<string>
     /** debug JSONL 路径；未配置时为空串。 */
     debugPath: ObservableSnapshot<string>
   }
@@ -57,6 +69,11 @@ export interface ResultClipperCardInjected {
    * @returns Host 是否接受；被拒绝时 resolve `false`。
    */
   resetSummaryPrompt(): Promise<boolean>
+  /**
+   * 清掉准入提示词的覆盖，让它回落到底层默认。
+   * @returns Host 是否接受；被拒绝时 resolve `false`。
+   */
+  resetAdmissionPrompt(): Promise<boolean>
 }
 
 /** 渲染机为本卡片合成的 props：槽位运行面（含 `view`）、本插件的文案命名空间、注入的业务面。 */
@@ -213,10 +230,11 @@ function SwitchRow(props: {
 
 /**
  * 提示词规则正文：失焦即写；「恢复默认」清掉覆盖，控件随 Host 的值重新播种。
- * @param props - 行文案、提示、当前值、写入与清空动作。
+ * @param props - 控件 id、行文案、提示、当前值、写入与清空动作。
  * @returns 一行文本域加一个恢复默认按钮。
  */
 function PromptRow(props: {
+  readonly id: string
   readonly label: string
   readonly hint: string
   readonly failedHint: string
@@ -245,9 +263,9 @@ function PromptRow(props: {
   }
 
   return <section style={ROW_STYLE}>
-    <label htmlFor="plugin-config-result-clipper-summary-prompt" style={TITLE_STYLE}>{props.label}</label>
+    <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
     <textarea
-      id="plugin-config-result-clipper-summary-prompt"
+      id={props.id}
       style={{ ...INPUT_STYLE, minHeight: 80, resize: 'vertical' }}
       value={draft}
       disabled={busy}
@@ -270,10 +288,14 @@ function PromptRow(props: {
 export function ResultClipperCard(props: ResultClipperCardProps) {
   const routeProvider = props.useRouteProvider(value => value)
   const routeModel = props.useRouteModel(value => value)
+  const admissionProvider = props.useAdmissionProvider(value => value)
+  const admissionModel = props.useAdmissionModel(value => value)
   const minInlineTokens = props.useMinInlineTokens(value => value)
   const maxSummarizeTokens = props.useMaxSummarizeTokens(value => value)
   const summaryDisableReasoning = props.useSummaryDisableReasoning(value => value)
+  const admissionDisableReasoning = props.useAdmissionDisableReasoning(value => value)
   const summaryPrompt = props.useSummaryPrompt(value => value)
+  const admissionPrompt = props.useAdmissionPrompt(value => value)
   const debugPath = props.useDebugPath(value => value)
 
   if (props.view === 'summary') return props.t('description')
@@ -288,6 +310,12 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     <TextRow id="plugin-config-result-clipper-route-model" label={props.t('routeModel')}
       hint={props.t('routeModelHint')} failedHint={props.t('failedHint')}
       value={routeModel} write={write('routeModel')} />
+    <TextRow id="plugin-config-result-clipper-admission-provider" label={props.t('admissionProvider')}
+      hint={props.t('admissionProviderHint')} failedHint={props.t('failedHint')}
+      value={admissionProvider} write={write('admissionProvider')} />
+    <TextRow id="plugin-config-result-clipper-admission-model" label={props.t('admissionModel')}
+      hint={props.t('admissionModelHint')} failedHint={props.t('failedHint')}
+      value={admissionModel} write={write('admissionModel')} />
     <NumberRow id="plugin-config-result-clipper-min-inline" label={props.t('minInlineTokens')}
       hint={props.t('minInlineTokensHint')} failedHint={props.t('failedHint')}
       value={minInlineTokens} write={write('minInlineTokens')} />
@@ -297,9 +325,15 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     <SwitchRow label={props.t('summaryDisableReasoning')} hint={props.t('summaryDisableReasoningHint')}
       failedHint={props.t('failedHint')} checked={summaryDisableReasoning}
       onChange={write('summaryDisableReasoning') as (next: boolean) => Promise<boolean>} />
-    <PromptRow label={props.t('summaryPrompt')} hint={props.t('summaryPromptHint')}
-      failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
+    <SwitchRow label={props.t('admissionDisableReasoning')} hint={props.t('admissionDisableReasoningHint')}
+      failedHint={props.t('failedHint')} checked={admissionDisableReasoning}
+      onChange={write('admissionDisableReasoning') as (next: boolean) => Promise<boolean>} />
+    <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
+      hint={props.t('summaryPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
       value={summaryPrompt} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
+    <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
+      hint={props.t('admissionPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
+      value={admissionPrompt} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
     <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
       hint={props.t('debugPathHint')} failedHint={props.t('failedHint')}
       value={debugPath} write={write('debugPath')} />

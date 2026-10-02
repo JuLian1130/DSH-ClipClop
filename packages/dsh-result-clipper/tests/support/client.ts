@@ -17,28 +17,38 @@ import { en, zh } from '../../src/client/locales.ts'
 export interface StubSection {
   summarize: boolean
   privacyGate: boolean
+  admissionJudge: boolean
   debug: boolean
   debugPath: string
   routeProvider: string
   routeModel: string
+  admissionProvider: string
+  admissionModel: string
   minInlineTokens: number
   maxSummarizeTokens: number
   summaryDisableReasoning: boolean
+  admissionDisableReasoning: boolean
   summaryPrompt: string
+  admissionPrompt: string
 }
 
 /** section 缺席时控件读到的默认值（与 host 半 schema 的默认一致）。 */
 export const SECTION_DEFAULTS: StubSection = {
   summarize: false,
   privacyGate: false,
+  admissionJudge: false,
   debug: false,
   debugPath: '',
   routeProvider: '',
   routeModel: '',
+  admissionProvider: '',
+  admissionModel: '',
   minInlineTokens: 1024,
   maxSummarizeTokens: 12500,
   summaryDisableReasoning: true,
+  admissionDisableReasoning: true,
   summaryPrompt: '',
+  admissionPrompt: '',
 }
 
 /** settings section 的替身：记账写入、可切换「Host 是否接受」。 */

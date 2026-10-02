@@ -30,14 +30,19 @@ export const PREFERENCE_NAMESPACE = 'dsh-result-clipper'
 export interface LiveConfig {
   readonly summarize: { get(): boolean }
   readonly privacyGate: { get(): boolean }
+  readonly admissionJudge: { get(): boolean }
   readonly debug: { get(): boolean }
   readonly debugPath: { get(): string }
   readonly routeProvider: { get(): string }
   readonly routeModel: { get(): string }
+  readonly admissionProvider: { get(): string }
+  readonly admissionModel: { get(): string }
   readonly minInlineTokens: { get(): number }
   readonly maxSummarizeTokens: { get(): number }
   readonly summaryDisableReasoning: { get(): boolean }
+  readonly admissionDisableReasoning: { get(): boolean }
   readonly summaryPrompt: { get(): string }
+  readonly admissionPrompt: { get(): string }
 }
 
 /** 一条装好的 profile。 */
@@ -115,10 +120,12 @@ function resolvedConfig(ctx: Context): LiveConfig {
   const entry = [...ctx.loader.entries()].find(candidate => candidate.options.id === PREFERENCE_NAMESPACE)
   const config = entry?.fiber?.config as Partial<LiveConfig> | undefined
   if (config?.summarize === undefined || config.privacyGate === undefined
-    || config.debug === undefined || config.debugPath === undefined
+    || config.admissionJudge === undefined || config.debug === undefined || config.debugPath === undefined
     || config.routeProvider === undefined || config.routeModel === undefined
+    || config.admissionProvider === undefined || config.admissionModel === undefined
     || config.minInlineTokens === undefined || config.maxSummarizeTokens === undefined
-    || config.summaryDisableReasoning === undefined || config.summaryPrompt === undefined) {
+    || config.summaryDisableReasoning === undefined || config.admissionDisableReasoning === undefined
+    || config.summaryPrompt === undefined || config.admissionPrompt === undefined) {
     throw new Error('profile fixture: the result-clipper row has no resolved volatile config')
   }
   return config as LiveConfig

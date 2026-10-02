@@ -22,7 +22,13 @@ export type TargetTool = typeof TARGET_TOOLS[number]
 
 /** 一条结果的摘要资格。 */
 export type CandidateVerdict =
-  | { readonly kind: 'candidate'; readonly tool: TargetTool; readonly text: string }
+  | {
+    readonly kind: 'candidate'
+    readonly tool: TargetTool
+    readonly text: string
+    /** 这次结果的估算大小（估算器单位）：准入与摘要两次请求共用的前缀里要写它。 */
+    readonly estimated: number
+  }
   | { readonly kind: 'skip' }
 
 /**
@@ -31,7 +37,7 @@ export type CandidateVerdict =
  * @param result - 工具结果的**原始投影**（未经 post-execute 链处理）。
  * @param minInlineTokens - 下限（估算器单位）；低于它透传。
  * @param maxSummarizeTokens - `bash` / `web_fetch` 的上限；达到或超过它交给 spill，`read` 不受它约束。
- * @returns 候选时给出正文；否则 `skip`。
+ * @returns 候选时给出正文与估算大小；否则 `skip`。
  */
 export function candidateOf(
   toolName: string,
@@ -49,7 +55,7 @@ export function candidateOf(
   const estimated = estimateContent(result.content)
   if (estimated < minInlineTokens) return { kind: 'skip' }
   if (toolName !== 'read' && estimated >= maxSummarizeTokens) return { kind: 'skip' }
-  return { kind: 'candidate', tool: toolName, text }
+  return { kind: 'candidate', tool: toolName, text, estimated }
 }
 
 /**

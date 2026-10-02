@@ -23,8 +23,14 @@
  * 同一条摘要，命中即不再发带正文的摘要请求（查找在准入判断之前，06 的准入阶段插在它之后）；`keep` 与失败
  * 没有摘要可复用，因此不进 memo；隐私开启时不查找、不写入 memo（裁决 B）。
  *
+ * 本票（06）在 memo 查找之后、摘要请求之前接入**摘要准入判断**：开关单独开启（默认关闭），隐私模式、摘要
+ * 关闭、未进候选、按入口读回与 memo 命中的结果都不发准入请求；准入 route 留空时跟随主 route，准入请求不
+ * 含工具正文、只带与摘要请求逐字相同的固定前缀（含结果大小那一行）；判 `no` 时原文透传并记 `admission-no`，
+ * 判断失败（调用失败、超时、空结果、非严格 `yes`/`no`）仍继续摘要。准入结论另记进 debug 记录。
+ *
  * 每条普通派发在 debug 记录里留一条闭合的「结果取值」：摘要关闭 `summary-off`、非候选 `not-candidate`、
- * 保留全文 `kept`、没变短 `not-shorter`、按入口读回 `read-back`、失败 `failed`、已替换 `summarized`。
+ * 准入判 no `admission-no`、保留全文 `kept`、没变短 `not-shorter`、按入口读回 `read-back`、失败 `failed`、
+ * 已替换 `summarized`。
  *
  * @module
  */
@@ -34,9 +40,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import { composeAdmissionPrompt, requestAdmission } from './admission.ts'
 import { candidateOf } from './candidate.ts'
 import type { Config } from './config.ts'
-import { appendDebugRecord, measureContent, type DebugOutcome, type DebugRecord } from './debug.ts'
+import {
+  appendDebugRecord,
+  measureContent,
+  type AdmissionVerdict,
+  type DebugOutcome,
+  type DebugRecord,
+} from './debug.ts'
 import { ENTRY_RESERVE, isReadBack, noteReadback, writeEntry, type ReadbackLedger } from './entry.ts'
 import { lookupMemo, noteMemo, type SummaryMemo } from './memo.ts'
 import { composeSummaryPrompt, requestSummary } from './summary.ts'
@@ -45,6 +58,7 @@ export * from './config.ts'
 export * from './debug.ts'
 export * from './candidate.ts'
 export * from './summary.ts'
+export * from './admission.ts'
 export * from './entry.ts'
 export * from './memo.ts'
 
@@ -73,20 +87,26 @@ export function apply(ctx: Context, config: Required<Config>): void {
     const decision = await next()
     const applied = await summarize(ctx, config, readback, memo, exec, result, decision)
       // 摘要路径的任何意外都不得把工具调用变成错误结果：透传并记 `failed`。
-      .catch((): Summarized => ({ decision, outcome: { action: 'unmodified', reason: 'failed' } }))
-    await record(config, exec.name, result, startedAt, applied.outcome)
+      .catch((): Summarized => ({
+        decision,
+        outcome: { action: 'unmodified', reason: 'failed' },
+        admission: 'not-applicable',
+      }))
+    await record(config, exec.name, result, startedAt, applied)
     return applied.decision
   }, { prepend: true })
 }
 
-/** 一次处理的结果：交回的工具决策与要记录的结果取值。 */
+/** 一次处理的结果：交回的工具决策、结果取值与准入结论。 */
 interface Summarized {
   readonly decision: PostToolDecision
   readonly outcome: DebugOutcome
+  readonly admission: AdmissionVerdict
 }
 
 /**
- * 摘要路径：判定候选（含读回识别）、查 memo 或发一次请求、按结论决定替换还是透传；要替换时先写原结果入口。
+ * 摘要路径：判定候选（含读回识别）、查 memo、过准入判断或发一次请求、按结论决定替换还是透传；要替换时先
+ * 写原结果入口。
  * @param ctx - 插件的 context。
  * @param config - 解析后的配置。
  * @param readback - 本进程内各会话写出的入口台账。
@@ -94,7 +114,7 @@ interface Summarized {
  * @param exec - 工具执行（会话归属与 `read` 的路径）。
  * @param result - 工具结果的原始投影（摘要资格按它测量）。
  * @param decision - 下游（含 spill）的决策。
- * @returns 交回的决策与结果取值。
+ * @returns 交回的决策、结果取值与准入结论。
  */
 async function summarize(
   ctx: Context,
@@ -105,8 +125,10 @@ async function summarize(
   result: Readonly<ToolExecutionResult>,
   decision: PostToolDecision,
 ): Promise<Summarized> {
-  const unchanged = (reason: Extract<DebugOutcome, { action: 'unmodified' }>['reason']): Summarized =>
-    ({ decision, outcome: { action: 'unmodified', reason } })
+  const unchanged = (
+    reason: Extract<DebugOutcome, { action: 'unmodified' }>['reason'],
+    admission: AdmissionVerdict = 'not-applicable',
+  ): Summarized => ({ decision, outcome: { action: 'unmodified', reason }, admission })
   if (!config.summarize.get()) return unchanged('summary-off')
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文，本插件不改写它。
   if (decision.kind === 'block') return unchanged('not-candidate')
@@ -119,20 +141,37 @@ async function summarize(
   const privacy = config.privacyGate.get()
   const reused = privacy ? undefined : lookupMemo(memo, exec, verdict.text)
   let summary: string
+  let admission: AdmissionVerdict = 'not-applicable'
   if (reused !== undefined) {
     summary = reused
   } else {
+    const llm = ctx.get('llm')
+    // 隐私模式一次请求同时给隐私结论与摘要（07），因此不经过准入；判定顺序见规格「契约 · 判定顺序」。
+    if (!privacy && config.admissionJudge.get()) {
+      const provider = config.admissionProvider.get() || config.routeProvider.get()
+      const model = config.admissionModel.get() || config.routeModel.get()
+      if (llm === undefined || provider === '' || model === '') {
+        admission = 'failed'
+      } else {
+        const answer = await requestAdmission(
+          llm, provider, model, config.admissionDisableReasoning.get(),
+          composeAdmissionPrompt(config.admissionPrompt.get(), verdict.estimated),
+        )
+        // 判断失败不是关功能：`failed` 只记进准入结论，照常发起带正文的摘要请求。
+        admission = answer === undefined ? 'failed' : answer ? 'yes' : 'no'
+        if (answer === false) return unchanged('admission-no', 'no')
+      }
+    }
     const provider = config.routeProvider.get()
     const model = config.routeModel.get()
-    const llm = ctx.get('llm')
-    if (llm === undefined || provider === '' || model === '') return unchanged('failed')
+    if (llm === undefined || provider === '' || model === '') return unchanged('failed', admission)
     const action = await requestSummary(
       llm, provider, model, config.summaryDisableReasoning.get(),
-      composeSummaryPrompt(config.summaryPrompt.get(), verdict.text),
+      composeSummaryPrompt(config.summaryPrompt.get(), verdict.estimated, verdict.text),
     )
-    if (action === undefined) return unchanged('failed')
+    if (action === undefined) return unchanged('failed', admission)
     // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，不写存储，也没有摘要可进 memo。
-    if (action.action === 'keep') return unchanged('kept')
+    if (action.action === 'keep') return unchanged('kept', admission)
     summary = action.summary
     if (!privacy) noteMemo(memo, exec, verdict.text, summary)
   }
@@ -142,13 +181,13 @@ async function summarize(
   const visible = decision.content ?? result.content
   const original = textOf(visible)
   // 入口说明的实际值写盘前取不到，所以比较用它的预留上界（裁决 A）：不短就透传、一次 `saveText` 都不发。
-  if (summary.length + ENTRY_RESERVE >= original.length) return unchanged('not-shorter')
+  if (summary.length + ENTRY_RESERVE >= original.length) return unchanged('not-shorter', admission)
 
   const store = ctx.get('spillStore')
-  if (store === undefined) return unchanged('failed')
+  if (store === undefined) return unchanged('failed', admission)
   // 存储失败与「没有会话归属」都由这一处兜住：抛出的错误走调用点的 catch，按 `failed` 透传。
   const written = await writeEntry(store, exec, exec.name, original)
-  if (written === undefined) return unchanged('failed')
+  if (written === undefined) return unchanged('failed', admission)
   noteReadback(readback, written)
   return {
     decision: {
@@ -157,6 +196,7 @@ async function summarize(
       ...decision.additionalContexts === undefined ? {} : { additionalContexts: decision.additionalContexts },
     },
     outcome: { action: 'summarized' },
+    admission,
   }
 }
 
@@ -175,14 +215,14 @@ function textOf(content: readonly ContentBlock[]): string {
  * @param toolName - 工具名。
  * @param result - 工具结果的原始投影。
  * @param startedAt - 拿到结果前的时间戳。
- * @param outcome - 本条结果的结果取值。
+ * @param applied - 本条结果的结果取值与准入结论。
  */
 async function record(
   config: Required<Config>,
   toolName: string,
   result: Readonly<ToolExecutionResult>,
   startedAt: number,
-  outcome: DebugOutcome,
+  applied: Summarized,
 ): Promise<void> {
   if (!config.debug.get()) return
   const path = config.debugPath.get()
@@ -190,8 +230,9 @@ async function record(
   const line: DebugRecord = {
     toolName,
     resultBytes: measureContent(result.content),
+    admission: applied.admission,
     durationMs: Math.round(performance.now() - startedAt),
-    ...outcome,
+    ...applied.outcome,
   }
   try {
     await appendDebugRecord(path, line)
