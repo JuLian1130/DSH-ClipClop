@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { appendFile } from 'node:fs/promises'
+import { appendFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -21,10 +21,10 @@ import type { HostFixture } from './support/host.ts'
 import { Config } from '../src/index.ts'
 
 // 「零写盘」的观察面是**写调用本身**：只断言某个猜出来的文件名不存在是空转的（插件回退到别的默认路径照样
-// 绿）。所以把 `appendFile` 包一层记账，其余 fs 行为原样透传。
+// 绿）。管道的磁盘副作用有两个——建父目录与追加写——所以两个都包一层记账，其余 fs 行为原样透传。
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...actual, appendFile: vi.fn(actual.appendFile) }
+  return { ...actual, appendFile: vi.fn(actual.appendFile), mkdir: vi.fn(actual.mkdir) }
 })
 
 /** 每个用例一个临时目录：里面的路径形态（父目录不存在、已有内容、不可写）互不干扰。 */
@@ -37,6 +37,7 @@ afterEach(async () => {
   await Promise.all(open.splice(0).map(async (fixture) => { await fixture.dispose() }))
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
   vi.mocked(appendFile).mockClear()
+  vi.mocked(mkdir).mockClear()
 })
 
 /** 一个全新的临时目录。 */
@@ -120,6 +121,21 @@ describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => 
     ])
   })
 
+  it('调用耗时量的是这条瀑布的耗时：下游监听器睡 20ms 时 durationMs ≥ 20', async () => {
+    const root = tempRoot()
+    const path = join(root, 'debug.jsonl')
+    const fixture = await mounted({ summarize: false, debug: true, debugPath: path })
+    fixture.ctx.tools.register(textTool('bash', 'body'))
+    // 不带 prepend 的下游监听器（push ＝ 最内层）：它睡的时间落在本插件 `await next()` 之内。
+    fixture.ctx.on('tools/post-execute', async (_exec, _result, next) => {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return await next()
+    })
+    await fixture.ctx.tools.execute(exec('bash'))
+    const [record] = readRecords(path) as [{ durationMs: number }]
+    expect(record.durationMs).toBeGreaterThanOrEqual(20)
+  })
+
   it('PTC 子派发不介入，也不产出记录', async () => {
     const root = tempRoot()
     const path = join(root, 'debug.jsonl')
@@ -139,6 +155,7 @@ describe('票 02 第 4 条：关闭时零写盘', () => {
     await fixture.ctx.tools.execute(exec('bash'))
     expect(existsSync(path)).toBe(false)
     expect(appendFile).not.toHaveBeenCalled()
+    expect(mkdir).not.toHaveBeenCalled()
   })
 
   it('debug 开启但路径为空时一次写调用都不发生（不回退到任何默认路径）', async () => {
@@ -147,6 +164,7 @@ describe('票 02 第 4 条：关闭时零写盘', () => {
     fixture.ctx.tools.register(textTool('bash', 'body'))
     await fixture.ctx.tools.execute(exec('bash'))
     expect(appendFile).not.toHaveBeenCalled()
+    expect(mkdir).not.toHaveBeenCalled()
 
     // 阳性对照：同一套夹具只把路径填上，写调用就发生——证明上一条断的不是「这条路径恰好没人写」。
     const path = join(root, 'debug.jsonl')
@@ -187,7 +205,8 @@ describe('票 02 第 5 条：记录不含原文、摘要正文、提示词与凭
     const body = 'SECRET-TOOL-BODY-7f2a'
     const fixture = await mounted({ summarize: false, debug: true, debugPath: path })
     fixture.ctx.tools.register(textTool('bash', body))
-    await fixture.ctx.tools.execute(exec('bash'))
+    // 提示词与凭据放进工具参数：监听器拿得到整个 `exec`，这是现实的泄漏面，所以「记录里不出现它们」才有对象。
+    await fixture.ctx.tools.execute(exec('bash', undefined, { prompt: 'SECRET-PROMPT', apiKey: 'sk-credential' }))
 
     const raw = readFileSync(path, 'utf8')
     expect(raw).not.toContain(body)

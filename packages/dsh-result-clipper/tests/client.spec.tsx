@@ -108,6 +108,25 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     ])
     // 写入落在同一个 settings section 上，下一次读快照就是新值（不需要重启）。
     expect(fixture.form.value).toMatchObject({ summarize: true, privacyGate: true, debug: false })
+    // 读回绑定也要落到各自的字段上：只断言写入数组的话，把某个 hook 映射到别的字段仍会绿。
+    expect(face.hooks.summarize.getSnapshot()).toBe(true)
+    expect(face.hooks.privacyGate.getSnapshot()).toBe(true)
+    expect(face.hooks.debug.getSnapshot()).toBe(false)
+  })
+
+  it('读数订阅在写入后收到通知（页面读的就是被写的那几个字段）', async () => {
+    const fixture = await mounted()
+    const entry = only(fixture, 'settings.plugins.tab')
+    const face = entry.options.inject!() as ResultClipperTabInjected
+    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...props} />)
+
+    const notified: boolean[] = []
+    const off = face.hooks.summarize.subscribe(() => { notified.push(face.hooks.summarize.getSnapshot()) })
+    await fireEvent.click([...container.querySelectorAll('[role="switch"]')][0]!)
+    off()
+    expect(notified).toEqual([true])
   })
 
   it('debug 开关写 debug=true', async () => {
@@ -120,6 +139,7 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
 
     await fireEvent.click([...container.querySelectorAll('[role="switch"]')][2]!)
     expect(fixture.form.writes).toEqual([{ field: 'debug', value: true }])
+    expect(face.hooks.debug.getSnapshot()).toBe(true)
   })
 
   it('Host 业务拒绝（resolve false）时该行出现 role="alert"', async () => {

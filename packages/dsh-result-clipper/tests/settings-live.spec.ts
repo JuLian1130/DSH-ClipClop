@@ -87,4 +87,19 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
     expect(fixture.config.summarize.get()).toBe(true)
     expect(fixture.config.privacyGate.get()).toBe(true)
   })
+
+  it('host 每次处理结果都重读 summarize，而不是装载期读一次', async () => {
+    const root = tempRoot()
+    const logPath = join(root, 'debug.jsonl')
+    // 本票里 summarize 唯一的可观察行为：关闭时每条结果记一条 `summary-off`，开启后没有可记录的取值。
+    const fixture = await booted({ summarize: false, privacyGate: false, debug: true, debugPath: logPath })
+    fixture.ctx.tools.register(textTool('bash', 'body'))
+    await fixture.ctx.tools.execute(exec('bash'))
+    expect(readFileSync(logPath, 'utf8').trimEnd().split('\n')).toHaveLength(1)
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['summarize'], value: true }])
+    await fixture.ctx.tools.execute(exec('bash'))
+    // 若 apply 在装载期把该开关捕获成常量，这里会多出第二行。
+    expect(readFileSync(logPath, 'utf8').trimEnd().split('\n')).toHaveLength(1)
+  })
 })

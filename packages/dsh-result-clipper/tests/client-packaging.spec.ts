@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest'
 import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
+import { name as pluginName } from '../src/index.ts'
 
 const nodeRequire = createRequire(import.meta.url)
 
@@ -30,7 +31,10 @@ const packageRoot = process.cwd()
 const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
   readonly name: string
   readonly exports: Record<string, unknown>
-  readonly dsh?: { readonly client?: { readonly platform?: string } }
+  readonly dsh?: {
+    readonly client?: { readonly platform?: string }
+    readonly bundle?: { readonly patch?: string }
+  }
 }
 
 /** 装载器接受的 `exports["./client"]` 形状：字符串，或带字符串 `default` 的对象。 */
@@ -59,6 +63,19 @@ describe('两面构建第 1 条：双面包的声明与产物', () => {
     const resolved = nodeRequire.resolve(`${manifest.name}/client`)
     expect(resolved).toBe(join(packageRoot, clientExport(manifest.exports['./client']).replace(/^\.\//, '')))
     expect(existsSync(resolved)).toBe(true)
+  })
+
+  it('随包的 bundle patch 存在，且行的 id 与包名和插件入口一致', async () => {
+    const patch = manifest.dsh?.bundle?.patch
+    expect(patch).toBe('./cordis.patch.yml')
+    const patchPath = join(packageRoot, patch!.replace(/^\.\//, ''))
+    expect(existsSync(patchPath)).toBe(true)
+    // patch 是 YAML，这里不做通用解析、也不引入 YAML 依赖：只核对两条决定「按哪个 id、装哪个模块」的取值。
+    // 这两条一旦脱钩，settings 命名空间（客户端 `whileServed` 与写回都按同一个 id）会整片失效，而任何其它
+    // 用例都看不见。
+    const text = readFileSync(patchPath, 'utf8')
+    expect(text).toContain(`id: ${pluginName}`)
+    expect(text).toContain(`name: '${manifest.name}'`)
   })
 })
 

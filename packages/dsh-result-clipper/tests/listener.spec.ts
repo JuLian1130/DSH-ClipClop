@@ -15,6 +15,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
 import type { PostToolDecision } from '@deepseek-ai/dsh-tools'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
@@ -30,13 +31,14 @@ afterEach(async () => {
 
 /**
  * 装一份夹具并打开 debug 管道。
+ * @param before - 在被测插件之前跑一次的钩子（用于观察注册位置）。
  * @returns 夹具与它的日志路径。
  */
-async function mounted(): Promise<{ fixture: HostFixture, path: string }> {
+async function mounted(before?: (ctx: Context) => void): Promise<{ fixture: HostFixture, path: string }> {
   const root = mkdtempSync(join(tmpdir(), 'dsh-result-clipper-listener-'))
   roots.push(root)
   const path = join(root, 'debug.jsonl')
-  const fixture = await mount({ debug: true, debugPath: path })
+  const fixture = await mount({ debug: true, debugPath: path }, before)
   open.push(fixture)
   return { fixture, path }
 }
@@ -82,8 +84,24 @@ describe('票 02 第 1 条：结果与未装时逐字相同', () => {
   })
 })
 
-describe('票 02 第 3 条：PTC 子派发原样放行', () => {
-  it('带父派发的调用不改变子派发结果，且不产出记录', async () => {
+describe('票 02 接缝第 1 条：注册为 prepend（位于更早注册的普通监听器外层）', () => {
+  it('早注册的短路监听器挡不住本插件：它仍在链上并留下记录', async () => {
+    // 短路监听器**先注册**且**不带 prepend**：`push` 让它排在列表末位＝最内层。本插件若带 `prepend`，
+    // `unshift` 把它排到 0 号位＝最外层，于是先跑、`next()` 到短路监听器并拿到它的决策，记录照写；若去掉
+    // `prepend`，插件被 `push` 到短路监听器之后，短路监听器先跑且不调 `next()`，插件一次都不跑、记录为 0。
+    const { fixture, path } = await mounted((ctx) => {
+      ctx.on('tools/post-execute', async (): Promise<PostToolDecision> => ({ kind: 'accept' }))
+    })
+    const body = 'body'
+    fixture.ctx.tools.register(textTool('bash', body))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+    expect(result.isError).toBe(false)
+    expect(textOf(result.content)).toBe(body)
+    expect(records(path).map(record => record.toolName)).toEqual(['bash'])
+  })
+})
+
+describe('票 02 第 3 条：PTC 子派发原样放行', () => {  it('带父派发的调用不改变子派发结果，且不产出记录', async () => {
     const { fixture, path } = await mounted()
     const body = 'sub-dispatch body'
     fixture.ctx.tools.register(textTool('bash', body))

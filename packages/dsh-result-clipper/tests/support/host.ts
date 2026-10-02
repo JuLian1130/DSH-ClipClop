@@ -27,12 +27,17 @@ export interface HostFixture {
 /**
  * 装出 ToolRuntime 并挂上被测插件。
  * @param config - 插件装载配置（loader 解析前的形状）。
+ * @param before - 在装载被测插件**之前**跑一次的钩子（用来先注册别的 post-execute 监听器，从而观察本插件的注册位置）。
  * @returns 夹具。
  */
-export async function mount(config: Schemastery.TypeS<typeof Config> = {}): Promise<HostFixture> {
+export async function mount(
+  config: Schemastery.TypeS<typeof Config> = {},
+  before?: (ctx: Context) => void,
+): Promise<HostFixture> {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  before?.(ctx)
   await ctx.plugin(plugin, config)
   return { ctx, dispose: async () => { await ctx.fiber.dispose() } }
 }
@@ -56,13 +61,14 @@ export function textTool(name: string, text: string): ToolDefinition {
  * 一次调用的最小 exec 形状；`parent` 给出时即为 PTC 子派发。
  * @param name - 工具名。
  * @param parent - 父派发 token；不给就是模型直连调用。
+ * @param args - 工具参数；默认空对象，需要时可放入哨兵值检验「记录不泄漏它们」。
  * @returns 可交给 `ctx.tools.execute` 的 exec。
  */
-export function exec(name: string, parent?: string): ToolExecution {
+export function exec(name: string, parent?: string, args: unknown = {}): ToolExecution {
   return {
     callId: ToolCallId(`call-${name}`),
     name,
-    arguments: {},
+    arguments: args,
     signal: new AbortController().signal,
     ...parent === undefined ? {} : { parent: parent as unknown as ToolExecutionToken },
   } as unknown as ToolExecution
