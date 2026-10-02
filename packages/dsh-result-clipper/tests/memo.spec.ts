@@ -8,13 +8,16 @@
  * 会话隔离与上限用同一套夹具直接观测：换一个会话 id 即换一个会话；上限用例用 `minInlineTokens: 0` 让短正文
  * 也进候选，从而不必为 200 条上限造 200 段长正文。
  *
+ * 「隐私开启时不写入 memo」这半句在单开关夹具里看不到——查找侧也会挡住命中，写没写观察面一样。那一条用真
+ * profile 在同一份插件实例里把开关从隐私开启改到关闭：若写侧失守，第二次会命中并复用，断言随即为假。
+ *
  * @module
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
@@ -22,8 +25,11 @@ import { Config } from '../src/index.ts'
 import { MEMO_LIMIT } from '../src/memo.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
+import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
+import type { LiveFixture } from './support/profile.ts'
 import { FakeRoute } from './support/route.ts'
 import type { FakeReply } from './support/route.ts'
+import { FakeSpill } from './support/spill.ts'
 
 /** 刚过摘要下限的正文：估价 ≥ 1024 个单位。 */
 const LONG_BODY = 'x'.repeat(5000)
@@ -34,12 +40,28 @@ const REPLY_B = JSON.stringify({ action: 'summarize', summary: '摘要B' })
 const REPLY_KEEP = JSON.stringify({ action: 'keep', summary: null })
 
 const open: HostFixture[] = []
+const live: LiveFixture[] = []
 const roots: string[] = []
 
 afterEach(async () => {
   await Promise.all(open.splice(0).map(async (fixture) => { await fixture.dispose() }))
+  await Promise.all(live.splice(0).map(async (fixture) => { await fixture.dispose() }))
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
+
+afterAll(() => { cleanupProfiles() })
+
+/**
+ * 装一条真 profile（真 settings + 真 Loader）并登记收场：跨隐私开关的用例要靠它把 volatile 开关**原地**改写，
+ * 手搓配置对象换不到同一份插件实例里那张 memo 台账。
+ * @param config - 本插件那一行的 profile 配置。
+ * @returns 夹具。
+ */
+async function booted(config: Record<string, unknown>): Promise<LiveFixture> {
+  const fixture = await bootProfile(config)
+  live.push(fixture)
+  return fixture
+}
 
 /** 一个全新的临时目录。 */
 function tempRoot(): string {
@@ -218,5 +240,32 @@ describe('票 05：memo 按会话隔离、LRU 上限 200 条', () => {
     // 第 0 条刚被刷新过：仍在 memo 里（若淘汰的是它，这里会再多一次请求）。
     await read(0)
     expect(route.requests).toHaveLength(MEMO_LIMIT + 2)
+  })
+})
+
+describe('票 05：隐私开启时不写入 memo（同一夹具里跨开关）', () => {
+  it('隐私开启那一次不进 memo：随后关掉隐私，同一正文仍重新发请求', async () => {
+    // 两条单开关用例各用一份新夹具，观察到的是「不查找」；写入侧只有让两次执行落在**同一份插件实例**上、
+    // 且第二次隐私已关闭时才可见——否则隐私开启的第二次又被查找侧挡住，写没写都一样。
+    const fixture = await booted({
+      summarize: true, privacyGate: true, routeProvider: 'mock', routeModel: 'mock',
+    })
+    const route = new FakeRoute([{ text: REPLY_A }, { text: REPLY_B }])
+    fixture.ctx.provide('llm', route as never)
+    fixture.ctx.provide('spillStore', new FakeSpill() as never)
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+
+    const first = await fixture.ctx.tools.execute(exec('bash'))
+    // 阳性对照：隐私开启时确实走了摘要路径、产出了一条摘要——否则没有东西可被错误地写进 memo。
+    expect(route.requests).toHaveLength(1)
+    expect(textOf(first.content)).toContain('摘要A')
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['privacyGate'], value: false }])
+    expect(fixture.config.privacyGate.get()).toBe(false)
+    const second = await fixture.ctx.tools.execute(exec('bash'))
+
+    // 隐私开启时若写进了 memo，这次（隐私已关闭）会命中并复用「摘要A」，请求数停在 1。
+    expect(route.requests).toHaveLength(2)
+    expect(textOf(second.content)).toContain('摘要B')
   })
 })
