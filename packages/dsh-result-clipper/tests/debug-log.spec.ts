@@ -68,7 +68,9 @@ describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => 
     const root = tempRoot()
     const path = join(root, 'nested', 'debug.jsonl')
     const fixture = await mounted({ summarize: false, debug: true, debugPath: path })
-    const body = 'x'.repeat(513)
+    // 多字节正文：字符数不等于 UTF-8 字节数，所以「结果大小」取哪一种在这里能被分开。
+    const body = '结果正文🙂'.repeat(64)
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(body.length)
     fixture.ctx.tools.register(textTool('bash', body))
     await fixture.ctx.tools.execute(exec('bash'))
 

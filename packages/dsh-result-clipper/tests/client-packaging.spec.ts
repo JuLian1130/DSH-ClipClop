@@ -98,10 +98,16 @@ describe('两面构建第 2 条：产物是闭包工厂注册', () => {
       'react/jsx-runtime': jsxRuntime,
       '@deepseek-ai/dsh-client-ui-primitives': primitives,
     }
+    // 记账并核「实际 require 的正是那三个平台模块」：只查「没有集合之外的 require」抓不到某个 external 被
+    // 内联（内联会让平台模块多出一份，React 会因此拿不到渲染机装的 dispatcher）。
+    const requested: string[] = []
     const exported = registration.factory((id) => {
       if (!(id in externals)) throw new Error(`unexpected require(${JSON.stringify(id)})`)
+      requested.push(id)
       return externals[id]
     })
+    // 同一模块被 require 多次是正常的（模块缓存由装载器持有），所以按去重后的集合比对。
+    expect([...new Set(requested)].sort()).toEqual(['@deepseek-ai/dsh-client-ui-primitives', 'react', 'react/jsx-runtime'])
     expect(Array.isArray(exported.inject)).toBe(true)
     expect(typeof exported.apply).toBe('function')
   })

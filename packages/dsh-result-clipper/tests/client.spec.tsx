@@ -40,6 +40,20 @@ function boundHooks(hooks: Record<string, ObservableSnapshot<unknown>>): Record<
   ]))
 }
 
+/**
+ * 取某一行文案对应的那个开关：把「行文案」与「该行写哪个字段」绑在一起。
+ * @param container - 渲染出来的页面。
+ * @param label - 该行的标题文案。
+ * @returns 该行里的开关元素。
+ */
+function rowSwitch(container: HTMLElement, label: string): Element {
+  const section = [...container.querySelectorAll('section')].find(node => node.textContent?.includes(label))
+  if (section === undefined) throw new Error(`fixture: no switch row labelled ${label}`)
+  const control = section.querySelector('[role="switch"]')
+  if (control === null) throw new Error(`fixture: the row labelled ${label} has no switch`)
+  return control
+}
+
 /** 装一份夹具并登记收场。 */
 async function mounted(): Promise<ClientFixture & { readonly form: StubForm }> {
   const fixture = await mountClient()
@@ -89,6 +103,10 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     expect(container.textContent).toContain('工具结果摘要')
     expect(container.textContent).toContain('隐私闸门')
     expect(container.textContent).toContain('debug 记录')
+    // 三个开关各自都在**自己那一行**里，行文案与控件成对出现。
+    expect(rowSwitch(container, '工具结果摘要')).not.toBeNull()
+    expect(rowSwitch(container, '隐私闸门')).not.toBeNull()
+    expect(rowSwitch(container, 'debug 记录')).not.toBeNull()
   })
 
   it('点摘要开关写 summarize=true，点隐私开关写 privacyGate=true（各写各的字段）', async () => {
@@ -99,9 +117,9 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
     const { container } = render(<TabComponent {...props} />)
 
-    const switches = [...container.querySelectorAll('[role="switch"]')]
-    await fireEvent.click(switches[0]!)
-    await fireEvent.click(switches[1]!)
+    // 按**行文案**点，而不是按 DOM 次序：把两行文案对调、或把某行接到别的字段，都会在这里变红。
+    await fireEvent.click(rowSwitch(container, '工具结果摘要'))
+    await fireEvent.click(rowSwitch(container, '隐私闸门'))
     expect(fixture.form.writes).toEqual([
       { field: 'summarize', value: true },
       { field: 'privacyGate', value: true },
@@ -137,7 +155,7 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
     const { container } = render(<TabComponent {...props} />)
 
-    await fireEvent.click([...container.querySelectorAll('[role="switch"]')][2]!)
+    await fireEvent.click(rowSwitch(container, 'debug 记录'))
     expect(fixture.form.writes).toEqual([{ field: 'debug', value: true }])
     expect(face.hooks.debug.getSnapshot()).toBe(true)
   })
