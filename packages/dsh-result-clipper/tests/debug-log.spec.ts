@@ -193,8 +193,12 @@ describe('票 02 第 4 条：本票边界——摘要开启时没有取值可记
     const path = join(root, 'debug.jsonl')
     const fixture = await mounted({ summarize: true, debug: true, debugPath: path })
     fixture.ctx.tools.register(textTool('bash', 'body'))
-    await fixture.ctx.tools.execute(exec('bash'))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+    // 没有候选判断不等于可以改结果：开启态同样必须逐字透传。
+    expect(result.isError).toBe(false)
+    expect(result.content).toEqual([{ type: 'text', text: 'body' }])
     expect(existsSync(path)).toBe(false)
+    expect(appendFile).not.toHaveBeenCalled()
   })
 })
 
