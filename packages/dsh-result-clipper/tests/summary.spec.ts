@@ -146,13 +146,18 @@ describe('票 03：候选之外的结果与原样透传', () => {
     expect(records(path)).toEqual([expect.objectContaining({ reason: 'not-candidate' })])
   })
 
-  it('bash / web_fetch 超过上限的结果交给 spill（不摘要、不发请求），read 不受上限约束', async () => {
+  // 两条会被 spill 接管的工具各跑一次：上界判定对两者是同一条分支（`read` 除外），
+  // 只驱动 `bash` 会让 `web_fetch` 的收窄改动无红字（票 03 第 3 条点名了它）。
+  it.each(['bash', 'web_fetch'] as const)('%s 超过上限的结果交给 spill（不摘要、不发请求）', async (toolName) => {
     const { fixture, route } = await mounted()
-    fixture.ctx.tools.register(textTool('bash', HUGE_BODY))
-    const huge = await fixture.ctx.tools.execute(exec('bash'))
+    fixture.ctx.tools.register(textTool(toolName, HUGE_BODY))
+    const huge = await fixture.ctx.tools.execute(exec(toolName))
     expect(textOf(huge.content)).toBe(HUGE_BODY)
     expect(route.requests).toHaveLength(0)
+  })
 
+  it('read 不受插件上限约束：同一条 52k 正文在 read 下被替换', async () => {
+    const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('read', HUGE_BODY))
     const read = await fixture.ctx.tools.execute(exec('read'))
     expect(textOf(read.content)).toBe(SHORT_SUMMARY)
@@ -273,6 +278,8 @@ describe('票 03：摘要请求的内容与形态', () => {
     const on = await mounted({ summaryDisableReasoning: false })
     on.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await on.fixture.ctx.tools.execute(exec('bash'))
+    // 先坐实这一臂真的发过请求：没有它，「关掉开关则不传 reasoningEffort」在「关掉开关就不发请求」下也为真。
+    expect(on.route.requests).toHaveLength(1)
     expect(on.route.requests[0]?.reasoningEffort).toBeUndefined()
   })
 })
