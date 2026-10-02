@@ -53,6 +53,14 @@ export interface Config {
   summaryPrompt?: Volatile<string>
   /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
   admissionPrompt?: Volatile<string>
+  /** 隐私提示词的规则正文覆盖；空串表示用内置默认。 */
+  privacyPrompt?: Volatile<string>
+  /** 隐私请求是否关闭推理，默认关闭推理（用户故事 47）。 */
+  privacyDisableReasoning?: Volatile<boolean>
+  /** 「主 route 已确认为本地」确认位；未确认时隐私模式按失败策略处理并显示常驻警告（用户故事 30、31）。 */
+  routeConfirmedLocal?: Volatile<boolean>
+  /** 隐私失效的处理策略：`passthrough` 放行原文（默认），`block` 给出拒绝结果（用户故事 27、28）。 */
+  failurePolicy?: Volatile<'passthrough' | 'block'>
 }
 
 /** 配置 schema：字段全部可选并在装载时解析成默认值。 */
@@ -72,4 +80,8 @@ export const Config = z.object({
   admissionDisableReasoning: z.boolean().default(true).volatile(),
   summaryPrompt: z.string().default('').volatile(),
   admissionPrompt: z.string().default('').volatile(),
+  privacyPrompt: z.string().default('').volatile(),
+  privacyDisableReasoning: z.boolean().default(true).volatile(),
+  routeConfirmedLocal: z.boolean().default(false).volatile(),
+  failurePolicy: z.union([z.const('passthrough'), z.const('block')]).default('passthrough').volatile(),
 })

@@ -391,12 +391,14 @@ describe('票 06 第 7 条：准入判 no 时原文透传、不再发起带正�
 })
 
 describe('票 06 第 8 条：隐私闸门开启时准入不发', () => {
-  it('隐私开启时只发一次带正文的请求（07 会把它换成隐私判断请求），没有准入请求', async () => {
-    const { fixture, route, path } = await mounted({ privacyGate: true }, [{ text: SUMMARY_REPLY }])
+  it('隐私开启时只发一次带正文的请求（07 起就是那条合并请求），没有准入请求', async () => {
+    // 07 起隐私模式发的是合并请求（隐私结论 + 摘要字段），所以这条用例的答复也叫隐私形状。
+    const privacyReply = JSON.stringify({ privacyVerdict: 'safe', action: 'summarize', summary: SHORT_SUMMARY })
+    const { fixture, route, path } = await mounted({ privacyGate: true, routeConfirmedLocal: true }, [{ text: privacyReply }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
-    // 阳性对照嵌在断言里：这一次请求带着工具正文，说明它是摘要那条请求而不是不含正文的准入请求。
+    // 阳性对照嵌在断言里：这一次请求带着工具正文，说明它是那条带正文的合并请求、不是不含正文的准入请求。
     expect(route.requests).toHaveLength(1)
     expect(requestText(route.requests[0]!)).toContain(LONG_BODY)
     expect(textOf(result.content)).toContain(SHORT_SUMMARY)

@@ -40,6 +40,16 @@ const REPLY_A = JSON.stringify({ action: 'summarize', summary: '摘要A' })
 const REPLY_B = JSON.stringify({ action: 'summarize', summary: '摘要B' })
 const REPLY_KEEP = JSON.stringify({ action: 'keep', summary: null })
 
+/**
+ * 把一段摘要答复改写成隐私模式的合并答复：同样的摘要文本，外面套上 `safe` 结论。07 起隐私模式只发这条请求。
+ * @param summaryReply - `{action:'summarize',summary}` 的 JSON 文本。
+ * @returns 隐私形状的答复文本。
+ */
+function privacyReply(summaryReply: string): string {
+  const { summary } = JSON.parse(summaryReply) as { summary: string }
+  return JSON.stringify({ privacyVerdict: 'safe', action: 'summarize', summary })
+}
+
 const open: HostFixture[] = []
 const live: LiveFixture[] = []
 const roots: string[] = []
@@ -177,8 +187,12 @@ describe('票 05：keep 的结果不进 memo', () => {
 })
 
 describe('票 05：memo 的范围限定为隐私关闭时', () => {
-  it('隐私开启时同正文两次各发一次请求，不复用 memo', async () => {
-    const { fixture, route } = await mounted({ privacyGate: true })
+  it('隐私开启时同正文两次各发一次隐私判断请求，不复用 memo', async () => {
+    // 07 起隐私模式发的是合并请求（隐私结论 + 摘要字段），所以这里的两段答复都是隐私形状。
+    const { fixture, route } = await mounted({ privacyGate: true, routeConfirmedLocal: true }, [
+      { text: privacyReply(REPLY_A) },
+      { text: privacyReply(REPLY_B) },
+    ])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const first = await fixture.ctx.tools.execute(exec('bash'))
     const second = await fixture.ctx.tools.execute(exec('bash'))
@@ -249,9 +263,9 @@ describe('票 05：隐私开关的切换不跨边界复用 memo（同一夹具�
     // 两条单开关用例各用一份新夹具，且写入守卫会使 memo 恒为空，查找守卫在或不在都一样；写入侧只有让两次
     // 执行落在**同一份插件实例**上、且第二次隐私已关闭时才可见——否则隐私开启的第二次又被查找侧挡住。
     const fixture = await booted({
-      summarize: true, privacyGate: true, routeProvider: 'mock', routeModel: 'mock',
+      summarize: true, privacyGate: true, routeConfirmedLocal: true, routeProvider: 'mock', routeModel: 'mock',
     })
-    const route = new FakeRoute([{ text: REPLY_A }, { text: REPLY_B }])
+    const route = new FakeRoute([{ text: privacyReply(REPLY_A) }, { text: REPLY_B }])
     fixture.ctx.provide('llm', route as never)
     fixture.ctx.provide('spillStore', new FakeSpill() as never)
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -274,9 +288,9 @@ describe('票 05：隐私开关的切换不跨边界复用 memo（同一夹具�
     // 反方向的同一件事：写入守卫在时，只有「隐私关闭期先缓存、会话中途开隐私」才会让查找守卫单独可观察——
     // 否则 memo 恒为空，查不查都 miss。
     const fixture = await booted({
-      summarize: true, privacyGate: false, routeProvider: 'mock', routeModel: 'mock',
+      summarize: true, privacyGate: false, routeConfirmedLocal: true, routeProvider: 'mock', routeModel: 'mock',
     })
-    const route = new FakeRoute([{ text: REPLY_A }, { text: REPLY_B }])
+    const route = new FakeRoute([{ text: REPLY_A }, { text: privacyReply(REPLY_B) }])
     fixture.ctx.provide('llm', route as never)
     fixture.ctx.provide('spillStore', new FakeSpill() as never)
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))

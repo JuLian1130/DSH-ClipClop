@@ -30,10 +30,21 @@ export type ResultClipperLocaleKey =
   | 'summaryDisableReasoningHint'
   | 'admissionDisableReasoning'
   | 'admissionDisableReasoningHint'
+  | 'privacyDisableReasoning'
+  | 'privacyDisableReasoningHint'
+  | 'routeConfirmedLocal'
+  | 'routeConfirmedLocalHint'
+  | 'routeUnconfirmedWarning'
+  | 'failurePolicy'
+  | 'failurePolicyHint'
+  | 'failurePolicyPassthrough'
+  | 'failurePolicyBlock'
   | 'summaryPrompt'
   | 'summaryPromptHint'
   | 'admissionPrompt'
   | 'admissionPromptHint'
+  | 'privacyPrompt'
+  | 'privacyPromptHint'
   | 'resetPrompt'
   | 'debugPath'
   | 'debugPathHint'
@@ -69,10 +80,21 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   summaryDisableReasoningHint: '默认开启，让本地模型更快响应。',
   admissionDisableReasoning: '准入请求关闭推理',
   admissionDisableReasoningHint: '默认开启，让本地模型更快响应。',
+  privacyDisableReasoning: '隐私请求关闭推理',
+  privacyDisableReasoningHint: '默认开启，让本地模型更快响应。',
+  routeConfirmedLocal: '主 route 已确认为本地',
+  routeConfirmedLocalHint: '隐私闸门要求你确认主 route 不会把内容发往外部网络；插件无法自行证明这一点。',
+  routeUnconfirmedWarning: '隐私闸门已开启，但主 route 尚未确认为本地：每个工具结果都会按失败策略处理。确认它是本地 route，或关闭隐私闸门。',
+  failurePolicy: '隐私失效的处理策略',
+  failurePolicyHint: '判定敏感始终拦截；判断不确定或失败时按这条策略处理。',
+  failurePolicyPassthrough: '放行原文',
+  failurePolicyBlock: '拦截',
   summaryPrompt: '摘要提示词规则正文',
   summaryPromptHint: '只改规则正文；安全外壳与输出格式由插件固定，不可编辑。留空时用内置默认。',
   admissionPrompt: '准入提示词规则正文',
   admissionPromptHint: '只改规则正文；安全外壳与输出格式由插件固定，不可编辑。留空时用内置默认。',
+  privacyPrompt: '隐私提示词规则正文',
+  privacyPromptHint: '只改规则正文；安全外壳与输出格式由插件固定，不可编辑。留空时用内置默认。',
   resetPrompt: '恢复默认',
   debugPath: '调试日志路径',
   debugPathHint: 'metadata JSONL 的写入位置；留空时 debug 不写盘。不会自动改用临时路径。',
@@ -109,10 +131,21 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   summaryDisableReasoningHint: 'On by default, so local models answer faster.',
   admissionDisableReasoning: 'Disable reasoning for admission requests',
   admissionDisableReasoningHint: 'On by default, so local models answer faster.',
+  privacyDisableReasoning: 'Disable reasoning for privacy requests',
+  privacyDisableReasoningHint: 'On by default, so local models answer faster.',
+  routeConfirmedLocal: 'Confirmed the main route is local',
+  routeConfirmedLocalHint: 'The privacy gate needs you to confirm the main route never sends content to an external network; the plugin cannot prove it.',
+  routeUnconfirmedWarning: 'The privacy gate is on, but the main route is not confirmed local: every tool result is handled by the failure policy. Confirm it is a local route, or turn the privacy gate off.',
+  failurePolicy: 'Privacy failure policy',
+  failurePolicyHint: 'A sensitive verdict is always blocked; an uncertain verdict or a failure follows this policy.',
+  failurePolicyPassthrough: 'Pass through',
+  failurePolicyBlock: 'Block',
   summaryPrompt: 'Summary prompt rule text',
   summaryPromptHint: 'Only the rule text is editable; the safety shell and output format are fixed by the plugin. Empty uses the built-in default.',
   admissionPrompt: 'Admission prompt rule text',
   admissionPromptHint: 'Only the rule text is editable; the safety shell and output format are fixed by the plugin. Empty uses the built-in default.',
+  privacyPrompt: 'Privacy prompt rule text',
+  privacyPromptHint: 'Only the rule text is editable; the safety shell and output format are fixed by the plugin. Empty uses the built-in default.',
   resetPrompt: 'Reset to default',
   debugPath: 'Debug log path',
   debugPathHint: 'Where the metadata JSONL is written; an empty path writes nothing. The plugin never falls back to a temporary path.',

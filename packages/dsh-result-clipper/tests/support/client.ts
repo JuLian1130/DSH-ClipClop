@@ -10,6 +10,7 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
+import * as client from '../../src/client/index.ts'
 import type { ResultClipperLocaleKey } from '../../src/client/locales.ts'
 import { en, zh } from '../../src/client/locales.ts'
 
@@ -28,8 +29,12 @@ export interface StubSection {
   maxSummarizeTokens: number
   summaryDisableReasoning: boolean
   admissionDisableReasoning: boolean
+  privacyDisableReasoning: boolean
+  routeConfirmedLocal: boolean
+  failurePolicy: 'passthrough' | 'block'
   summaryPrompt: string
   admissionPrompt: string
+  privacyPrompt: string
 }
 
 /** section 缺席时控件读到的默认值（与 host 半 schema 的默认一致）。 */
@@ -47,8 +52,12 @@ export const SECTION_DEFAULTS: StubSection = {
   maxSummarizeTokens: 12500,
   summaryDisableReasoning: true,
   admissionDisableReasoning: true,
+  privacyDisableReasoning: true,
+  routeConfirmedLocal: false,
+  failurePolicy: 'passthrough',
   summaryPrompt: '',
   admissionPrompt: '',
+  privacyPrompt: '',
 }
 
 /** settings section 的替身：记账写入、可切换「Host 是否接受」。 */
@@ -157,7 +166,6 @@ export async function mountClient(): Promise<ClientFixture & { readonly form: St
   ctx.reflect.provide('slots', slots)
   ctx.reflect.provide('locale', locale)
   ctx.reflect.provide('configForms', configForms)
-  const client = await import('../../src/client/index.ts')
   await ctx.plugin({ inject: [...client.inject], apply: client.apply as (ctx: Context) => void })
   return {
     ctx,

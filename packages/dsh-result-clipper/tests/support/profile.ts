@@ -41,8 +41,12 @@ export interface LiveConfig {
   readonly maxSummarizeTokens: { get(): number }
   readonly summaryDisableReasoning: { get(): boolean }
   readonly admissionDisableReasoning: { get(): boolean }
+  readonly privacyDisableReasoning: { get(): boolean }
+  readonly routeConfirmedLocal: { get(): boolean }
+  readonly failurePolicy: { get(): 'passthrough' | 'block' }
   readonly summaryPrompt: { get(): string }
   readonly admissionPrompt: { get(): string }
+  readonly privacyPrompt: { get(): string }
 }
 
 /** 一条装好的 profile。 */
@@ -125,7 +129,10 @@ function resolvedConfig(ctx: Context): LiveConfig {
     || config.admissionProvider === undefined || config.admissionModel === undefined
     || config.minInlineTokens === undefined || config.maxSummarizeTokens === undefined
     || config.summaryDisableReasoning === undefined || config.admissionDisableReasoning === undefined
-    || config.summaryPrompt === undefined || config.admissionPrompt === undefined) {
+    || config.privacyDisableReasoning === undefined || config.routeConfirmedLocal === undefined
+    || config.failurePolicy === undefined
+    || config.summaryPrompt === undefined || config.admissionPrompt === undefined
+    || config.privacyPrompt === undefined) {
     throw new Error('profile fixture: the result-clipper row has no resolved volatile config')
   }
   return config as LiveConfig

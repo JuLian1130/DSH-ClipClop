@@ -64,8 +64,13 @@ describe('配置契约', () => {
     expect(fiber.config?.maxSummarizeTokens.get()).toBe(12500)
     expect(fiber.config?.summaryDisableReasoning.get()).toBe(true)
     expect(fiber.config?.admissionDisableReasoning.get()).toBe(true)
+    expect(fiber.config?.privacyDisableReasoning.get()).toBe(true)
     expect(fiber.config?.summaryPrompt.get()).toBe('')
     expect(fiber.config?.admissionPrompt.get()).toBe('')
+    expect(fiber.config?.privacyPrompt.get()).toBe('')
+    // 隐私的确认位与失败策略：默认未确认、默认放行。
+    expect(fiber.config?.routeConfirmedLocal.get()).toBe(false)
+    expect(fiber.config?.failurePolicy.get()).toBe('passthrough')
   })
 
   it('显式取值覆盖默认值（volatile 引用，装载后按它读）', async () => {
@@ -95,6 +100,14 @@ describe('配置契约', () => {
     expect(admitted.fiber.config?.admissionModel.get()).toBe('small')
     expect(admitted.fiber.config?.admissionDisableReasoning.get()).toBe(false)
     expect(admitted.fiber.config?.admissionPrompt.get()).toBe('只看体积')
+
+    const gated = await load({
+      privacyDisableReasoning: false, routeConfirmedLocal: true, failurePolicy: 'block', privacyPrompt: '只看我定义的机密',
+    })
+    expect(gated.fiber.config?.privacyDisableReasoning.get()).toBe(false)
+    expect(gated.fiber.config?.routeConfirmedLocal.get()).toBe(true)
+    expect(gated.fiber.config?.failurePolicy.get()).toBe('block')
+    expect(gated.fiber.config?.privacyPrompt.get()).toBe('只看我定义的机密')
   })
 
   it('装上插件后工具运行时仍可用，且监听器没有替换任何结果', async () => {

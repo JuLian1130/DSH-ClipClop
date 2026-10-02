@@ -15,7 +15,14 @@
  * @module
  */
 
-import { BlockAssembler, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import {
+  BlockAssembler,
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  ReasoningEffortId,
+  errorChain,
+  isContextWindowExceededError,
+  isHarnessError,
+} from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
 
 /** 摘要输出上限（固定常量，不可配）：输出 512 token。 */
@@ -88,6 +95,16 @@ export function parseSummaryOutput(text: string): SummaryAction | undefined {
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   const { action, summary } = value as { action?: unknown, summary?: unknown }
+  return parseAction(action, summary)
+}
+
+/**
+ * 解析输出里的 `action` / `summary` 两个字段。摘要请求与隐私模式的合并请求（`safe` 分支）共用它。
+ * @param action - 输出里的动作字段。
+ * @param summary - 输出里的摘要字段。
+ * @returns 解析出的动作；非法时为 `undefined`。
+ */
+export function parseAction(action: unknown, summary: unknown): SummaryAction | undefined {
   if (action === 'keep') return { action: 'keep' }
   if (action !== 'summarize') return undefined
   if (typeof summary !== 'string' || summary === '') return undefined
@@ -95,21 +112,49 @@ export function parseSummaryOutput(text: string): SummaryAction | undefined {
 }
 
 /**
- * 发一次摘要路径的模型请求并取回文本正文。准入与摘要两次请求共用它。
+ * 一次模型请求的失败分类：**本地窗口不足**与其余失败分开（规格「契约 · 结果取值」要求窗口不足与普通失败
+ * 不同值）。只有底层明确报告上下文超窗时才取 `failed-window`；超时、不可用、错误结束等一律 `failed`。
+ */
+export type ModelRequestFailure = 'failed' | 'failed-window'
+
+/** 一次模型请求的收场：拿到文本正文，或按失败分类交回。 */
+export type ModelTextResult =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly failure: ModelRequestFailure }
+
+/**
+ * 发一次摘要路径的模型请求并取回文本正文。准入、摘要与隐私三类请求共用它。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param options - 请求参数。
- * @returns 组装出的文本正文；模型不可用、请求中止、错误结束或抛出时为 `undefined`。
+ * @returns 组装出的文本正文；模型不可用、请求中止、错误结束或抛出时按 {@link ModelRequestFailure} 交回。
  */
-export async function requestModelText(llm: LlmRuntime, options: GenerateOptions): Promise<string | undefined> {
+export async function requestModelText(llm: LlmRuntime, options: GenerateOptions): Promise<ModelTextResult> {
   const assembler = new BlockAssembler()
+  let thrown: unknown
   try {
     for await (const chunk of llm.stream(options)) assembler.push(chunk)
-  } catch {
-    return undefined
+  } catch (error) {
+    thrown = error
+  }
+  if (thrown !== undefined) {
+    return { ok: false, failure: classifyFailure(isHarnessError(thrown) ? thrown.code : undefined, errorChain(thrown)) }
   }
   const finish = assembler.finish
-  if (finish.kind === 'aborted' || finish.kind === 'error') return undefined
-  return textOf(assembler.blocks())
+  if (finish.kind === 'aborted') return { ok: false, failure: 'failed' }
+  if (finish.kind === 'error') {
+    return { ok: false, failure: classifyFailure(finish.failure.code, finish.failure.message) }
+  }
+  return { ok: true, text: textOf(assembler.blocks()) }
+}
+
+/**
+ * 按稳定错误码与错误正文判定这次失败是不是上下文超窗。
+ * @param code - 稳定机器码；不可得时 `undefined`。
+ * @param detail - 错误正文（错误链拼接结果或 finish 的 message）。
+ * @returns 上下文超窗时为 `failed-window`，其余为 `failed`。
+ */
+function classifyFailure(code: string | undefined, detail: string): ModelRequestFailure {
+  return code === CONTEXT_WINDOW_EXCEEDED_CODE || isContextWindowExceededError(detail) ? 'failed-window' : 'failed'
 }
 
 /**
@@ -137,8 +182,8 @@ export async function requestSummary(
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
-  const text = await requestModelText(llm, options)
-  return text === undefined ? undefined : parseSummaryOutput(text)
+  const result = await requestModelText(llm, options)
+  return result.ok ? parseSummaryOutput(result.text) : undefined
 }
 
 /**

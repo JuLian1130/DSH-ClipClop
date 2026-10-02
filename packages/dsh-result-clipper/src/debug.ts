@@ -3,8 +3,8 @@
  *
  * 记录**不含**原文、摘要正文、完整提示词与凭据（规格「契约 · debug JSONL 字段」），所以这里的字段只有
  * 元数据。`结果取值` 是封闭的两段式（动作 + 未改动原因）：`summary-off` 自 02，`not-candidate`、`kept`、
- * `not-shorter`、`failed` 自 03，`read-back` 自 04，`admission-no` 与「准入结论」字段自 06；其余取值由引入
- * 对应机制的票各自加入（`uncertain` / `failed-window` / `rejected` 自 07）。
+ * `not-shorter`、`failed` 自 03，`read-back` 自 04，`admission-no` 与「准入结论」字段自 06，`uncertain`、
+ * `failed-window` 与 `rejected` 自 07；其余取值由引入对应机制的票各自加入。
  *
  * @module
  */
@@ -21,7 +21,9 @@ export type UnmodifiedReason =
   | 'kept'
   | 'not-shorter'
   | 'read-back'
+  | 'uncertain'
   | 'failed'
+  | 'failed-window'
 
 /**
  * 准入结论：这次结果有没有进准入判断、判断说了什么。`not-applicable` 覆盖所有没进准入阶段的情形
@@ -31,9 +33,10 @@ export type UnmodifiedReason =
  */
 export type AdmissionVerdict = 'yes' | 'no' | 'failed' | 'not-applicable'
 
-/** 一条记录的「结果取值」：动作取闭集之一，`unmodified` 时必须附原因。 */
+/** 一条记录的「结果取值」：动作取闭集之一，`unmodified` 时必须附原因，`rejected` 只记动作不附原因。 */
 export type DebugOutcome =
   | { readonly action: 'summarized' }
+  | { readonly action: 'rejected' }
   | { readonly action: 'unmodified'; readonly reason: UnmodifiedReason }
 
 /** 一行 debug JSONL。 */

@@ -68,16 +68,38 @@ export function textTool(name: string, text: string): ToolDefinition {
   })
 }
 
+/** 一条被 append 的会话事件（票 07 的失效提醒观察面）。 */
+export interface AppendedNotice {
+  readonly type: string
+  readonly message: { readonly content: readonly ContentBlock[], readonly source: { readonly kind: string } }
+  readonly opts: unknown
+}
+
 /**
  * 一次调用的最小 exec 形状；`parent` 给出时即为 PTC 子派发，`session` 是 spill 归属用的会话 id。
  * @param name - 工具名。
  * @param parent - 父派发 token；不给就是模型直连调用。
  * @param args - 工具参数；默认空对象，需要时可放入哨兵值检验「记录不泄漏它们」。
  * @param session - 会话 id；默认 `s1`。换一个 id 即模拟 fork／重启后的新会话。
+ * @param notices - 给出时收集这次调用 append 的会话事件（票 07 的会话提醒）；不给则吞掉。
  * @returns 可交给 `ctx.tools.execute` 的 exec。
  */
-export function exec(name: string, parent?: string, args: unknown = {}, session = 's1'): ToolExecution {
-  const agent = { session: { header: { id: session } } }
+export function exec(
+  name: string,
+  parent?: string,
+  args: unknown = {},
+  session = 's1',
+  notices?: AppendedNotice[],
+): ToolExecution {
+  const agent = {
+    session: {
+      header: { id: session },
+      append(type: string, message: AppendedNotice['message'], opts: unknown): undefined {
+        notices?.push({ type, message, opts })
+        return undefined
+      },
+    },
+  }
   return {
     callId: ToolCallId(`call-${name}`),
     name,

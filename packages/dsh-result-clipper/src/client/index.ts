@@ -72,8 +72,12 @@ interface PreferenceSection {
   maxSummarizeTokens: number
   summaryDisableReasoning: boolean
   admissionDisableReasoning: boolean
+  privacyDisableReasoning: boolean
+  routeConfirmedLocal: boolean
+  failurePolicy: 'passthrough' | 'block'
   summaryPrompt: string
   admissionPrompt: string
+  privacyPrompt: string
 }
 
 /** 注册这两处所需的客户端服务（host 服务不在其中——它们在 host 半）。 */
@@ -117,6 +121,9 @@ export function apply(ctx: Context): void {
       locale: LOCALE_NAMESPACE,
       inject: () => ({
         hooks: {
+          privacyGate: booleanField(form, 'privacyGate'),
+          routeConfirmedLocal: booleanField(form, 'routeConfirmedLocal'),
+          failurePolicy: policyField(form),
           routeProvider: stringField(form, 'routeProvider'),
           routeModel: stringField(form, 'routeModel'),
           admissionProvider: stringField(form, 'admissionProvider'),
@@ -125,13 +132,16 @@ export function apply(ctx: Context): void {
           maxSummarizeTokens: numberField(form, 'maxSummarizeTokens', 12500),
           summaryDisableReasoning: booleanField(form, 'summaryDisableReasoning', true),
           admissionDisableReasoning: booleanField(form, 'admissionDisableReasoning', true),
+          privacyDisableReasoning: booleanField(form, 'privacyDisableReasoning', true),
           summaryPrompt: stringField(form, 'summaryPrompt'),
           admissionPrompt: stringField(form, 'admissionPrompt'),
+          privacyPrompt: stringField(form, 'privacyPrompt'),
           debugPath: stringField(form, 'debugPath'),
         },
         setField: (field: ResultClipperCardField, value: string | number | boolean) => form.set(field, value),
         resetSummaryPrompt: () => form.unset('summaryPrompt'),
         resetAdmissionPrompt: () => form.unset('admissionPrompt'),
+        resetPrivacyPrompt: () => form.unset('privacyPrompt'),
       }),
     }, ResultClipperCard),
   )), 'dsh-result-clipper: plugin detail card')
@@ -146,7 +156,8 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'summaryDisableReasoning' | 'admissionDisableReasoning',
+  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'summaryDisableReasoning'
+    | 'admissionDisableReasoning' | 'privacyDisableReasoning' | 'routeConfirmedLocal',
   fallback = false,
 ): ObservableSnapshot<boolean> {
   return {
@@ -164,10 +175,22 @@ function booleanField(
 function stringField(
   form: ConfigForm<PreferenceSection>,
   field: 'debugPath' | 'routeProvider' | 'routeModel' | 'summaryPrompt'
-    | 'admissionProvider' | 'admissionModel' | 'admissionPrompt',
+    | 'admissionProvider' | 'admissionModel' | 'admissionPrompt' | 'privacyPrompt',
 ): ObservableSnapshot<string> {
   return {
     getSnapshot: () => form.getSnapshot().value?.[field] ?? '',
+    subscribe: (listener) => form.subscribe(listener),
+  }
+}
+
+/**
+ * 隐私失败策略字段的读数：镜像还没给出 section 时回落到 schema 的默认（放行原文）。
+ * @param form - 本插件的 settings 表单。
+ * @returns 供控件绑定的读数。
+ */
+function policyField(form: ConfigForm<PreferenceSection>): ObservableSnapshot<'passthrough' | 'block'> {
+  return {
+    getSnapshot: () => form.getSnapshot().value?.failurePolicy ?? 'passthrough',
     subscribe: (listener) => form.subscribe(listener),
   }
 }

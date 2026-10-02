@@ -79,6 +79,6 @@ export async function requestAdmission(
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
-  const text = await requestModelText(llm, options)
-  return text === undefined ? undefined : parseAdmissionOutput(text)
+  const result = await requestModelText(llm, options)
+  return result.ok ? parseAdmissionOutput(result.text) : undefined
 }

@@ -19,7 +19,7 @@ import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
 import type { ResultClipperTabInjected, ResultClipperTabProps } from '../src/client/tab.tsx'
 import { mountClient } from './support/client.ts'
-import type { ClientFixture, StubForm } from './support/client.ts'
+import type { ClientFixture, StubForm, StubSection } from './support/client.ts'
 
 const open: Array<ClientFixture & { readonly form: StubForm }> = []
 
@@ -195,10 +195,16 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
   })
 })
 
-describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06：debug 路径与摘要、准入参数在详情卡片上', () => {
-  /** 按详情卡片页的形状渲染一次，返回容器与注入面。 */
-  async function renderPage(): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
+describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径与摘要、准入、隐私参数在详情卡片上', () => {
+  /**
+   * 按详情卡片页的形状渲染一次，返回容器与注入面。
+   * @param initial - 渲染前先写进 settings 替身的取值（常驻警告这类静态状态的用例要用它）。
+   */
+  async function renderPage(
+    initial: Partial<StubSection> = {},
+  ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
     const fixture = await mounted()
+    fixture.form.value = { ...fixture.form.value, ...initial }
     const entry = only(fixture, 'plugins.item')
     const face = entry.options.inject!() as ResultClipperCardInjected
     const props = {
@@ -208,6 +214,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06：debug 路径与摘要�
       setField: face.setField,
       resetSummaryPrompt: face.resetSummaryPrompt,
       resetAdmissionPrompt: face.resetAdmissionPrompt,
+      resetPrivacyPrompt: face.resetPrivacyPrompt,
     } as unknown as ResultClipperCardProps
     const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
     const { container } = render(<CardComponent {...props} />)
@@ -312,9 +319,9 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06：debug 路径与摘要�
       { field: 'admissionProvider', value: 'local' },
       { field: 'admissionModel', value: 'small' },
     ])
-    // 卡片上两个「关闭推理」开关：默认都关推理（aria-checked=true），各自只写自己那一路的字段。
+    // 卡片上三个「关闭推理」开关（摘要 / 准入 / 隐私）：默认都关推理（aria-checked=true），各自只写自己那一路的字段。
     const initials = [...container.querySelectorAll('[role="switch"]')] as HTMLElement[]
-    expect(initials.map(control => control.getAttribute('aria-checked'))).toEqual(['true', 'true'])
+    expect(initials.map(control => control.getAttribute('aria-checked'))).toEqual(['true', 'true', 'true'])
     await fireEvent.click(initials[0]!)
     expect(fixture.form.writes.at(-1)).toEqual({ field: 'summaryDisableReasoning', value: false })
     // 第一次点击后 React 重渲染，重新取一次第二批控件（不拿旧节点引用）。
@@ -353,5 +360,60 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06：debug 路径与摘要�
     await fireEvent.blur(input)
     await Promise.resolve()
     expect(container.querySelector('[role="alert"]')).not.toBeNull()
+  })
+
+  it('勾选「主 route 已确认为本地」写 routeConfirmedLocal=true', async () => {
+    const { fixture, container } = await renderPage()
+    const confirmed = container.querySelector('#plugin-config-result-clipper-route-confirmed input')!
+    expect((confirmed as HTMLInputElement).checked).toBe(false)
+    await fireEvent.click(confirmed)
+    expect(fixture.form.writes).toEqual([{ field: 'routeConfirmedLocal', value: true }])
+    expect(fixture.form.value.routeConfirmedLocal).toBe(true)
+  })
+
+  it('失败策略默认读 schema 的放行；点「拦截」写 failurePolicy=block', async () => {
+    const { fixture, container } = await renderPage()
+    const control = container.querySelector('#plugin-config-result-clipper-failure-policy')!
+    const tabs = (): Element[] => [...control.querySelectorAll('[role="tab"]')]
+    // 阳性对照：默认选中的是「放行原文」，说明这条控件绑在失败策略上而不是随便两个按钮。
+    expect(tabs().map(tab => tab.getAttribute('aria-selected'))).toEqual(['true', 'false'])
+
+    const block = tabs().find(tab => tab.textContent === fixture.t('failurePolicyBlock'))!
+    await fireEvent.click(block)
+    expect(fixture.form.writes).toEqual([{ field: 'failurePolicy', value: 'block' }])
+    expect(fixture.form.value.failurePolicy).toBe('block')
+  })
+
+  it('隐私「关闭推理」开关默认关推理；点它写 privacyDisableReasoning=false', async () => {
+    const { fixture, container } = await renderPage()
+    const switches = [...container.querySelectorAll('[role="switch"]')] as HTMLElement[]
+    // 摘要、准入、隐私三路各一个开关，默认都关推理。
+    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['true', 'true', 'true'])
+    await fireEvent.click(switches[2]!)
+    expect(fixture.form.writes).toEqual([{ field: 'privacyDisableReasoning', value: false }])
+  })
+
+  it('编辑隐私提示词失焦写 privacyPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+    const { fixture, container } = await renderPage()
+    const prompt = container.querySelector('#plugin-config-result-clipper-privacy-prompt')!
+    await fireEvent.change(prompt, { target: { value: '只按我定义的机密判断' } })
+    await fireEvent.blur(prompt)
+    expect(fixture.form.writes).toEqual([{ field: 'privacyPrompt', value: '只按我定义的机密判断' }])
+
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    await fireEvent.click(promptReset(container, 'plugin-config-result-clipper-privacy-prompt', fixture.t('resetPrompt')))
+    expect(fixture.form.resets).toEqual(['privacyPrompt'])
+    expect(fixture.form.value.privacyPrompt).toBe('')
+  })
+
+  it('隐私开启且主 route 未确认为本地时显示常驻警告；确认后或关闭隐私开关后消失', async () => {
+    const warned = await renderPage({ privacyGate: true, routeConfirmedLocal: false })
+    expect(warned.container.textContent).toContain(warned.fixture.t('routeUnconfirmedWarning'))
+
+    const confirmed = await renderPage({ privacyGate: true, routeConfirmedLocal: true })
+    expect(confirmed.container.textContent).not.toContain(confirmed.fixture.t('routeUnconfirmedWarning'))
+
+    const off = await renderPage({ privacyGate: false, routeConfirmedLocal: false })
+    expect(off.container.textContent).not.toContain(off.fixture.t('routeUnconfirmedWarning'))
   })
 })
