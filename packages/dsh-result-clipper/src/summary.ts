@@ -24,6 +24,7 @@ import {
   isHarnessError,
 } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, LlmRuntime, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { ReasoningEffort } from './reasoning.ts'
 import { DEFAULT_SUMMARY_RULE } from './rules.ts'
 
 /** 摘要输出上限（固定常量，不可配）：输出 512 token。 */
@@ -150,11 +151,11 @@ const UNSUPPORTED_REASONING_EFFORT_CODE = 'UNSUPPORTED_REASONING_EFFORT'
 /**
  * 发一次摘要路径的模型请求并取回文本正文。准入、摘要与隐私三类请求共用它。
  *
- * **档位 id 由 route 声明，没有全局词表**（`ReasoningEffortId` 只是品牌字符串），所以「关闭推理」显式传的
- * `off` 会被不提供 `off` 的 route 拒收（例如 dsh-cline-pass 的档位表是 `none|minimal|low|…`，注释自陈 `off`
- * 是故意不放的）。这类拒绝发生在 provider I/O 之前，因此这里去掉该字段重发一次：不重试就永远摘要不了，而重试
- * 不产生第二次真实请求。重试条件只认这一个码，且只在请求确实带了这个字段时成立——其余失败码与未带字段的请求
- * 一律不重发。
+ * **档位 id 由 route 声明，没有全局词表**（`ReasoningEffortId` 只是品牌字符串），所以请求带的档位会被不声明
+ * 它的 route 拒收（例如 dsh-cline-pass 的档位表是 `none|minimal|low|…`，注释自陈 `off` 是故意不放的；默认
+ * 档位 `off` 因此在它上面也不可用）。这类拒绝发生在 provider I/O 之前，因此这里去掉该字段重发一次：不重试就
+ * 永远摘要不了，而重试不产生第二次真实请求。重试条件只认这一个码，且只在请求确实带了这个字段时成立——其余
+ * 失败码与未带字段的请求一律不重发。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param options - 请求参数。
  * @returns 组装出的文本正文与用量；模型不可用、请求中止、错误结束或抛出时按 {@link ModelRequestFailure} 交回。
@@ -226,9 +227,9 @@ function classifyFailure(code: string | undefined, detail: string): ModelRequest
 /**
  * 发一次摘要请求并解析结论。请求只带规则正文、固定外壳与工具正文。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
- * @param provider - 主 route 的 provider。
- * @param model - 主 route 的 model id。
- * @param disableReasoning - 是否关闭推理；关闭时显式传 `off`。
+ * @param provider - 摘要 route 的 provider。
+ * @param model - 摘要 route 的 model id。
+ * @param reasoningEffort - 这次请求的推理档位；默认 `off`。
  * @param prompt - {@link composeSummaryPrompt} 的产物。
  * @returns 解析出的结论与这次请求的用量；任何失败都是空结论。
  */
@@ -236,13 +237,13 @@ export async function requestSummary(
   llm: LlmRuntime,
   provider: string,
   model: string,
-  disableReasoning: boolean,
+  reasoningEffort: ReasoningEffort,
   prompt: string,
 ): Promise<SummaryOutcome> {
   const options: GenerateOptions = {
     provider,
     model,
-    ...disableReasoning ? { reasoningEffort: ReasoningEffortId('off') } : {},
+    reasoningEffort: ReasoningEffortId(reasoningEffort),
     temperature: 0,
     maxTokens: SUMMARY_MAX_TOKENS,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],

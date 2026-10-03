@@ -12,7 +12,7 @@
  *
  * **失效可见性**：运行期按 `passthrough` 放行时，同一会话内每类原因各追加一条插件 user 消息（至多三条），
  * 消息来源不是真实用户。写法照 `dsh-navigator` 先例：`source` 属于消息体，`append` 的第三个参数只接受
- * `surfaceOp` 与 `sourceEventSeqs`。`block` 策略下拦截本身在对话里可见，不发这类提醒；「主 route 未确认为
+ * `surfaceOp` 与 `sourceEventSeqs`。`block` 策略下拦截本身在对话里可见，不发这类提醒；「隐私 route 未确认为
  * 本地」是静态配置状态，其可见面是配置项与卡片常驻警告，也不发提醒。
  *
  * @module
@@ -22,6 +22,7 @@ import { boundContextSummary, createUserMessage, ReasoningEffortId } from '@deep
 import type { ContextFormed, GenerateOptions, LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
 import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, parseAction, requestModelText } from './summary.ts'
 import type { ModelCallUsage, ModelRequestFailure, SummaryAction } from './summary.ts'
+import type { ReasoningEffort } from './reasoning.ts'
 import { DEFAULT_PRIVACY_RULE } from './rules.ts'
 
 // 消息来源是生产者自报的 kind（会话格式拒绝通用 `plugin` 包装），所以本插件在这里登记自己的来源类型。
@@ -97,9 +98,9 @@ export interface PrivacyCall {
 /**
  * 发一次隐私判断请求并解析结论。请求带完整文本投影，只发一次。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
- * @param provider - 主 route 的 provider。
- * @param model - 主 route 的 model id。
- * @param disableReasoning - 是否关闭推理；关闭时显式传 `off`。
+ * @param provider - 隐私 route 的 provider。
+ * @param model - 隐私 route 的 model id。
+ * @param reasoningEffort - 这次请求的推理档位；默认 `off`。
  * @param prompt - {@link composePrivacyPrompt} 的产物。
  * @returns 解析出的结论与这次请求的用量；任何失败按 {@link ModelRequestFailure} 交回。
  */
@@ -107,13 +108,13 @@ export async function requestPrivacy(
   llm: LlmRuntime,
   provider: string,
   model: string,
-  disableReasoning: boolean,
+  reasoningEffort: ReasoningEffort,
   prompt: string,
 ): Promise<PrivacyCall> {
   const options: GenerateOptions = {
     provider,
     model,
-    ...disableReasoning ? { reasoningEffort: ReasoningEffortId('off') } : {},
+    reasoningEffort: ReasoningEffortId(reasoningEffort),
     temperature: 0,
     maxTokens: SUMMARY_MAX_TOKENS,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],

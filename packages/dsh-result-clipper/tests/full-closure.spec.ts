@@ -135,7 +135,7 @@ function scenarios(): readonly Scenario[] {
       run: async () => {
         const path = paths()
         const fixture = await mounted(
-          { ...base(path), summarize: true, privacyGate: true, routeConfirmedLocal: true },
+          { ...base(path), summarize: true, privacyGate: true, privacyConfirmedLocal: true },
           new FakeRoute([{ text: SENSITIVE }]),
         )
         fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -221,7 +221,7 @@ function scenarios(): readonly Scenario[] {
       run: async () => {
         const path = paths()
         const fixture = await mounted(
-          { ...base(path), summarize: true, privacyGate: true, routeConfirmedLocal: true },
+          { ...base(path), summarize: true, privacyGate: true, privacyConfirmedLocal: true },
           new FakeRoute([{ text: UNCERTAIN }]),
         )
         fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -261,7 +261,7 @@ function scenarios(): readonly Scenario[] {
       run: async () => {
         const path = paths()
         const fixture = await mounted(
-          { ...base(path), summarize: true, privacyGate: true, routeConfirmedLocal: true },
+          { ...base(path), summarize: true, privacyGate: true, privacyConfirmedLocal: true },
           new FakeRoute([{ error: 'Context length exceeded: 40000 > 32768' }]),
         )
         fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -364,12 +364,14 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
     routeModel: '',
     admissionProvider: '',
     admissionModel: '',
+    privacyProvider: '',
+    privacyModel: '',
     minInlineTokens: 1024,
     maxSummarizeTokens: 12500,
-    summaryDisableReasoning: true,
-    admissionDisableReasoning: true,
-    privacyDisableReasoning: true,
-    routeConfirmedLocal: false,
+    summaryReasoningEffort: 'off',
+    admissionReasoningEffort: 'off',
+    privacyReasoningEffort: 'off',
+    privacyConfirmedLocal: false,
     failurePolicy: 'passthrough',
     summaryPrompt: '',
     admissionPrompt: '',
@@ -388,12 +390,14 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
     routeModel: 'qwen',
     admissionProvider: 'local',
     admissionModel: 'small',
+    privacyProvider: 'local-guard',
+    privacyModel: 'guard',
     minInlineTokens: 256,
     maxSummarizeTokens: 9000,
-    summaryDisableReasoning: false,
-    admissionDisableReasoning: false,
-    privacyDisableReasoning: false,
-    routeConfirmedLocal: true,
+    summaryReasoningEffort: 'medium',
+    admissionReasoningEffort: 'low',
+    privacyReasoningEffort: 'high',
+    privacyConfirmedLocal: true,
     failurePolicy: 'block',
     summaryPrompt: '只看目标',
     admissionPrompt: '只看体积',

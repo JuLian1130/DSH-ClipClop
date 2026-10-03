@@ -3,18 +3,22 @@
  *
  * 全部字段都 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
- * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、摘要准入判断关闭、主 route 与准入 route 未配置、
- * 阈值 1024/12500、三类请求各自关闭推理、提示词留空（用内置规则正文）、debug 关闭且不自动改用临时路径、
- * 干跑关闭。
+ * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、摘要准入判断关闭、摘要 route 与准入 route 未配置、
+ * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」、提示词留空（用内置规则正文）、debug 关闭且不
+ * 自动改用临时路径、干跑关闭。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
- * 清回空串。准入 route 的两个字段留空时跟随主 route（准入请求与摘要请求共用主 route 的部署最常见）。
+ * 清回空串。三个角色（摘要、摘要准入判断、隐私闸门）各有自己的 route：`routeProvider` / `routeModel` 是摘要
+ * route 的键名（票 12 之前它就是「主 route」，语义未变，不为了改名打断已存配置）；准入与隐私的 route 留空时
+ * 跟随摘要 route，所以三个角色可以设成同一条，也可以各设一条。
  *
  * @module
  */
 
 import z from '@deepseek-ai/schemastery'
 import type { Volatile } from '@deepseek-ai/cordis'
+import { REASONING_EFFORT_IDS } from './reasoning.ts'
+import type { ReasoningEffort } from './reasoning.ts'
 
 /**
  * 本插件的配置。
@@ -36,35 +40,48 @@ export interface Config {
   debugPath?: Volatile<string>
   /** 干跑开关，默认关闭；开启且 debug 开关与路径都就位时只写「本应发生什么」的记录（用户故事 50）。 */
   dryRun?: Volatile<boolean>
-  /** 主 route 的 provider（摘要与隐私共用）；空串表示未配置，此时摘要路径失败并透传。 */
+  /** 摘要 route 的 provider；空串表示未配置，此时摘要路径失败并透传。 */
   routeProvider?: Volatile<string>
-  /** 主 route 的 model id；与 provider 一起决定请求发往哪条 route。 */
+  /** 摘要 route 的 model id；与 provider 一起决定请求发往哪条 route。 */
   routeModel?: Volatile<string>
-  /** 准入 route 的 provider；空串时跟随主 route。 */
+  /** 准入 route 的 provider；空串时跟随摘要 route。 */
   admissionProvider?: Volatile<string>
-  /** 准入 route 的 model id；空串时跟随主 route。 */
+  /** 准入 route 的 model id；空串时跟随摘要 route。 */
   admissionModel?: Volatile<string>
+  /** 隐私 route 的 provider；空串时跟随摘要 route。 */
+  privacyProvider?: Volatile<string>
+  /** 隐私 route 的 model id；空串时跟随摘要 route。 */
+  privacyModel?: Volatile<string>
   /** 摘要候选的下限（估算器单位）；低于它的结果原样透传。`0` 表示不设下限。 */
   minInlineTokens?: Volatile<number>
   /** `bash` / `web_fetch` 的上限；达到或超过它的结果原样交给 spill。`read` 不受它约束。 */
   maxSummarizeTokens?: Volatile<number>
-  /** 摘要请求是否关闭推理，默认关闭推理（用户故事 47）。 */
-  summaryDisableReasoning?: Volatile<boolean>
-  /** 准入请求是否关闭推理，默认关闭推理（用户故事 47）。 */
-  admissionDisableReasoning?: Volatile<boolean>
+  /** 摘要请求的推理档位；默认 `off`（不推理），让本地模型更快响应（用户故事 47）。 */
+  summaryReasoningEffort?: Volatile<ReasoningEffort>
+  /** 准入请求的推理档位；默认 `off`（不推理），让本地模型更快响应（用户故事 47）。 */
+  admissionReasoningEffort?: Volatile<ReasoningEffort>
   /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
   summaryPrompt?: Volatile<string>
   /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
   admissionPrompt?: Volatile<string>
   /** 隐私提示词的规则正文覆盖；空串表示用内置默认。 */
   privacyPrompt?: Volatile<string>
-  /** 隐私请求是否关闭推理，默认关闭推理（用户故事 47）。 */
-  privacyDisableReasoning?: Volatile<boolean>
-  /** 「主 route 已确认为本地」确认位；未确认时隐私模式按失败策略处理并显示常驻警告（用户故事 30、31）。 */
-  routeConfirmedLocal?: Volatile<boolean>
+  /** 隐私请求的推理档位；默认 `off`（不推理），让本地模型更快响应（用户故事 47）。 */
+  privacyReasoningEffort?: Volatile<ReasoningEffort>
+  /** 「隐私 route 已确认为本地」确认位；未确认时隐私模式按失败策略处理并显示常驻警告（用户故事 30、31）。 */
+  privacyConfirmedLocal?: Volatile<boolean>
   /** 隐私失效的处理策略：`passthrough` 放行原文（默认），`block` 给出拒绝结果（用户故事 27、28）。 */
   failurePolicy?: Volatile<'passthrough' | 'block'>
 }
+
+/**
+ * 一个推理档位字段：候选集是 pi-ai 的规范档位，默认 `off`。
+ *
+ * 用 `z.union` 而不是 `z.string()`：写进配置的取值只能是这七个之一，拼错的档位在装载期就被拒，而不是等到
+ * 某条结果上被 route 以 `UNSUPPORTED_REASONING_EFFORT` 拒收。
+ */
+const effort = () =>
+  z.union(REASONING_EFFORT_IDS.map(id => z.const(id))).default('off').volatile()
 
 /** 配置 schema：字段全部可选并在装载时解析成默认值。 */
 export const Config = z.object({
@@ -78,14 +95,16 @@ export const Config = z.object({
   routeModel: z.string().default('').volatile(),
   admissionProvider: z.string().default('').volatile(),
   admissionModel: z.string().default('').volatile(),
+  privacyProvider: z.string().default('').volatile(),
+  privacyModel: z.string().default('').volatile(),
   minInlineTokens: z.number().default(1024).volatile(),
   maxSummarizeTokens: z.number().default(12500).volatile(),
-  summaryDisableReasoning: z.boolean().default(true).volatile(),
-  admissionDisableReasoning: z.boolean().default(true).volatile(),
+  summaryReasoningEffort: effort(),
+  admissionReasoningEffort: effort(),
   summaryPrompt: z.string().default('').volatile(),
   admissionPrompt: z.string().default('').volatile(),
   privacyPrompt: z.string().default('').volatile(),
-  privacyDisableReasoning: z.boolean().default(true).volatile(),
-  routeConfirmedLocal: z.boolean().default(false).volatile(),
+  privacyReasoningEffort: effort(),
+  privacyConfirmedLocal: z.boolean().default(false).volatile(),
   failurePolicy: z.union([z.const('passthrough'), z.const('block')]).default('passthrough').volatile(),
 })

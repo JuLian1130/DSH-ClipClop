@@ -122,27 +122,32 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
     expect(lines[1]).toContain('"not-candidate"')
   })
 
-  it('写入主 route、阈值与提示词后引用立刻变化（保存即生效的引用侧）', async () => {
+  it('写入三个角色的 route、阈值、推理档位与提示词后引用立刻变化（保存即生效的引用侧）', async () => {
     const fixture = await booted({})
     expect(fixture.config.routeProvider.get()).toBe('')
+    expect(fixture.config.privacyProvider.get()).toBe('')
     expect(fixture.config.minInlineTokens.get()).toBe(1024)
     expect(fixture.config.maxSummarizeTokens.get()).toBe(12500)
-    expect(fixture.config.summaryDisableReasoning.get()).toBe(true)
+    expect(fixture.config.summaryReasoningEffort.get()).toBe('off')
     expect(fixture.config.summaryPrompt.get()).toBe('')
 
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [
       { op: 'set', path: ['routeProvider'], value: 'local' },
       { op: 'set', path: ['routeModel'], value: 'qwen' },
+      { op: 'set', path: ['privacyProvider'], value: 'local-guard' },
+      { op: 'set', path: ['privacyModel'], value: 'guard' },
       { op: 'set', path: ['minInlineTokens'], value: 256 },
       { op: 'set', path: ['maxSummarizeTokens'], value: 9000 },
-      { op: 'set', path: ['summaryDisableReasoning'], value: false },
+      { op: 'set', path: ['summaryReasoningEffort'], value: 'medium' },
       { op: 'set', path: ['summaryPrompt'], value: '只看目标' },
     ])
     expect(fixture.config.routeProvider.get()).toBe('local')
     expect(fixture.config.routeModel.get()).toBe('qwen')
+    expect(fixture.config.privacyProvider.get()).toBe('local-guard')
+    expect(fixture.config.privacyModel.get()).toBe('guard')
     expect(fixture.config.minInlineTokens.get()).toBe(256)
     expect(fixture.config.maxSummarizeTokens.get()).toBe(9000)
-    expect(fixture.config.summaryDisableReasoning.get()).toBe(false)
+    expect(fixture.config.summaryReasoningEffort.get()).toBe('medium')
     expect(fixture.config.summaryPrompt.get()).toBe('只看目标')
   })
 

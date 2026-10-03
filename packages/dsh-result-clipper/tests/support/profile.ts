@@ -22,6 +22,7 @@ import Settings from '@deepseek-ai/dsh-settings'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as plugin from '../../src/index.ts'
+import type { ReasoningEffort } from '../../src/reasoning.ts'
 import type { FakeRoute } from './route.ts'
 
 /** settings 命名空间 = profile patch 行的 id（本插件的 host 入口名，不是包名）。 */
@@ -39,12 +40,14 @@ export interface LiveConfig {
   readonly routeModel: { get(): string }
   readonly admissionProvider: { get(): string }
   readonly admissionModel: { get(): string }
+  readonly privacyProvider: { get(): string }
+  readonly privacyModel: { get(): string }
   readonly minInlineTokens: { get(): number }
   readonly maxSummarizeTokens: { get(): number }
-  readonly summaryDisableReasoning: { get(): boolean }
-  readonly admissionDisableReasoning: { get(): boolean }
-  readonly privacyDisableReasoning: { get(): boolean }
-  readonly routeConfirmedLocal: { get(): boolean }
+  readonly summaryReasoningEffort: { get(): ReasoningEffort }
+  readonly admissionReasoningEffort: { get(): ReasoningEffort }
+  readonly privacyReasoningEffort: { get(): ReasoningEffort }
+  readonly privacyConfirmedLocal: { get(): boolean }
   readonly failurePolicy: { get(): 'passthrough' | 'block' }
   readonly summaryPrompt: { get(): string }
   readonly admissionPrompt: { get(): string }
@@ -133,9 +136,10 @@ function resolvedConfig(ctx: Context): LiveConfig {
     || config.dryRun === undefined
     || config.routeProvider === undefined || config.routeModel === undefined
     || config.admissionProvider === undefined || config.admissionModel === undefined
+    || config.privacyProvider === undefined || config.privacyModel === undefined
     || config.minInlineTokens === undefined || config.maxSummarizeTokens === undefined
-    || config.summaryDisableReasoning === undefined || config.admissionDisableReasoning === undefined
-    || config.privacyDisableReasoning === undefined || config.routeConfirmedLocal === undefined
+    || config.summaryReasoningEffort === undefined || config.admissionReasoningEffort === undefined
+    || config.privacyReasoningEffort === undefined || config.privacyConfirmedLocal === undefined
     || config.failurePolicy === undefined
     || config.summaryPrompt === undefined || config.admissionPrompt === undefined
     || config.privacyPrompt === undefined) {

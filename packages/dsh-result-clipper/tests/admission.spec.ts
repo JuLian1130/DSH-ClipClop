@@ -197,18 +197,18 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
     expect(route.requests[1]?.model).toBe('mock')
   })
 
-  it('准入请求默认关闭推理；关掉该开关则不传 reasoningEffort', async () => {
+  it('准入请求默认档位是「不推理」；改选别的档位就带那一个', async () => {
     const off = await mounted()
     off.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await off.fixture.ctx.tools.execute(exec('bash'))
     expect(off.route.requests[0]?.reasoningEffort).toBe('off')
 
-    const on = await mounted({ admissionDisableReasoning: false })
-    on.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await on.fixture.ctx.tools.execute(exec('bash'))
-    // 先坐实这一臂真的发过准入请求：没有它，「不传 reasoningEffort」在「压根不发请求」下也为真。
-    expect(on.route.requests).toHaveLength(2)
-    expect(on.route.requests[0]?.reasoningEffort).toBeUndefined()
+    const chosen = await mounted({ admissionReasoningEffort: 'low' })
+    chosen.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await chosen.fixture.ctx.tools.execute(exec('bash'))
+    // 先坐实这一臂真的发过准入请求：没有它，「请求带所选档位」在「压根不发请求」下也为真。
+    expect(chosen.route.requests).toHaveLength(2)
+    expect(chosen.route.requests[0]?.reasoningEffort).toBe('low')
   })
 
   it('准入开关默认关闭：同一份夹具只发摘要请求', async () => {
@@ -394,7 +394,7 @@ describe('票 06 第 8 条：隐私闸门开启时准入不发', () => {
   it('隐私开启时只发一次带正文的请求（07 起就是那条合并请求），没有准入请求', async () => {
     // 07 起隐私模式发的是合并请求（隐私结论 + 摘要字段），所以这条用例的答复也叫隐私形状。
     const privacyReply = JSON.stringify({ privacyVerdict: 'safe', action: 'summarize', summary: SHORT_SUMMARY })
-    const { fixture, route, path } = await mounted({ privacyGate: true, routeConfirmedLocal: true }, [{ text: privacyReply }])
+    const { fixture, route, path } = await mounted({ privacyGate: true, privacyConfirmedLocal: true }, [{ text: privacyReply }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 

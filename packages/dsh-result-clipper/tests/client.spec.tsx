@@ -241,21 +241,53 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     return button
   }
 
-  it('page 视图显示「摘要会把工具正文发送给所选 route」与 schema 的默认值', async () => {
+  it('page 视图显示「摘要与隐私分别把工具正文发送给各自所选 route」与 schema 的默认值', async () => {
     const { container } = await renderPage()
-    expect(container.textContent).toContain('摘要会把工具正文发送给所选 route')
-    // 默认值来自 schema：阈值 1024 / 12500，摘要请求默认关闭推理。
+    expect(container.textContent).toContain('摘要与隐私分别把工具正文发送给各自所选 route')
+    // 端点与凭据不在本插件：三个 provider 行的说明把用户指到「设置 → 模型」。
+    expect(container.textContent).toContain('设置 → 模型')
+    // 默认值来自 schema：阈值 1024 / 12500，三个角色的推理档位默认都是「不推理」。
     expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
     expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
-    expect(container.querySelector('[role="switch"]')?.getAttribute('aria-checked')).toBe('true')
+    for (const role of ['summary', 'admission', 'privacy']) {
+      expect((container.querySelector(`#plugin-config-result-clipper-${role}-effort`) as HTMLSelectElement).value).toBe('off')
+    }
   })
 
-  it('编辑主 route 与两个阈值后各写回自己的字段', async () => {
+  it('三个角色各自成组：每组的 provider、model、推理档位与提示词都在同一个标题下', async () => {
+    const { container } = await renderPage()
+    /** 标题所在的那一组。 */
+    const groupOf = (title: string): Element => {
+      const heading = [...container.querySelectorAll('h4')].find(node => node.textContent === title)
+      if (heading === undefined) throw new Error(`fixture: no group titled ${title}`)
+      return heading.parentElement!
+    }
+    for (const [title, prefix, role] of [
+      ['摘要模型', 'route', 'summary'],
+      ['摘要准入判断模型', 'admission', 'admission'],
+      ['隐私闸门模型', 'privacy', 'privacy'],
+    ] as const) {
+      const group = groupOf(title)
+      expect(group.querySelector(`#plugin-config-result-clipper-${prefix}-provider`)).not.toBeNull()
+      expect(group.querySelector(`#plugin-config-result-clipper-${prefix}-model`)).not.toBeNull()
+      expect(group.querySelector(`#plugin-config-result-clipper-${role}-effort`)).not.toBeNull()
+      expect(group.querySelector(`#plugin-config-result-clipper-${role}-prompt`)).not.toBeNull()
+    }
+    // 摘要组还带该角色的两个阈值；诊断组只放 debug 路径。
+    const summary = groupOf('摘要模型')
+    expect(summary.querySelector('#plugin-config-result-clipper-min-inline')).not.toBeNull()
+    expect(summary.querySelector('#plugin-config-result-clipper-max-summarize')).not.toBeNull()
+    expect(groupOf('诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
+  })
+
+  it('编辑三个角色的 route 与两个阈值后各写回自己的字段（摘要、隐私互不串台）', async () => {
     const { fixture, container } = await renderPage()
     const provider = container.querySelector('#plugin-config-result-clipper-route-provider')!
     const model = container.querySelector('#plugin-config-result-clipper-route-model')!
     const min = container.querySelector('#plugin-config-result-clipper-min-inline')!
     const max = container.querySelector('#plugin-config-result-clipper-max-summarize')!
+    const privacyProvider = container.querySelector('#plugin-config-result-clipper-privacy-provider')!
+    const privacyModel = container.querySelector('#plugin-config-result-clipper-privacy-model')!
 
     await fireEvent.change(provider, { target: { value: 'local' } })
     await fireEvent.blur(provider)
@@ -265,20 +297,35 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     await fireEvent.blur(min)
     await fireEvent.change(max, { target: { value: '9000' } })
     await fireEvent.blur(max)
+    await fireEvent.change(privacyProvider, { target: { value: 'local-guard' } })
+    await fireEvent.blur(privacyProvider)
+    await fireEvent.change(privacyModel, { target: { value: 'guard' } })
+    await fireEvent.blur(privacyModel)
 
     expect(fixture.form.writes).toEqual([
       { field: 'routeProvider', value: 'local' },
       { field: 'routeModel', value: 'qwen' },
       { field: 'minInlineTokens', value: 256 },
       { field: 'maxSummarizeTokens', value: 9000 },
+      { field: 'privacyProvider', value: 'local-guard' },
+      { field: 'privacyModel', value: 'guard' },
     ])
     expect(fixture.form.value).toMatchObject({ routeProvider: 'local', minInlineTokens: 256, maxSummarizeTokens: 9000 })
   })
 
-  it('点「关闭推理」开关写 summaryDisableReasoning=false', async () => {
+  it('三个推理档位下拉各有七个档位、默认「不推理」；改选后各写自己的字段', async () => {
     const { fixture, container } = await renderPage()
-    await fireEvent.click(container.querySelector('[role="switch"]')!)
-    expect(fixture.form.writes).toEqual([{ field: 'summaryDisableReasoning', value: false }])
+    const effortSelect = (role: string): HTMLSelectElement =>
+      container.querySelector(`#plugin-config-result-clipper-${role}-effort`) as HTMLSelectElement
+    expect([...effortSelect('summary').options].map(option => option.textContent))
+      .toEqual(['不推理', '极低', '低', '中', '高', '极高', '最高'])
+
+    await fireEvent.change(effortSelect('summary'), { target: { value: 'high' } })
+    expect(fixture.form.writes.at(-1)).toEqual({ field: 'summaryReasoningEffort', value: 'high' })
+    await fireEvent.change(effortSelect('admission'), { target: { value: 'low' } })
+    expect(fixture.form.writes.at(-1)).toEqual({ field: 'admissionReasoningEffort', value: 'low' })
+    await fireEvent.change(effortSelect('privacy'), { target: { value: 'xhigh' } })
+    expect(fixture.form.writes.at(-1)).toEqual({ field: 'privacyReasoningEffort', value: 'xhigh' })
   })
 
   /** 三份提示词的行标识与内置默认正文：显示与回落两条判据都按它逐条核对。 */
@@ -344,7 +391,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     expect(fixture.form.value.summaryPrompt).toBe('')
   })
 
-  it('编辑准入 route 与「关闭推理」开关后各写回自己的字段（不是摘要那一路）', async () => {
+  it('编辑准入 route 后写回准入那两个字段（不是摘要或隐私那一路）', async () => {
     const { fixture, container } = await renderPage()
     const provider = container.querySelector('#plugin-config-result-clipper-admission-provider')!
     const model = container.querySelector('#plugin-config-result-clipper-admission-model')!
@@ -356,15 +403,6 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
       { field: 'admissionProvider', value: 'local' },
       { field: 'admissionModel', value: 'small' },
     ])
-    // 卡片上三个「关闭推理」开关（摘要 / 准入 / 隐私）：默认都关推理（aria-checked=true），各自只写自己那一路的字段。
-    const initials = [...container.querySelectorAll('[role="switch"]')] as HTMLElement[]
-    expect(initials.map(control => control.getAttribute('aria-checked'))).toEqual(['true', 'true', 'true'])
-    await fireEvent.click(initials[0]!)
-    expect(fixture.form.writes.at(-1)).toEqual({ field: 'summaryDisableReasoning', value: false })
-    // 第一次点击后 React 重渲染，重新取一次第二批控件（不拿旧节点引用）。
-    const after = [...container.querySelectorAll('[role="switch"]')] as HTMLElement[]
-    await fireEvent.click(after[1]!)
-    expect(fixture.form.writes.at(-1)).toEqual({ field: 'admissionDisableReasoning', value: false })
   })
 
   it('准入提示词的草稿失焦不写；点「保存」才写 admissionPrompt；「恢复默认」清掉该字段的覆盖', async () => {
@@ -402,13 +440,13 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     expect(container.querySelector('[role="alert"]')).not.toBeNull()
   })
 
-  it('勾选「主 route 已确认为本地」写 routeConfirmedLocal=true', async () => {
+  it('勾选「隐私 route 已确认为本地」写 privacyConfirmedLocal=true', async () => {
     const { fixture, container } = await renderPage()
-    const confirmed = container.querySelector('#plugin-config-result-clipper-route-confirmed input')!
+    const confirmed = container.querySelector('#plugin-config-result-clipper-privacy-confirmed input')!
     expect((confirmed as HTMLInputElement).checked).toBe(false)
     await fireEvent.click(confirmed)
-    expect(fixture.form.writes).toEqual([{ field: 'routeConfirmedLocal', value: true }])
-    expect(fixture.form.value.routeConfirmedLocal).toBe(true)
+    expect(fixture.form.writes).toEqual([{ field: 'privacyConfirmedLocal', value: true }])
+    expect(fixture.form.value.privacyConfirmedLocal).toBe(true)
   })
 
   it('失败策略默认读 schema 的放行；点「拦截」写 failurePolicy=block', async () => {
@@ -424,13 +462,12 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     expect(fixture.form.value.failurePolicy).toBe('block')
   })
 
-  it('隐私「关闭推理」开关默认关推理；点它写 privacyDisableReasoning=false', async () => {
+  it('隐私推理档位下拉默认「不推理」；改选后写 privacyReasoningEffort', async () => {
     const { fixture, container } = await renderPage()
-    const switches = [...container.querySelectorAll('[role="switch"]')] as HTMLElement[]
-    // 摘要、准入、隐私三路各一个开关，默认都关推理。
-    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['true', 'true', 'true'])
-    await fireEvent.click(switches[2]!)
-    expect(fixture.form.writes).toEqual([{ field: 'privacyDisableReasoning', value: false }])
+    const control = container.querySelector('#plugin-config-result-clipper-privacy-effort') as HTMLSelectElement
+    expect(control.value).toBe('off')
+    await fireEvent.change(control, { target: { value: 'max' } })
+    expect(fixture.form.writes).toEqual([{ field: 'privacyReasoningEffort', value: 'max' }])
   })
 
   it('隐私提示词的草稿失焦不写；点「保存」才写 privacyPrompt；「恢复默认」清掉该字段的覆盖', async () => {
@@ -450,13 +487,13 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
   })
 
   it('隐私开启且主 route 未确认为本地时显示常驻警告；确认后或关闭隐私开关后消失', async () => {
-    const warned = await renderPage({ privacyGate: true, routeConfirmedLocal: false })
+    const warned = await renderPage({ privacyGate: true, privacyConfirmedLocal: false })
     expect(warned.container.textContent).toContain(warned.fixture.t('routeUnconfirmedWarning'))
 
-    const confirmed = await renderPage({ privacyGate: true, routeConfirmedLocal: true })
+    const confirmed = await renderPage({ privacyGate: true, privacyConfirmedLocal: true })
     expect(confirmed.container.textContent).not.toContain(confirmed.fixture.t('routeUnconfirmedWarning'))
 
-    const off = await renderPage({ privacyGate: false, routeConfirmedLocal: false })
+    const off = await renderPage({ privacyGate: false, privacyConfirmedLocal: false })
     expect(off.container.textContent).not.toContain(off.fixture.t('routeUnconfirmedWarning'))
   })
 })

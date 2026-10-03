@@ -21,7 +21,7 @@
  * **文本**投影（下游处理后的正文与附加上下文，图片块不送分类器），不受结果长度限制，也不看工具是否在摘要
  * 候选内。判定敏感一律返回原生 `block`（固定文案，含工具名、不含参数与正文）；`uncertain` 与技术失败按失败
  * 策略放行原文或拦截；`safe` 且动作为 `summarize` 时照常走摘要路径、正文被摘要替换，`safe` + `keep` 保留
- * 原文。隐私模式只发这一次请求（准入不发），同一工具同一正文连续两次也各判一次（memo 不参与）。主 route
+ * 原文。隐私模式只发这一次请求（准入不发），同一工具同一正文连续两次也各判一次（memo 不参与）。隐私 route
  * 未确认为本地、没有 `llm` 服务或 route 没配出来都是配置失败，按失败策略处理，不另发会话提醒。
  *
  * 失效必须可见：按 `passthrough` 放行时同一会话内每类原因（未判定 / 判断失败 / 本地窗口不足）各追加一条
@@ -237,7 +237,7 @@ async function process(
       admission = 'failed'
     } else {
       const called = await requestAdmission(
-        llm, provider, model, config.admissionDisableReasoning.get(),
+        llm, provider, model, config.admissionReasoningEffort.get(),
         composeAdmissionPrompt(config.admissionPrompt.get(), verdict.estimated),
       )
       observation.judgeInputTokens = noteUsage(observation, called.usage)
@@ -250,7 +250,7 @@ async function process(
   const model = config.routeModel.get()
   if (llm === undefined || provider === '' || model === '') return unchanged('failed', admission)
   const outcome = await requestSummary(
-    llm, provider, model, config.summaryDisableReasoning.get(),
+    llm, provider, model, config.summaryReasoningEffort.get(),
     composeSummaryPrompt(config.summaryPrompt.get(), verdict.estimated, verdict.text),
   )
   noteUsage(observation, outcome.usage)
@@ -284,7 +284,7 @@ type PrivacyJudgement =
 /**
  * 对一个标准工具结果的模型可见投影做一次隐私判断。
  *
- * **配置失败**（主 route 未确认为本地、没有 `llm` 服务或 route 没配出来）按失败策略处理：它的可见面是配置项
+ * **配置失败**（隐私 route 未确认为本地、没有 `llm` 服务或 route 没配出来）按失败策略处理：它的可见面是配置项
  * 与卡片常驻警告（静态配置状态），因此不另发会话提醒。**运行期失效**（未能判定 / 判断失败 / 窗口不足）在按
  * `passthrough` 放行时各提醒一条，`block` 策略下不发提醒（拦截本身在对话里可见）；干跑下两者都不发生——
  * 提醒既不 append 也不进台账，否则会改变随后真实运行的提醒去重。
@@ -308,13 +308,13 @@ async function judgePrivacy(
 ): Promise<PrivacyJudgement> {
   const blocked = config.failurePolicy.get() === 'block'
   const llm = ctx.get('llm')
-  const provider = config.routeProvider.get()
-  const model = config.routeModel.get()
-  if (!config.routeConfirmedLocal.get() || llm === undefined || provider === '' || model === '') {
+  const provider = config.privacyProvider.get() || config.routeProvider.get()
+  const model = config.privacyModel.get() || config.routeModel.get()
+  if (!config.privacyConfirmedLocal.get() || llm === undefined || provider === '' || model === '') {
     return blocked ? { kind: 'block' } : { kind: 'passthrough', reason: 'failed' }
   }
   const called = await requestPrivacy(
-    llm, provider, model, config.privacyDisableReasoning.get(),
+    llm, provider, model, config.privacyReasoningEffort.get(),
     composePrivacyPrompt(config.privacyPrompt.get(), projection),
   )
   noteUsage(observation, called.usage)

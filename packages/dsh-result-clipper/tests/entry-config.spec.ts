@@ -61,16 +61,18 @@ describe('配置契约', () => {
     expect(fiber.config?.routeModel.get()).toBe('')
     expect(fiber.config?.admissionProvider.get()).toBe('')
     expect(fiber.config?.admissionModel.get()).toBe('')
+    expect(fiber.config?.privacyProvider.get()).toBe('')
+    expect(fiber.config?.privacyModel.get()).toBe('')
     expect(fiber.config?.minInlineTokens.get()).toBe(1024)
     expect(fiber.config?.maxSummarizeTokens.get()).toBe(12500)
-    expect(fiber.config?.summaryDisableReasoning.get()).toBe(true)
-    expect(fiber.config?.admissionDisableReasoning.get()).toBe(true)
-    expect(fiber.config?.privacyDisableReasoning.get()).toBe(true)
+    expect(fiber.config?.summaryReasoningEffort.get()).toBe('off')
+    expect(fiber.config?.admissionReasoningEffort.get()).toBe('off')
+    expect(fiber.config?.privacyReasoningEffort.get()).toBe('off')
     expect(fiber.config?.summaryPrompt.get()).toBe('')
     expect(fiber.config?.admissionPrompt.get()).toBe('')
     expect(fiber.config?.privacyPrompt.get()).toBe('')
     // 隐私的确认位与失败策略：默认未确认、默认放行。
-    expect(fiber.config?.routeConfirmedLocal.get()).toBe(false)
+    expect(fiber.config?.privacyConfirmedLocal.get()).toBe(false)
     expect(fiber.config?.failurePolicy.get()).toBe('passthrough')
   })
 
@@ -84,32 +86,40 @@ describe('配置契约', () => {
 
     const tuned = await load({
       routeProvider: 'local', routeModel: 'qwen', minInlineTokens: 0,
-      maxSummarizeTokens: 9000, summaryDisableReasoning: false, summaryPrompt: '只看目标',
+      maxSummarizeTokens: 9000, summaryReasoningEffort: 'medium', summaryPrompt: '只看目标',
     })
     expect(tuned.fiber.config?.routeProvider.get()).toBe('local')
     expect(tuned.fiber.config?.routeModel.get()).toBe('qwen')
     expect(tuned.fiber.config?.minInlineTokens.get()).toBe(0)
     expect(tuned.fiber.config?.maxSummarizeTokens.get()).toBe(9000)
-    expect(tuned.fiber.config?.summaryDisableReasoning.get()).toBe(false)
+    expect(tuned.fiber.config?.summaryReasoningEffort.get()).toBe('medium')
     expect(tuned.fiber.config?.summaryPrompt.get()).toBe('只看目标')
 
     const admitted = await load({
       admissionJudge: true, admissionProvider: 'local', admissionModel: 'small',
-      admissionDisableReasoning: false, admissionPrompt: '只看体积',
+      admissionReasoningEffort: 'minimal', admissionPrompt: '只看体积',
     })
     expect(admitted.fiber.config?.admissionJudge.get()).toBe(true)
     expect(admitted.fiber.config?.admissionProvider.get()).toBe('local')
     expect(admitted.fiber.config?.admissionModel.get()).toBe('small')
-    expect(admitted.fiber.config?.admissionDisableReasoning.get()).toBe(false)
+    expect(admitted.fiber.config?.admissionReasoningEffort.get()).toBe('minimal')
     expect(admitted.fiber.config?.admissionPrompt.get()).toBe('只看体积')
 
     const gated = await load({
-      privacyDisableReasoning: false, routeConfirmedLocal: true, failurePolicy: 'block', privacyPrompt: '只看我定义的机密',
+      privacyProvider: 'local-privacy', privacyModel: 'guard', privacyReasoningEffort: 'high',
+      privacyConfirmedLocal: true, failurePolicy: 'block', privacyPrompt: '只看我定义的机密',
     })
-    expect(gated.fiber.config?.privacyDisableReasoning.get()).toBe(false)
-    expect(gated.fiber.config?.routeConfirmedLocal.get()).toBe(true)
+    expect(gated.fiber.config?.privacyProvider.get()).toBe('local-privacy')
+    expect(gated.fiber.config?.privacyModel.get()).toBe('guard')
+    expect(gated.fiber.config?.privacyReasoningEffort.get()).toBe('high')
+    expect(gated.fiber.config?.privacyConfirmedLocal.get()).toBe(true)
     expect(gated.fiber.config?.failurePolicy.get()).toBe('block')
     expect(gated.fiber.config?.privacyPrompt.get()).toBe('只看我定义的机密')
+  })
+
+  it('推理档位不在候选集里时装载被拒（拼错的档位不会留到请求上）', async () => {
+    const { error } = await load({ summaryReasoningEffort: 'ultra' } as unknown as Schemastery.TypeS<typeof Config>)
+    expect(error).toBeDefined()
   })
 
   it('装上插件后工具运行时仍可用，且监听器没有替换任何结果', async () => {

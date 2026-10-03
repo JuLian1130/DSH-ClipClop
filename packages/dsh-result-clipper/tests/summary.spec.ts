@@ -13,11 +13,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { PostToolDecision } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
 import { composeEntry } from '../src/entry.ts'
+import { requestModelText } from '../src/summary.ts'
 import { DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
@@ -280,18 +281,18 @@ describe('票 03：摘要请求的内容与形态', () => {
     expect(editedText.split('只看目标与阻塞')[1]).toBe(builtinText.split(DEFAULT_SUMMARY_RULE)[1])
   })
 
-  it('默认关闭推理：请求显式带 off；关掉该开关则不传 reasoningEffort', async () => {
+  it('默认档位是「不推理」：请求显式带 off；改选别的档位就带那一个', async () => {
     const off = await mounted()
     off.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await off.fixture.ctx.tools.execute(exec('bash'))
     expect(off.route.requests[0]?.reasoningEffort).toBe('off')
 
-    const on = await mounted({ summaryDisableReasoning: false })
-    on.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await on.fixture.ctx.tools.execute(exec('bash'))
-    // 先坐实这一臂真的发过请求：没有它，「关掉开关则不传 reasoningEffort」在「关掉开关就不发请求」下也为真。
-    expect(on.route.requests).toHaveLength(1)
-    expect(on.route.requests[0]?.reasoningEffort).toBeUndefined()
+    const high = await mounted({ summaryReasoningEffort: 'high' })
+    high.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await high.fixture.ctx.tools.execute(exec('bash'))
+    // 先坐实这一臂真的发过请求：没有它，「请求带所选档位」在「压根不发请求」下也为真。
+    expect(high.route.requests).toHaveLength(1)
+    expect(high.route.requests[0]?.reasoningEffort).toBe('high')
   })
 })
 
@@ -358,17 +359,18 @@ describe('票 09：route 不支持 off 档时，「关闭推理」仍然按不�
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'failed' }))
   })
 
-  it('「关闭推理」关闭时不重试：请求本就没带该字段，重发一次没有意义', async () => {
-    const { fixture, route, path } = await mounted({ summaryDisableReasoning: false }, [UNSUPPORTED_EFFORT_REPLY])
-    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    const result = await fixture.ctx.tools.execute(exec('bash'))
+  it('请求本身没带档位字段时不重试：去掉字段重发一次没有意义', async () => {
+    const route = new FakeRoute([UNSUPPORTED_EFFORT_REPLY])
+    const result = await requestModelText(route as unknown as LlmRuntime, {
+      provider: 'mock',
+      model: 'mock',
+      temperature: 0,
+      maxTokens: 512,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }],
+    })
 
     expect(route.requests).toHaveLength(1)
     expect(route.requests[0]?.reasoningEffort).toBeUndefined()
-    // 请求的其余部分与开关关闭时的现状逐字相同（超时值只在 signal 上，没有可读的观察面）。
-    expect(route.requests[0]?.temperature).toBe(0)
-    expect(route.requests[0]?.maxTokens).toBe(512)
-    expect(textOf(result.content)).toBe(LONG_BODY)
-    expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'failed' }))
+    expect(result).toEqual({ ok: false, failure: 'failed' })
   })
 })

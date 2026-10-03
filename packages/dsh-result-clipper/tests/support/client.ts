@@ -13,6 +13,7 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import * as client from '../../src/client/index.ts'
 import type { ResultClipperLocaleKey } from '../../src/client/locales.ts'
 import { en, zh } from '../../src/client/locales.ts'
+import type { ReasoningEffort } from '../../src/reasoning.ts'
 
 /** 本插件的 settings section 值。 */
 export interface StubSection {
@@ -26,12 +27,14 @@ export interface StubSection {
   routeModel: string
   admissionProvider: string
   admissionModel: string
+  privacyProvider: string
+  privacyModel: string
   minInlineTokens: number
   maxSummarizeTokens: number
-  summaryDisableReasoning: boolean
-  admissionDisableReasoning: boolean
-  privacyDisableReasoning: boolean
-  routeConfirmedLocal: boolean
+  summaryReasoningEffort: ReasoningEffort
+  admissionReasoningEffort: ReasoningEffort
+  privacyReasoningEffort: ReasoningEffort
+  privacyConfirmedLocal: boolean
   failurePolicy: 'passthrough' | 'block'
   summaryPrompt: string
   admissionPrompt: string
@@ -50,12 +53,14 @@ export const SECTION_DEFAULTS: StubSection = {
   routeModel: '',
   admissionProvider: '',
   admissionModel: '',
+  privacyProvider: '',
+  privacyModel: '',
   minInlineTokens: 1024,
   maxSummarizeTokens: 12500,
-  summaryDisableReasoning: true,
-  admissionDisableReasoning: true,
-  privacyDisableReasoning: true,
-  routeConfirmedLocal: false,
+  summaryReasoningEffort: 'off',
+  admissionReasoningEffort: 'off',
+  privacyReasoningEffort: 'off',
+  privacyConfirmedLocal: false,
   failurePolicy: 'passthrough',
   summaryPrompt: '',
   admissionPrompt: '',

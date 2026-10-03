@@ -84,7 +84,7 @@ async function mounted(
   const fixture = await mount(
     {
       privacyGate: true, summarize: true, debug: true, debugPath: path,
-      routeProvider: 'mock', routeModel: 'mock', routeConfirmedLocal: true, ...overrides,
+      routeProvider: 'mock', routeModel: 'mock', privacyConfirmedLocal: true, ...overrides,
     } as Schemastery.TypeS<typeof Config>,
     undefined,
     route,
@@ -135,7 +135,7 @@ function truncatingListener(limit: number) {
 
 describe('票 07 第 1 条：主 route 确认位与隐私请求的关闭推理', () => {
   it('未确认为本地时不发请求、原文透传、记 failed；确认后同一条结果发一次请求并被替换', async () => {
-    const unconfirmed = await mounted({ routeConfirmedLocal: false })
+    const unconfirmed = await mounted({ privacyConfirmedLocal: false })
     unconfirmed.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const passed = await unconfirmed.fixture.ctx.tools.execute(exec('bash'))
     expect(unconfirmed.route.requests).toHaveLength(0)
@@ -151,7 +151,7 @@ describe('票 07 第 1 条：主 route 确认位与隐私请求的关闭推理',
   })
 
   it('未确认且失败策略为 block 时给出拒绝结果，不是透传', async () => {
-    const { fixture, route, path } = await mounted({ routeConfirmedLocal: false, failurePolicy: 'block' })
+    const { fixture, route, path } = await mounted({ privacyConfirmedLocal: false, failurePolicy: 'block' })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
@@ -161,23 +161,40 @@ describe('票 07 第 1 条：主 route 确认位与隐私请求的关闭推理',
     expect(records(path)).toEqual([expect.objectContaining({ action: 'rejected' })])
   })
 
-  it('隐私请求默认关闭推理；关掉该开关则不传 reasoningEffort（两臂都先坐实发过请求）', async () => {
+  it('隐私请求默认档位是「不推理」；改选别的档位就带那一个（两臂都先坐实发过请求）', async () => {
     const off = await mounted()
     off.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await off.fixture.ctx.tools.execute(exec('bash'))
     expect(off.route.requests).toHaveLength(1)
     expect(off.route.requests[0]?.reasoningEffort).toBe('off')
 
-    const on = await mounted({ privacyDisableReasoning: false })
-    on.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await on.fixture.ctx.tools.execute(exec('bash'))
-    expect(on.route.requests).toHaveLength(1)
-    expect(on.route.requests[0]?.reasoningEffort).toBeUndefined()
+    const chosen = await mounted({ privacyReasoningEffort: 'xhigh' })
+    chosen.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await chosen.fixture.ctx.tools.execute(exec('bash'))
+    expect(chosen.route.requests).toHaveLength(1)
+    expect(chosen.route.requests[0]?.reasoningEffort).toBe('xhigh')
+  })
+
+  it('隐私 route 独立于摘要 route：隐私请求发往 privacyProvider/privacyModel，而不是摘要那一条', async () => {
+    const { fixture, route } = await mounted({ privacyProvider: 'guard', privacyModel: 'guard-model' })
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(1)
+    expect(route.requests[0]?.provider).toBe('guard')
+    expect(route.requests[0]?.model).toBe('guard-model')
+
+    // 阳性对照：只清掉隐私 route 的两个字段，同一条结果就转发往摘要 route（mock/mock）。
+    const followed = await mounted()
+    followed.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await followed.fixture.ctx.tools.execute(exec('bash'))
+    expect(followed.route.requests[0]?.provider).toBe('mock')
+    expect(followed.route.requests[0]?.model).toBe('mock')
   })
 
   it('保存即生效：同一份真 profile 里勾上确认位后，下一条结果立刻开始判断', async () => {
     const fixture = await booted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: false,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: false,
       routeProvider: 'mock', routeModel: 'mock',
     })
     const route = new FakeRoute([{ text: SAFE }])
@@ -186,13 +203,13 @@ describe('票 07 第 1 条：主 route 确认位与隐私请求的关闭推理',
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
 
     // 默认未确认：不发请求、原文透传（失败策略默认放行）。
-    expect(fixture.config.routeConfirmedLocal.get()).toBe(false)
+    expect(fixture.config.privacyConfirmedLocal.get()).toBe(false)
     const passed = await fixture.ctx.tools.execute(exec('bash'))
     expect(route.requests).toHaveLength(0)
     expect(textOf(passed.content)).toBe(LONG_BODY)
 
-    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['routeConfirmedLocal'], value: true }])
-    expect(fixture.config.routeConfirmedLocal.get()).toBe(true)
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['privacyConfirmedLocal'], value: true }])
+    expect(fixture.config.privacyConfirmedLocal.get()).toBe(true)
     const judged = await fixture.ctx.tools.execute(exec('bash'))
     expect(route.requests).toHaveLength(1)
     expect(textOf(judged.content)).toContain(SAFE_SUMMARY)
@@ -455,7 +472,7 @@ describe('票 07 第 8 条：失效可见性', () => {
 
   it('关闭隐私开关后不再提醒：同一份真 profile 里关掉开关，下一条结果既不判断也不新增提醒', async () => {
     const fixture = await booted({
-      summarize: false, privacyGate: true, routeConfirmedLocal: true,
+      summarize: false, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'mock', routeModel: 'mock',
     })
     const route = new FakeRoute([{ text: UNCERTAIN }])
@@ -521,7 +538,7 @@ describe('票 07 第 11 条：受控装载顺序的两种顺序', () => {
     const route = new FakeRoute([{ text: SAFE_KEEP }])
     const config = {
       privacyGate: true, summarize: true, debug: true, debugPath: path,
-      routeProvider: 'mock', routeModel: 'mock', routeConfirmedLocal: true,
+      routeProvider: 'mock', routeModel: 'mock', privacyConfirmedLocal: true,
     } as Schemastery.TypeS<typeof Config>
     const truncate = truncatingListener(LIMIT)
     const fixture = await mount(

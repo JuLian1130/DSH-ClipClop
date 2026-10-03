@@ -132,7 +132,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     const path = join(tempRoot(), 'debug.jsonl')
     const route = new FakeRoute([{ text: SAFE }])
     const fixture = await mounted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: path, dryRun: true,
     }, route)
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -144,7 +144,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     // 阳性对照：同一份夹具把干跑关掉，同一条流水线这次真的替换。
     const realRoute = new FakeRoute([{ text: SAFE }])
     const real = await mounted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: join(tempRoot(), 'real.jsonl'),
     }, realRoute)
     real.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -157,7 +157,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     const path = join(tempRoot(), 'debug.jsonl')
     const notices: AppendedNotice[] = []
     const fixture = await mounted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: path, dryRun: true,
     }, new FakeRoute([{ text: UNCERTAIN }]))
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -172,7 +172,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     // 阳性对照：同一份夹具只把干跑关掉，这次放行就带走一条会话提醒。
     const realNotices: AppendedNotice[] = []
     const real = await mounted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: join(tempRoot(), 'real.jsonl'),
     }, new FakeRoute([{ text: UNCERTAIN }]))
     real.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -230,7 +230,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     const path = join(tempRoot(), 'debug.jsonl')
     const notices: AppendedNotice[] = []
     const fixture = await booted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: path, dryRun: true,
     }, new FakeRoute([{ text: UNCERTAIN }]))
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -264,7 +264,7 @@ describe('票 08 第 3 条：干跑在 debug 日志里写出本应发生什么',
   it('本应拦截：记录动作 rejected + dryRun 标记，模型看到的仍是原文（不是拒绝文案）', async () => {
     const path = join(tempRoot(), 'debug.jsonl')
     const fixture = await mounted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: path, dryRun: true,
     }, new FakeRoute([{ text: SENSITIVE }]))
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -278,7 +278,7 @@ describe('票 08 第 3 条：干跑在 debug 日志里写出本应发生什么',
 
     // 阳性对照：同一份夹具关掉干跑，这次真的拦下。
     const real = await mounted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: join(tempRoot(), 'real.jsonl'),
     }, new FakeRoute([{ text: SENSITIVE }]))
     real.ctx.tools.register(textTool('bash', LONG_BODY))
@@ -295,7 +295,7 @@ describe('票 08 第 3 条：干跑在 debug 日志里写出本应发生什么',
 
     const uncertainPath = join(tempRoot(), 'uncertain.jsonl')
     const uncertain = await mounted({
-      summarize: true, privacyGate: true, routeConfirmedLocal: true,
+      summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: uncertainPath, dryRun: true,
     }, new FakeRoute([{ text: UNCERTAIN }]))
     uncertain.ctx.tools.register(textTool('bash', LONG_BODY))

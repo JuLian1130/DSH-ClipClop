@@ -1,14 +1,18 @@
 /**
- * `plugins.bundle.config` 的包详情页配置区：摘要参数（主 route、两个阈值、「关闭推理」开关、提示词规则正文）、
- * 准入参数（准入 route、「关闭推理」开关、提示词规则正文）、隐私参数（主 route 确认位、失败策略、隐私
- * 「关闭推理」开关、隐私提示词规则正文）与 debug 日志路径。
+ * `plugins.bundle.config` 的包详情页配置区：摘要、摘要准入判断、隐私闸门三个角色各自成一组，每组把该角色的
+ * route（provider 与 model）、推理档位与提示词规则正文放在一起；摘要组另带两个阈值，最后是诊断组的 debug
+ * 日志路径。
  *
  * 配置区与页签分座是设计文档「配置面与设置座位」的座位约定——开关在插件页签、参数在包自己的详情页；写入走
  * `configForms` 的立即写：这些字段在 schema 上都是 `volatile`，写入即生效、不需要整页保存。参数行的失焦即写，
  * 提示词行例外——它的文本域是草稿，点该行的「保存」才写回（没保存就离开设置不会留下改动）。失败形态与页签
  * 同源——`set` 在 Host 拒绝时 resolve `false`，所以失败态在 await 之后核验返回值才置位。
  *
- * 隐私闸门开启而主 route 未确认为本地时，卡片顶部显示常驻警告——它只反映这一静态配置状态，不反映运行期
+ * **端点与凭据不在这里**：DSH 的请求形状只带 `provider` 与 `model`，endpoint、协议与 API key 归 LLM 适配器
+ * 按 route 持有（`GenerateOptions` 没有 baseURL / apiKey 字段）。所以本卡片只让用户按角色选 route，并在
+ * provider 行的说明里指出「设置 → 模型」是填 baseURL 与凭据的地方。
+ *
+ * 隐私闸门开启而隐私 route 未确认为本地时，卡片顶部显示常驻警告——它只反映这一静态配置状态，不反映运行期
  * 失效（运行期失效的可见面是会话提醒）；确认后或关闭隐私开关后警告消失。
  *
  * 「恢复默认」清掉提示词的用户覆盖（`unset`），保存后回落到底层默认（内置规则正文）。安全外壳与输出格式
@@ -18,25 +22,31 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Checkbox, SegmentedControl, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { ReactNode } from 'react'
+import { Checkbox, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { REASONING_EFFORT_IDS } from '../reasoning.ts'
+import type { ReasoningEffort } from '../reasoning.ts'
 // 无依赖的共享模块：host 半拼装请求用的是同一份文字，所以框里显示的默认与真正发出的正文不会漂移。
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../rules.ts'
+import type { ResultClipperLocaleKey } from './locales.ts'
 
 /** 卡片的可写字段，与 host 半 `Config` 的字段同名（也是 settings section 里的键）。 */
 export type ResultClipperCardField =
   | 'routeProvider'
   | 'routeModel'
-  | 'routeConfirmedLocal'
+  | 'privacyProvider'
+  | 'privacyModel'
+  | 'privacyConfirmedLocal'
   | 'failurePolicy'
   | 'admissionProvider'
   | 'admissionModel'
   | 'minInlineTokens'
   | 'maxSummarizeTokens'
-  | 'summaryDisableReasoning'
-  | 'admissionDisableReasoning'
-  | 'privacyDisableReasoning'
+  | 'summaryReasoningEffort'
+  | 'admissionReasoningEffort'
+  | 'privacyReasoningEffort'
   | 'summaryPrompt'
   | 'admissionPrompt'
   | 'privacyPrompt'
@@ -47,28 +57,32 @@ export interface ResultClipperCardInjected {
   hooks: {
     /** 隐私闸门开关的当前值；常驻警告按它与确认位一起显示。 */
     privacyGate: ObservableSnapshot<boolean>
-    /** 「主 route 已确认为本地」确认位的当前值。 */
-    routeConfirmedLocal: ObservableSnapshot<boolean>
+    /** 「隐私 route 已确认为本地」确认位的当前值。 */
+    privacyConfirmedLocal: ObservableSnapshot<boolean>
     /** 隐私失效的处理策略：`passthrough` 放行原文，`block` 给出拒绝结果。 */
     failurePolicy: ObservableSnapshot<'passthrough' | 'block'>
-    /** 主 route 的 provider。 */
+    /** 摘要 route 的 provider。 */
     routeProvider: ObservableSnapshot<string>
-    /** 主 route 的 model id。 */
+    /** 摘要 route 的 model id。 */
     routeModel: ObservableSnapshot<string>
-    /** 准入 route 的 provider；空串表示跟随主 route。 */
+    /** 准入 route 的 provider；空串表示跟随摘要 route。 */
     admissionProvider: ObservableSnapshot<string>
-    /** 准入 route 的 model id；空串表示跟随主 route。 */
+    /** 准入 route 的 model id；空串表示跟随摘要 route。 */
     admissionModel: ObservableSnapshot<string>
+    /** 隐私 route 的 provider；空串表示跟随摘要 route。 */
+    privacyProvider: ObservableSnapshot<string>
+    /** 隐私 route 的 model id；空串表示跟随摘要 route。 */
+    privacyModel: ObservableSnapshot<string>
     /** 摘要候选下限（估算器单位）。 */
     minInlineTokens: ObservableSnapshot<number>
     /** `bash` / `web_fetch` 的摘要上限。 */
     maxSummarizeTokens: ObservableSnapshot<number>
-    /** 摘要请求是否关闭推理。 */
-    summaryDisableReasoning: ObservableSnapshot<boolean>
-    /** 准入请求是否关闭推理。 */
-    admissionDisableReasoning: ObservableSnapshot<boolean>
-    /** 隐私请求是否关闭推理。 */
-    privacyDisableReasoning: ObservableSnapshot<boolean>
+    /** 摘要请求的推理档位。 */
+    summaryReasoningEffort: ObservableSnapshot<ReasoningEffort>
+    /** 准入请求的推理档位。 */
+    admissionReasoningEffort: ObservableSnapshot<ReasoningEffort>
+    /** 隐私请求的推理档位。 */
+    privacyReasoningEffort: ObservableSnapshot<ReasoningEffort>
     /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
     summaryPrompt: ObservableSnapshot<string>
     /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
@@ -117,7 +131,13 @@ const TITLE_STYLE = { fontSize: 14, lineHeight: '20px' } as const
 /** 说明与失败提示共用的排版。 */
 const HINT_STYLE = { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: '18px' } as const
 
-/** 主 route 未确认为本地时的常驻警告排版。 */
+/** 角色分组的标题排版：三个角色的设置各自成组，标题把该组与其它组分开。 */
+const GROUP_STYLE = { margin: '24px 0 0', fontSize: 13, fontWeight: 600, lineHeight: '20px' } as const
+
+/** 一个角色的 route 里 provider 与 model 并排的排版。 */
+const ROUTE_STYLE = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } as const
+
+/** 隐私 route 未确认为本地时的常驻警告排版。 */
 const WARNING_STYLE = {
   color: 'var(--dsw-alias-state-warn-label)',
   fontSize: 12,
@@ -139,19 +159,45 @@ const INPUT_STYLE = {
   lineHeight: '20px',
 } as const
 
+/** 下拉框的七个档位与它们的文案键；候选集与 host 半 schema 的取值同一份（`reasoning.ts`）。 */
+const EFFORT_LABELS: Record<ReasoningEffort, ResultClipperLocaleKey> = {
+  off: 'effortOff',
+  minimal: 'effortMinimal',
+  low: 'effortLow',
+  medium: 'effortMedium',
+  high: 'effortHigh',
+  xhigh: 'effortXhigh',
+  max: 'effortMax',
+}
+
 /**
- * 一行文本参数：失焦或回车即写。
- * @param props - 行文案、提示、当前值与写入动作。
- * @returns 一行文本控件。
+ * 一个角色分组：标题加该角色的控件。
+ * @param props - 分组标题与内容。
+ * @returns 一组设置。
  */
-function TextRow(props: {
+function Group(props: { readonly title: string; readonly children: ReactNode }) {
+  return <section style={{ padding: '4px 0' }}>
+    <h4 style={GROUP_STYLE}>{props.title}</h4>
+    {props.children}
+  </section>
+}
+
+/** 一行文本参数的 props：一个角色的 provider / model 与诊断组的路径都用它。 */
+interface TextRowProps {
   readonly id: string
   readonly label: string
   readonly hint: string
   readonly failedHint: string
   readonly value: string
   readonly write: (value: string) => Promise<boolean>
-}) {
+}
+
+/**
+ * 一行文本参数：失焦或回车即写。
+ * @param props - 行文案、提示、当前值与写入动作。
+ * @returns 一行文本控件。
+ */
+function TextRow(props: TextRowProps) {
   const [draft, setDraft] = useState(props.value)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -183,6 +229,22 @@ function TextRow(props: {
     <div style={HINT_STYLE}>{props.hint}</div>
     {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
+}
+
+/**
+ * 一个角色的 route：provider 与 model 并排，用户按角色一次配完「发给谁」。
+ * @param props - 行前缀与 provider / model 两行的文案与写入动作。
+ * @returns 一行两个文本控件。
+ */
+function RouteFields(props: {
+  readonly id: string
+  readonly provider: Omit<TextRowProps, 'id'>
+  readonly model: Omit<TextRowProps, 'id'>
+}) {
+  return <div style={ROUTE_STYLE}>
+    <TextRow {...props.provider} id={`${props.id}-provider`} />
+    <TextRow {...props.model} id={`${props.id}-model`} />
+  </div>
 }
 
 /**
@@ -230,40 +292,49 @@ function NumberRow(props: {
   </section>
 }
 
-/** 一行开关自己持有的写入状态。 */
-function SwitchRow(props: {
+/**
+ * 一行推理档位：下拉框，选中即写。选项是 pi-ai 的规范档位，能不能用由所选 route 的档位表决定。
+ * @param props - 控件 id 与行文案、当前值、选项与写入动作。
+ * @returns 一行下拉控件。
+ */
+function EffortRow(props: {
+  readonly id: string
   readonly label: string
   readonly hint: string
   readonly failedHint: string
-  readonly checked: boolean
-  readonly onChange: (next: boolean) => Promise<boolean>
+  readonly value: ReasoningEffort
+  readonly options: readonly { readonly value: ReasoningEffort; readonly label: string }[]
+  readonly write: (value: ReasoningEffort) => Promise<boolean>
 }) {
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
-  return <section style={{ ...ROW_STYLE, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24 }}>
-    <div>
-      <div style={TITLE_STYLE}>{props.label}</div>
-      <div style={HINT_STYLE}>{props.hint}</div>
-      {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
-    </div>
-    <Switch
-      checked={props.checked}
+  return <section style={ROW_STYLE}>
+    <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
+    <select
+      id={props.id}
+      value={props.value}
       disabled={busy}
-      label={props.label}
-      onChange={(next) => {
+      aria-label={props.label}
+      style={{ ...INPUT_STYLE, width: 'auto', minWidth: 160 }}
+      onChange={(event) => {
+        const next = event.target.value as ReasoningEffort
         setFailed(false)
         setBusy(true)
-        void props.onChange(next)
+        void props.write(next)
           .then((accepted) => { if (!accepted) setFailed(true) })
           .catch(() => { setFailed(true) })
           .finally(() => { setBusy(false) })
       }}
-    />
+    >
+      {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+    <div style={HINT_STYLE}>{props.hint}</div>
+    {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
 }
 
 /**
- * 一行二选一参数：两个分段按钮，选中即写。隐私失败策略用它，避免与「关闭推理」开关混在一排开关里。
+ * 一行二选一参数：两个分段按钮，选中即写。隐私失败策略用它。
  * @param props - 控件 id 与行文案、当前值、两个选项与写入动作。
  * @returns 一行分段控件。
  */
@@ -300,7 +371,7 @@ function ChoiceRow<Value extends string>(props: {
   </section>
 }
 
-/** 一行复选框参数：勾选即写（主 route 确认位用它）。 */
+/** 一行复选框参数：勾选即写（隐私 route 确认位用它）。 */
 function CheckRow(props: {
   readonly id: string
   readonly label: string
@@ -393,83 +464,117 @@ function PromptRow(props: {
 /**
  * 渲染这个配置区。
  * @param props - 注入的读数与写入路径、页面文案。
- * @returns 参数控件。
+ * @returns 三个角色分组加诊断组的参数控件。
  */
 export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyGate = props.usePrivacyGate(value => value)
-  const routeConfirmedLocal = props.useRouteConfirmedLocal(value => value)
+  const privacyConfirmedLocal = props.usePrivacyConfirmedLocal(value => value)
   const failurePolicy = props.useFailurePolicy(value => value)
   const routeProvider = props.useRouteProvider(value => value)
   const routeModel = props.useRouteModel(value => value)
   const admissionProvider = props.useAdmissionProvider(value => value)
   const admissionModel = props.useAdmissionModel(value => value)
+  const privacyProvider = props.usePrivacyProvider(value => value)
+  const privacyModel = props.usePrivacyModel(value => value)
   const minInlineTokens = props.useMinInlineTokens(value => value)
   const maxSummarizeTokens = props.useMaxSummarizeTokens(value => value)
-  const summaryDisableReasoning = props.useSummaryDisableReasoning(value => value)
-  const admissionDisableReasoning = props.useAdmissionDisableReasoning(value => value)
-  const privacyDisableReasoning = props.usePrivacyDisableReasoning(value => value)
+  const summaryReasoningEffort = props.useSummaryReasoningEffort(value => value)
+  const admissionReasoningEffort = props.useAdmissionReasoningEffort(value => value)
+  const privacyReasoningEffort = props.usePrivacyReasoningEffort(value => value)
   const summaryPrompt = props.useSummaryPrompt(value => value)
   const admissionPrompt = props.useAdmissionPrompt(value => value)
   const privacyPrompt = props.usePrivacyPrompt(value => value)
   const debugPath = props.useDebugPath(value => value)
 
   const write = (field: ResultClipperCardField) => (value: string | number | boolean) => props.setField(field, value)
+  const failedHint = props.t('failedHint')
+  const effortOptions = REASONING_EFFORT_IDS.map(choice => ({ value: choice, label: props.t(EFFORT_LABELS[choice]) }))
 
   return <div>
     <p style={{ ...HINT_STYLE, padding: '4px 0' }}>{props.t('flowWarning')}</p>
-    {privacyGate && !routeConfirmedLocal
+    {privacyGate && !privacyConfirmedLocal
       && <div role="alert" style={WARNING_STYLE}>{props.t('routeUnconfirmedWarning')}</div>}
-    <TextRow id="plugin-config-result-clipper-route-provider" label={props.t('routeProvider')}
-      hint={props.t('routeProviderHint')} failedHint={props.t('failedHint')}
-      value={routeProvider} write={write('routeProvider')} />
-    <TextRow id="plugin-config-result-clipper-route-model" label={props.t('routeModel')}
-      hint={props.t('routeModelHint')} failedHint={props.t('failedHint')}
-      value={routeModel} write={write('routeModel')} />
-    <CheckRow id="plugin-config-result-clipper-route-confirmed" label={props.t('routeConfirmedLocal')}
-      hint={props.t('routeConfirmedLocalHint')} failedHint={props.t('failedHint')}
-      checked={routeConfirmedLocal}
-      onChange={write('routeConfirmedLocal') as (next: boolean) => Promise<boolean>} />
-    <ChoiceRow id="plugin-config-result-clipper-failure-policy" label={props.t('failurePolicy')}
-      hint={props.t('failurePolicyHint')} failedHint={props.t('failedHint')}
-      value={failurePolicy} options={[
-        { value: 'passthrough' as const, label: props.t('failurePolicyPassthrough') },
-        { value: 'block' as const, label: props.t('failurePolicyBlock') },
-      ]} write={write('failurePolicy') as (next: 'passthrough' | 'block') => Promise<boolean>} />
-    <TextRow id="plugin-config-result-clipper-admission-provider" label={props.t('admissionProvider')}
-      hint={props.t('admissionProviderHint')} failedHint={props.t('failedHint')}
-      value={admissionProvider} write={write('admissionProvider')} />
-    <TextRow id="plugin-config-result-clipper-admission-model" label={props.t('admissionModel')}
-      hint={props.t('admissionModelHint')} failedHint={props.t('failedHint')}
-      value={admissionModel} write={write('admissionModel')} />
-    <NumberRow id="plugin-config-result-clipper-min-inline" label={props.t('minInlineTokens')}
-      hint={props.t('minInlineTokensHint')} failedHint={props.t('failedHint')}
-      value={minInlineTokens} write={write('minInlineTokens')} />
-    <NumberRow id="plugin-config-result-clipper-max-summarize" label={props.t('maxSummarizeTokens')}
-      hint={props.t('maxSummarizeTokensHint')} failedHint={props.t('failedHint')}
-      value={maxSummarizeTokens} write={write('maxSummarizeTokens')} />
-    <SwitchRow label={props.t('summaryDisableReasoning')} hint={props.t('summaryDisableReasoningHint')}
-      failedHint={props.t('failedHint')} checked={summaryDisableReasoning}
-      onChange={write('summaryDisableReasoning') as (next: boolean) => Promise<boolean>} />
-    <SwitchRow label={props.t('admissionDisableReasoning')} hint={props.t('admissionDisableReasoningHint')}
-      failedHint={props.t('failedHint')} checked={admissionDisableReasoning}
-      onChange={write('admissionDisableReasoning') as (next: boolean) => Promise<boolean>} />
-    <SwitchRow label={props.t('privacyDisableReasoning')} hint={props.t('privacyDisableReasoningHint')}
-      failedHint={props.t('failedHint')} checked={privacyDisableReasoning}
-      onChange={write('privacyDisableReasoning') as (next: boolean) => Promise<boolean>} />
-    <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
-      hint={props.t('promptHint')} failedHint={props.t('failedHint')}
-      saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-      value={summaryPrompt} builtinRule={DEFAULT_SUMMARY_RULE} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
-    <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
-      hint={props.t('promptHint')} failedHint={props.t('failedHint')}
-      saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-      value={admissionPrompt} builtinRule={DEFAULT_ADMISSION_RULE} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
-    <PromptRow id="plugin-config-result-clipper-privacy-prompt" label={props.t('privacyPrompt')}
-      hint={props.t('promptHint')} failedHint={props.t('failedHint')}
-      saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-      value={privacyPrompt} builtinRule={DEFAULT_PRIVACY_RULE} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
-    <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
-      hint={props.t('debugPathHint')} failedHint={props.t('failedHint')}
-      value={debugPath} write={write('debugPath')} />
+
+    <Group title={props.t('summaryGroup')}>
+      <RouteFields id="plugin-config-result-clipper-route"
+        provider={{
+          label: props.t('routeProvider'), hint: props.t('routeProviderHint'), failedHint,
+          value: routeProvider, write: write('routeProvider'),
+        }}
+        model={{
+          label: props.t('routeModel'), hint: props.t('routeModelHint'), failedHint,
+          value: routeModel, write: write('routeModel'),
+        }} />
+      <EffortRow id="plugin-config-result-clipper-summary-effort" label={props.t('reasoningEffort')}
+        hint={props.t('reasoningEffortHint')} failedHint={failedHint}
+        value={summaryReasoningEffort} options={effortOptions}
+        write={write('summaryReasoningEffort') as (next: ReasoningEffort) => Promise<boolean>} />
+      <NumberRow id="plugin-config-result-clipper-min-inline" label={props.t('minInlineTokens')}
+        hint={props.t('minInlineTokensHint')} failedHint={failedHint}
+        value={minInlineTokens} write={write('minInlineTokens')} />
+      <NumberRow id="plugin-config-result-clipper-max-summarize" label={props.t('maxSummarizeTokens')}
+        hint={props.t('maxSummarizeTokensHint')} failedHint={failedHint}
+        value={maxSummarizeTokens} write={write('maxSummarizeTokens')} />
+      <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
+        hint={props.t('promptHint')} failedHint={failedHint}
+        saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
+        value={summaryPrompt} builtinRule={DEFAULT_SUMMARY_RULE} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
+    </Group>
+
+    <Group title={props.t('admissionGroup')}>
+      <RouteFields id="plugin-config-result-clipper-admission"
+        provider={{
+          label: props.t('admissionProvider'), hint: props.t('admissionProviderHint'), failedHint,
+          value: admissionProvider, write: write('admissionProvider'),
+        }}
+        model={{
+          label: props.t('admissionModel'), hint: props.t('admissionModelHint'), failedHint,
+          value: admissionModel, write: write('admissionModel'),
+        }} />
+      <EffortRow id="plugin-config-result-clipper-admission-effort" label={props.t('reasoningEffort')}
+        hint={props.t('reasoningEffortHint')} failedHint={failedHint}
+        value={admissionReasoningEffort} options={effortOptions}
+        write={write('admissionReasoningEffort') as (next: ReasoningEffort) => Promise<boolean>} />
+      <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
+        hint={props.t('promptHint')} failedHint={failedHint}
+        saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
+        value={admissionPrompt} builtinRule={DEFAULT_ADMISSION_RULE} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
+    </Group>
+
+    <Group title={props.t('privacyGroup')}>
+      <RouteFields id="plugin-config-result-clipper-privacy"
+        provider={{
+          label: props.t('privacyProvider'), hint: props.t('privacyProviderHint'), failedHint,
+          value: privacyProvider, write: write('privacyProvider'),
+        }}
+        model={{
+          label: props.t('privacyModel'), hint: props.t('privacyModelHint'), failedHint,
+          value: privacyModel, write: write('privacyModel'),
+        }} />
+      <EffortRow id="plugin-config-result-clipper-privacy-effort" label={props.t('reasoningEffort')}
+        hint={props.t('reasoningEffortHint')} failedHint={failedHint}
+        value={privacyReasoningEffort} options={effortOptions}
+        write={write('privacyReasoningEffort') as (next: ReasoningEffort) => Promise<boolean>} />
+      <CheckRow id="plugin-config-result-clipper-privacy-confirmed" label={props.t('privacyConfirmedLocal')}
+        hint={props.t('privacyConfirmedLocalHint')} failedHint={failedHint}
+        checked={privacyConfirmedLocal}
+        onChange={write('privacyConfirmedLocal') as (next: boolean) => Promise<boolean>} />
+      <ChoiceRow id="plugin-config-result-clipper-failure-policy" label={props.t('failurePolicy')}
+        hint={props.t('failurePolicyHint')} failedHint={failedHint}
+        value={failurePolicy} options={[
+          { value: 'passthrough' as const, label: props.t('failurePolicyPassthrough') },
+          { value: 'block' as const, label: props.t('failurePolicyBlock') },
+        ]} write={write('failurePolicy') as (next: 'passthrough' | 'block') => Promise<boolean>} />
+      <PromptRow id="plugin-config-result-clipper-privacy-prompt" label={props.t('privacyPrompt')}
+        hint={props.t('promptHint')} failedHint={failedHint}
+        saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
+        value={privacyPrompt} builtinRule={DEFAULT_PRIVACY_RULE} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
+    </Group>
+
+    <Group title={props.t('diagnosticsGroup')}>
+      <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
+        hint={props.t('debugPathHint')} failedHint={failedHint}
+        value={debugPath} write={write('debugPath')} />
+    </Group>
   </div>
 }

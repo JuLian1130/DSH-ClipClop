@@ -1,7 +1,7 @@
 /**
  * dsh-result-clipper 的浏览器半：把两项能力开关、摘要准入判断开关、debug 开关与干跑开关注册成「设置 →
- * 内置插件」里的一个页签，并把摘要与准入两路参数（route、阈值、「关闭推理」、提示词）与 debug 日志路径注册
- * 成包详情页的配置区。
+ * 内置插件」里的一个页签，并把三个角色（摘要、摘要准入判断、隐私闸门）各自的 route、推理档位与提示词，
+ * 以及摘要阈值与 debug 日志路径，注册成包详情页的配置区。
  *
  * 座位分两处的依据是设计文档「配置面与设置座位」：开关在插件页签，参数在包自己的详情页配置区；两处都经
  * `ctx.configForms.get(ns)` 取得同一个 settings 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口
@@ -33,6 +33,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { ResultClipperCard, type ResultClipperCardField } from './card.tsx'
 import { en, zh, type ResultClipperLocaleKey } from './locales.ts'
 import { ResultClipperTab, type ResultClipperToggle } from './tab.tsx'
+import type { ReasoningEffort } from '../reasoning.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -71,12 +72,14 @@ interface PreferenceSection {
   routeModel: string
   admissionProvider: string
   admissionModel: string
+  privacyProvider: string
+  privacyModel: string
   minInlineTokens: number
   maxSummarizeTokens: number
-  summaryDisableReasoning: boolean
-  admissionDisableReasoning: boolean
-  privacyDisableReasoning: boolean
-  routeConfirmedLocal: boolean
+  summaryReasoningEffort: ReasoningEffort
+  admissionReasoningEffort: ReasoningEffort
+  privacyReasoningEffort: ReasoningEffort
+  privacyConfirmedLocal: boolean
   failurePolicy: 'passthrough' | 'block'
   summaryPrompt: string
   admissionPrompt: string
@@ -126,17 +129,19 @@ export function apply(ctx: Context): void {
       inject: () => ({
         hooks: {
           privacyGate: booleanField(form, 'privacyGate'),
-          routeConfirmedLocal: booleanField(form, 'routeConfirmedLocal'),
+          privacyConfirmedLocal: booleanField(form, 'privacyConfirmedLocal'),
           failurePolicy: policyField(form),
           routeProvider: stringField(form, 'routeProvider'),
           routeModel: stringField(form, 'routeModel'),
           admissionProvider: stringField(form, 'admissionProvider'),
           admissionModel: stringField(form, 'admissionModel'),
+          privacyProvider: stringField(form, 'privacyProvider'),
+          privacyModel: stringField(form, 'privacyModel'),
           minInlineTokens: numberField(form, 'minInlineTokens', 1024),
           maxSummarizeTokens: numberField(form, 'maxSummarizeTokens', 12500),
-          summaryDisableReasoning: booleanField(form, 'summaryDisableReasoning', true),
-          admissionDisableReasoning: booleanField(form, 'admissionDisableReasoning', true),
-          privacyDisableReasoning: booleanField(form, 'privacyDisableReasoning', true),
+          summaryReasoningEffort: effortField(form, 'summaryReasoningEffort'),
+          admissionReasoningEffort: effortField(form, 'admissionReasoningEffort'),
+          privacyReasoningEffort: effortField(form, 'privacyReasoningEffort'),
           summaryPrompt: stringField(form, 'summaryPrompt'),
           admissionPrompt: stringField(form, 'admissionPrompt'),
           privacyPrompt: stringField(form, 'privacyPrompt'),
@@ -160,8 +165,7 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'summaryDisableReasoning'
-    | 'admissionDisableReasoning' | 'privacyDisableReasoning' | 'routeConfirmedLocal',
+  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
   fallback = false,
 ): ObservableSnapshot<boolean> {
   return {
@@ -179,10 +183,27 @@ function booleanField(
 function stringField(
   form: ConfigForm<PreferenceSection>,
   field: 'debugPath' | 'routeProvider' | 'routeModel' | 'summaryPrompt'
-    | 'admissionProvider' | 'admissionModel' | 'admissionPrompt' | 'privacyPrompt',
+    | 'admissionProvider' | 'admissionModel' | 'admissionPrompt'
+    | 'privacyProvider' | 'privacyModel' | 'privacyPrompt',
 ): ObservableSnapshot<string> {
   return {
     getSnapshot: () => form.getSnapshot().value?.[field] ?? '',
+    subscribe: (listener) => form.subscribe(listener),
+  }
+}
+
+/**
+ * 一个推理档位字段的读数：镜像还没给出 section 时回落到 schema 的默认（不推理）。
+ * @param form - 本插件的 settings 表单。
+ * @param field - 字段名。
+ * @returns 供控件绑定的读数。
+ */
+function effortField(
+  form: ConfigForm<PreferenceSection>,
+  field: 'summaryReasoningEffort' | 'admissionReasoningEffort' | 'privacyReasoningEffort',
+): ObservableSnapshot<ReasoningEffort> {
+  return {
+    getSnapshot: () => form.getSnapshot().value?.[field] ?? 'off',
     subscribe: (listener) => form.subscribe(listener),
   }
 }
