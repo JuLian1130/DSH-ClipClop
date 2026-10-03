@@ -227,16 +227,17 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
   }
 
   /**
-   * 某一行提示词里的「恢复默认」按钮。同一张卡片有多份提示词、按钮文案相同，所以按文本域所在的那一行取。
+   * 某一行提示词里的按钮（「保存」或「恢复默认」）。同一个配置区有多份提示词、按钮文案相同，所以按文本域
+   * 所在的那一行取。
    * @param container - 渲染出来的页面。
    * @param textareaId - 该行文本域的 id。
    * @param label - 按钮文案。
-   * @returns 该行里的恢复默认按钮。
+   * @returns 该行里的那个按钮。
    */
-  function promptReset(container: HTMLElement, textareaId: string, label: string): Element {
+  function promptButton(container: HTMLElement, textareaId: string, label: string): Element {
     const section = container.querySelector(`#${textareaId}`)?.closest('section')
     const button = [...(section?.querySelectorAll('button') ?? [])].find(candidate => candidate.textContent === label)
-    if (button === undefined) throw new Error(`fixture: no reset button in row ${textareaId}`)
+    if (button === undefined) throw new Error(`fixture: no button labelled ${label} in row ${textareaId}`)
     return button
   }
 
@@ -305,7 +306,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
       expect((container.querySelector(`#${row.id}`) as HTMLTextAreaElement).value).toBe(overrides[row.field])
     }
     for (const row of promptRows) {
-      await fireEvent.click(promptReset(container, row.id, fixture.t('resetPrompt')))
+      await fireEvent.click(promptButton(container, row.id, fixture.t('resetPrompt')))
       // 清空是异步写：等它结算并让一次 setState 触发的重渲染把内置正文重新播种进控件。
       await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
       expect(fixture.form.resets).toContain(row.field)
@@ -313,16 +314,32 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     }
   })
 
-  it('编辑摘要提示词失焦写 summaryPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+  it('摘要提示词的草稿失焦不写；点「保存」才写 summaryPrompt；「恢复默认」清掉该字段的覆盖', async () => {
     const { fixture, container } = await renderPage()
-    const prompt = container.querySelector('#plugin-config-result-clipper-summary-prompt')!
+    const id = 'plugin-config-result-clipper-summary-prompt'
+    const prompt = container.querySelector(`#${id}`)!
+    // 没改动时「保存」是禁用的：没有可写的东西。
+    expect((promptButton(container, id, fixture.t('savePrompt')) as HTMLButtonElement).disabled).toBe(true)
     await fireEvent.change(prompt, { target: { value: '只看目标' } })
     await fireEvent.blur(prompt)
+    // 失焦只是离开控件，不落盘；没保存就离开设置不会留下改动。
+    expect(fixture.form.writes).toEqual([])
+    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
     expect(fixture.form.writes).toEqual([{ field: 'summaryPrompt', value: '只看目标' }])
 
     // 上一次写入把它自己置成 busy（按钮被禁用）直到 promise 结算，等一个宏任务让 busy 落下。
     await new Promise((resolve) => { setTimeout(resolve, 0) })
-    await fireEvent.click(promptReset(container, 'plugin-config-result-clipper-summary-prompt', fixture.t('resetPrompt')))
+    await fireEvent.click(promptButton(container, id, fixture.t('resetPrompt')))
+    expect(fixture.form.resets).toEqual(['summaryPrompt'])
+    expect(fixture.form.value.summaryPrompt).toBe('')
+  })
+
+  it('把覆盖改回内置正文并保存：清掉覆盖，不写一条与默认逐字相同的覆盖', async () => {
+    const { fixture, container } = await renderPage({ summaryPrompt: '旧口径' })
+    const id = 'plugin-config-result-clipper-summary-prompt'
+    await fireEvent.change(container.querySelector(`#${id}`)!, { target: { value: DEFAULT_SUMMARY_RULE } })
+    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
+    expect(fixture.form.writes).toEqual([])
     expect(fixture.form.resets).toEqual(['summaryPrompt'])
     expect(fixture.form.value.summaryPrompt).toBe('')
   })
@@ -350,15 +367,18 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     expect(fixture.form.writes.at(-1)).toEqual({ field: 'admissionDisableReasoning', value: false })
   })
 
-  it('编辑准入提示词失焦写 admissionPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+  it('准入提示词的草稿失焦不写；点「保存」才写 admissionPrompt；「恢复默认」清掉该字段的覆盖', async () => {
     const { fixture, container } = await renderPage()
-    const prompt = container.querySelector('#plugin-config-result-clipper-admission-prompt')!
+    const id = 'plugin-config-result-clipper-admission-prompt'
+    const prompt = container.querySelector(`#${id}`)!
     await fireEvent.change(prompt, { target: { value: '只看体积与工具名' } })
     await fireEvent.blur(prompt)
+    expect(fixture.form.writes).toEqual([])
+    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
     expect(fixture.form.writes).toEqual([{ field: 'admissionPrompt', value: '只看体积与工具名' }])
 
     await new Promise((resolve) => { setTimeout(resolve, 0) })
-    await fireEvent.click(promptReset(container, 'plugin-config-result-clipper-admission-prompt', fixture.t('resetPrompt')))
+    await fireEvent.click(promptButton(container, id, fixture.t('resetPrompt')))
     expect(fixture.form.resets).toEqual(['admissionPrompt'])
     expect(fixture.form.value.admissionPrompt).toBe('')
   })
@@ -413,15 +433,18 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     expect(fixture.form.writes).toEqual([{ field: 'privacyDisableReasoning', value: false }])
   })
 
-  it('编辑隐私提示词失焦写 privacyPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+  it('隐私提示词的草稿失焦不写；点「保存」才写 privacyPrompt；「恢复默认」清掉该字段的覆盖', async () => {
     const { fixture, container } = await renderPage()
-    const prompt = container.querySelector('#plugin-config-result-clipper-privacy-prompt')!
+    const id = 'plugin-config-result-clipper-privacy-prompt'
+    const prompt = container.querySelector(`#${id}`)!
     await fireEvent.change(prompt, { target: { value: '只按我定义的机密判断' } })
     await fireEvent.blur(prompt)
+    expect(fixture.form.writes).toEqual([])
+    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
     expect(fixture.form.writes).toEqual([{ field: 'privacyPrompt', value: '只按我定义的机密判断' }])
 
     await new Promise((resolve) => { setTimeout(resolve, 0) })
-    await fireEvent.click(promptReset(container, 'plugin-config-result-clipper-privacy-prompt', fixture.t('resetPrompt')))
+    await fireEvent.click(promptButton(container, 'plugin-config-result-clipper-privacy-prompt', fixture.t('resetPrompt')))
     expect(fixture.form.resets).toEqual(['privacyPrompt'])
     expect(fixture.form.value.privacyPrompt).toBe('')
   })

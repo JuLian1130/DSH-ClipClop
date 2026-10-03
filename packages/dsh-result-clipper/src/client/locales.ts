@@ -46,6 +46,7 @@ export type ResultClipperLocaleKey =
   | 'admissionPromptHint'
   | 'privacyPrompt'
   | 'privacyPromptHint'
+  | 'savePrompt'
   | 'resetPrompt'
   | 'debugPath'
   | 'debugPathHint'
@@ -92,11 +93,12 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   failurePolicyPassthrough: '放行原文',
   failurePolicyBlock: '拦截',
   summaryPrompt: '摘要提示词规则正文',
-  summaryPromptHint: '框里是当前生效的规则正文，未改时就是内置默认；只改规则正文，安全外壳与输出格式由插件固定，不可编辑；清空即用内置默认。',
+  summaryPromptHint: '框里是当前生效的规则正文，未改时就是内置默认；改完要点「保存」才写回，没保存就离开不会留下改动；只改规则正文，安全外壳与输出格式由插件固定，不可编辑。',
   admissionPrompt: '准入提示词规则正文',
-  admissionPromptHint: '框里是当前生效的规则正文，未改时就是内置默认；只改规则正文，安全外壳与输出格式由插件固定，不可编辑；清空即用内置默认。',
+  admissionPromptHint: '框里是当前生效的规则正文，未改时就是内置默认；改完要点「保存」才写回，没保存就离开不会留下改动；只改规则正文，安全外壳与输出格式由插件固定，不可编辑。',
   privacyPrompt: '隐私提示词规则正文',
-  privacyPromptHint: '框里是当前生效的规则正文，未改时就是内置默认；只改规则正文，安全外壳与输出格式由插件固定，不可编辑；清空即用内置默认。',
+  privacyPromptHint: '框里是当前生效的规则正文，未改时就是内置默认；改完要点「保存」才写回，没保存就离开不会留下改动；只改规则正文，安全外壳与输出格式由插件固定，不可编辑。',
+  savePrompt: '保存',
   resetPrompt: '恢复默认',
   debugPath: '调试日志路径',
   debugPathHint: 'metadata JSONL 的写入位置；留空时 debug 不写盘。不会自动改用临时路径。',
@@ -144,11 +146,12 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   failurePolicyPassthrough: 'Pass through',
   failurePolicyBlock: 'Block',
   summaryPrompt: 'Summary prompt rule text',
-  summaryPromptHint: 'The box holds the rule text in effect (the built-in default until you change it); only the rule text is editable, the safety shell and output format are fixed by the plugin; clearing it uses the built-in default.',
+  summaryPromptHint: 'The box holds the rule text in effect (the built-in default until you change it); press Save to write an edit back, leaving without saving keeps it out of the configuration; only the rule text is editable, the safety shell and output format are fixed by the plugin.',
   admissionPrompt: 'Admission prompt rule text',
-  admissionPromptHint: 'The box holds the rule text in effect (the built-in default until you change it); only the rule text is editable, the safety shell and output format are fixed by the plugin; clearing it uses the built-in default.',
+  admissionPromptHint: 'The box holds the rule text in effect (the built-in default until you change it); press Save to write an edit back, leaving without saving keeps it out of the configuration; only the rule text is editable, the safety shell and output format are fixed by the plugin.',
   privacyPrompt: 'Privacy prompt rule text',
-  privacyPromptHint: 'The box holds the rule text in effect (the built-in default until you change it); only the rule text is editable, the safety shell and output format are fixed by the plugin; clearing it uses the built-in default.',
+  privacyPromptHint: 'The box holds the rule text in effect (the built-in default until you change it); press Save to write an edit back, leaving without saving keeps it out of the configuration; only the rule text is editable, the safety shell and output format are fixed by the plugin.',
+  savePrompt: 'Save',
   resetPrompt: 'Reset to default',
   debugPath: 'Debug log path',
   debugPathHint: 'Where the metadata JSONL is written; an empty path writes nothing. The plugin never falls back to a temporary path.',

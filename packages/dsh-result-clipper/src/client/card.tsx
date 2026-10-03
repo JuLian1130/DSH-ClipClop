@@ -4,8 +4,9 @@
  * 「关闭推理」开关、隐私提示词规则正文）与 debug 日志路径。
  *
  * 配置区与页签分座是设计文档「配置面与设置座位」的座位约定——开关在插件页签、参数在包自己的详情页；写入走
- * `configForms` 的立即写：这些字段在 schema 上都是 `volatile`，失焦即写、保存即生效。失败形态与页签同源
- * ——`set` 在 Host 拒绝时 resolve `false`，所以失败态在 await 之后核验返回值才置位。
+ * `configForms` 的立即写：这些字段在 schema 上都是 `volatile`，写入即生效、不需要整页保存。参数行的失焦即写，
+ * 提示词行例外——它的文本域是草稿，点该行的「保存」才写回（没保存就离开设置不会留下改动）。失败形态与页签
+ * 同源——`set` 在 Host 拒绝时 resolve `false`，所以失败态在 await 之后核验返回值才置位。
  *
  * 隐私闸门开启而主 route 未确认为本地时，卡片顶部显示常驻警告——它只反映这一静态配置状态，不反映运行期
  * 失效（运行期失效的可见面是会话提醒）；确认后或关闭隐私开关后警告消失。
@@ -330,16 +331,17 @@ function CheckRow(props: {
 }
 
 /**
- * 提示词规则正文：框里显示**当前生效的正文**（有覆盖用覆盖，否则用内置默认）；失焦即写，「恢复默认」清掉
- * 覆盖、控件回落到内置默认。
- * @param props - 控件 id、行文案、提示、覆盖值、内置默认正文、写入与清空动作。
- * @returns 一行文本域加一个恢复默认按钮。
+ * 提示词规则正文：框里显示**当前生效的正文**（有覆盖用覆盖，否则用内置默认）；编辑是草稿，点「保存」才写回
+ * （失焦不写，所以没保存就离开设置不会留下改动）；「恢复默认」清掉覆盖、控件回落到内置默认。
+ * @param props - 控件 id、行文案、提示、覆盖值、内置默认正文、按钮文案、写入与清空动作。
+ * @returns 一行文本域加「保存」与「恢复默认」两个按钮。
  */
 function PromptRow(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
   readonly failedHint: string
+  readonly saveLabel: string
   readonly resetLabel: string
   /** 用户写下的覆盖；空串表示没有覆盖。 */
   readonly value: string
@@ -363,10 +365,11 @@ function PromptRow(props: {
       .finally(() => { setBusy(false) })
   }
 
-  const commit = (): void => {
-    // 框里预置的就是生效正文：没动过它就不该写出一条与内置默认逐字相同的覆盖。
-    if (draft === effective) return
-    settle(props.write(draft))
+  // 草稿与生效正文一致时没有可保存的东西；改回内置正文本身则清掉覆盖，不留下逐字相同的冗余覆盖。
+  const dirty = draft !== effective
+  const save = (): void => {
+    if (!dirty) return
+    settle(draft === props.fallback ? props.reset() : props.write(draft))
   }
 
   return <section style={ROW_STYLE}>
@@ -377,10 +380,10 @@ function PromptRow(props: {
       value={draft}
       disabled={busy}
       onChange={(event) => { setDraft(event.target.value) }}
-      onBlur={commit}
     />
     <div style={HINT_STYLE}>{props.hint}</div>
-    <div>
+    <div style={{ display: 'flex', gap: 8 }}>
+      <button type="button" disabled={busy || !dirty} onClick={save}>{props.saveLabel}</button>
       <button type="button" disabled={busy} onClick={() => { settle(props.reset()) }}>{props.resetLabel}</button>
     </div>
     {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
@@ -454,13 +457,16 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       failedHint={props.t('failedHint')} checked={privacyDisableReasoning}
       onChange={write('privacyDisableReasoning') as (next: boolean) => Promise<boolean>} />
     <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
-      hint={props.t('summaryPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
+      hint={props.t('summaryPromptHint')} failedHint={props.t('failedHint')}
+      saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
       value={summaryPrompt} fallback={DEFAULT_SUMMARY_RULE} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
     <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
-      hint={props.t('admissionPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
+      hint={props.t('admissionPromptHint')} failedHint={props.t('failedHint')}
+      saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
       value={admissionPrompt} fallback={DEFAULT_ADMISSION_RULE} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
     <PromptRow id="plugin-config-result-clipper-privacy-prompt" label={props.t('privacyPrompt')}
-      hint={props.t('privacyPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
+      hint={props.t('privacyPromptHint')} failedHint={props.t('failedHint')}
+      saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
       value={privacyPrompt} fallback={DEFAULT_PRIVACY_RULE} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
     <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
       hint={props.t('debugPathHint')} failedHint={props.t('failedHint')}
