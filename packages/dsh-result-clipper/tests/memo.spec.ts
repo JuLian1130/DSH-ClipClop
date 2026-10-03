@@ -82,7 +82,7 @@ function tempRoot(): string {
 }
 
 /**
- * 装一份夹具：开启 debug、配好主 route，并把假 route 放进 context。
+ * 装一份夹具：开启 debug、配好摘要 route，并把假 route 放进 context。
  * @param overrides - 覆盖默认的插件配置。
  * @param script - 假 route 的答复脚本；按请求顺序取用，用完后重复最后一段。
  * @returns 夹具、假 route 与 debug 日志路径。

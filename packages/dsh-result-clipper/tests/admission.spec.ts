@@ -67,7 +67,7 @@ function tempRoot(): string {
 }
 
 /**
- * 装一份夹具：开启摘要、准入与 debug，配好主 route，并把假 route 放进 context。
+ * 装一份夹具：开启摘要、准入与 debug，配好摘要 route，并把假 route 放进 context。
  * @param overrides - 覆盖默认的插件配置。
  * @param script - 假 route 的答复脚本；按请求顺序取用，用完后重复最后一段。
  * @returns 夹具、假 route 与 debug 日志路径。
@@ -174,7 +174,7 @@ describe('票 06 第 3、4 条：准入请求不含正文、含结果大小，�
 })
 
 describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关闭推理', () => {
-  it('准入 route 留空时跟随主 route', async () => {
+  it('准入 route 留空时跟随摘要 route', async () => {
     const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
@@ -185,7 +185,7 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
     expect(route.requests[1]?.provider).toBe('mock')
   })
 
-  it('配了准入 route 时准入请求发往它，摘要请求仍发往主 route', async () => {
+  it('配了准入 route 时准入请求发往它，摘要请求仍发往摘要 route', async () => {
     const { fixture, route } = await mounted({ admissionProvider: 'local', admissionModel: 'small' })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
@@ -244,7 +244,7 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
     expect(requestText(route.requests[1]!)).not.toContain(body)
     expect(requestText(route.requests[2]!)).toContain(body)
 
-    // 写入准入 route：下一条结果的准入请求发往它，摘要请求仍发往主 route。
+    // 写入准入 route：下一条结果的准入请求发往它，摘要请求仍发往摘要 route。
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [
       { op: 'set', path: ['admissionProvider'], value: 'local' },
       { op: 'set', path: ['admissionModel'], value: 'small' },

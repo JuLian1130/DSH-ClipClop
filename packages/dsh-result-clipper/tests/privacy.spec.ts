@@ -70,7 +70,7 @@ function tempRoot(): string {
 }
 
 /**
- * 装一份隐私模式夹具：开启隐私、摘要与 debug，配好主 route 并确认它是本地的。
+ * 装一份隐私模式夹具：开启隐私、摘要与 debug，配好摘要 route 并确认隐私 route 是本地的。
  * @param overrides - 覆盖默认的插件配置。
  * @param script - 假 route 的答复脚本；按请求顺序取用，用完后重复最后一段。
  * @returns 夹具、假 route 与 debug 日志路径。
@@ -133,7 +133,7 @@ function truncatingListener(limit: number) {
   }
 }
 
-describe('票 07 第 1 条：主 route 确认位与隐私请求的关闭推理', () => {
+describe('票 07 第 1 条：隐私 route 确认位与三类请求的推理档位', () => {
   it('未确认为本地时不发请求、原文透传、记 failed；确认后同一条结果发一次请求并被替换', async () => {
     const unconfirmed = await mounted({ privacyConfirmedLocal: false })
     unconfirmed.fixture.ctx.tools.register(textTool('bash', LONG_BODY))

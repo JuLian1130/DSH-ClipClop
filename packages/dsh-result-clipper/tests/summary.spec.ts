@@ -53,7 +53,7 @@ function tempRoot(): string {
 }
 
 /**
- * 装一份夹具：开启 debug、配好主 route，并把假 route 放进 context。
+ * 装一份夹具：开启 debug、配好摘要 route，并把假 route 放进 context。
  * @param overrides - 覆盖默认的插件配置。
  * @param script - 假 route 的答复脚本。
  * @returns 夹具、假 route 与 debug 日志路径。
@@ -191,7 +191,7 @@ describe('票 03：摘要路径的失败一律原样透传且不抛出', () => {
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'failed' }))
   })
 
-  it('主 route 未配置时透传并记 failed（一次请求都不发）', async () => {
+  it('摘要 route 未配置时透传并记 failed（一次请求都不发）', async () => {
     const { fixture, route, path } = await mounted({ routeProvider: '', routeModel: '' })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))

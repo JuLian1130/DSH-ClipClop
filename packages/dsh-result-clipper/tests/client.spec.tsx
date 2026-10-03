@@ -486,7 +486,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     expect(fixture.form.value.privacyPrompt).toBe('')
   })
 
-  it('隐私开启且主 route 未确认为本地时显示常驻警告；确认后或关闭隐私开关后消失', async () => {
+  it('隐私开启且隐私 route 未确认为本地时显示常驻警告；确认后或关闭隐私开关后消失', async () => {
     const warned = await renderPage({ privacyGate: true, privacyConfirmedLocal: false })
     expect(warned.container.textContent).toContain(warned.fixture.t('routeUnconfirmedWarning'))
 

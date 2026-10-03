@@ -48,7 +48,7 @@ function tempRoot(): string {
 }
 
 /**
- * 装一份夹具：开启 debug、配好主 route，并把假 route 与假 spill 后端放进 context。
+ * 装一份夹具：开启 debug、配好摘要 route，并把假 route 与假 spill 后端放进 context。
  * @param overrides - 覆盖默认的插件配置。
  * @param script - 假 route 的答复脚本。
  * @param spill - 假 spill 后端；显式传 `null` 表示 context 里没有后端。
