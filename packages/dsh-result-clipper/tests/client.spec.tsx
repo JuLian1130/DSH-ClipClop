@@ -20,6 +20,7 @@ import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
 import type { ResultClipperTabInjected, ResultClipperTabProps } from '../src/client/tab.tsx'
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
+import { en } from '../src/client/locales.ts'
 import { mountClient } from './support/client.ts'
 import type { ClientFixture, StubForm, StubSection } from './support/client.ts'
 
@@ -359,9 +360,11 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
 
   it('简介与单位是面向用户的说法：三个角色各说清用途，阈值单位写明 token', async () => {
     const { fixture, container } = await renderPage()
-    // 摘要：说明省下缓存反复失效与 token 反复计费的成本。
+    // 摘要：说明省下缓存反复失效与 token 反复计费的成本，以及清空 route 的后果（不摘要、原样透传）。
     expect(fixture.t('summaryGroupHint')).toContain('缓存')
     expect(fixture.t('summaryGroupHint')).toContain('token')
+    expect(fixture.t('summaryGroupHint')).toContain('清空就等于不摘要')
+    expect(fixture.t('summaryGroupHint')).toContain('原样透传')
     // 准入：写明可以不设置（留空跟随摘要模型），以及省 token。
     expect(fixture.t('admissionGroupHint')).toContain('可以不设置')
     expect(fixture.t('admissionGroupHint')).toContain('跟随摘要模型')
@@ -376,6 +379,20 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 两个阈值都注明单位是 token。
     expect(fixture.t('minInlineTokens')).toContain('token')
     expect(fixture.t('maxSummarizeTokens')).toContain('token')
+
+    // 英文侧同样按这五条要求钉住（它不经 `fixture.t` 渲染，所以要单独断言，避免单独漂移）。
+    expect(en.routeUnset).toContain('clear')
+    expect(en.followSummaryRoute).toContain('clear')
+    expect(en.summaryGroupHint).toContain('prompt cache')
+    expect(en.summaryGroupHint).toContain('passed through unchanged')
+    expect(en.admissionGroupHint).toContain('Optional')
+    expect(en.admissionGroupHint).toContain('follow the summary model')
+    expect(en.privacyGroupHint).toContain('local model')
+    for (const hint of ['modelSourceHint', 'summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
+      expect(en[hint]).not.toContain('role')
+    }
+    expect(en.minInlineTokens).toContain('tokens')
+    expect(en.maxSummarizeTokens).toContain('tokens')
 
     // 页面上渲染的就是这些文案（简介与阈值标题都进了 DOM）。
     expect(groupOf(container, '摘要模型').textContent).toContain(fixture.t('summaryGroupHint'))
