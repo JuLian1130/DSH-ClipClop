@@ -1,9 +1,12 @@
 /**
- * `settings.plugins.tab` 的一页：两项能力开关、摘要准入判断开关、debug 开关与干跑开关。
+ * `settings.plugins.tab` 的一页：摘要与隐私两项能力开关、debug 开关与干跑开关。
  *
- * 五个开关都走 `configForms` 的**立即写**（`set`），因为 host 半把它们声明成 `volatile`——保存即生效，不需要
+ * 四个开关都走 `configForms` 的**立即写**（`set`），因为 host 半把它们声明成 `volatile`——保存即生效，不需要
  * 重启。失败形态照框架先例：页内自带 `busy` / `failed` 两态、失败渲染 `role="alert"`；`ConfigForm.set` 在
  * Host 拒绝时 resolve `false`（不是 reject、也不抛），所以失败态必须在 await 之后核验返回值才能置位。
+ *
+ * 摘要准入判断不在这一页：它是「要先有一条 route 才有意义」的开关，所以跟它的 route 与提示词一起放在包详情页的
+ * 准入组里——勾选即启用、收起即不启用，写入走那一组的原子保存。
  *
  * 干跑还要读 debug 开关与日志路径（在包详情页配置区上）：两者缺一干跑不生效，这一行就地显示提示，避免用户以为
  * 自己已经在干跑。
@@ -19,16 +22,14 @@ import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
-/** 本页可写的五个开关字段，与 host 半 `Config` 的字段同名（也是 settings section 里的键）。 */
-export type ResultClipperToggle = 'summarize' | 'admissionJudge' | 'privacyGate' | 'debug' | 'dryRun'
+/** 本页可写的四个开关字段，与 host 半 `Config` 的字段同名（也是 settings section 里的键）。 */
+export type ResultClipperToggle = 'summarize' | 'privacyGate' | 'debug' | 'dryRun'
 
-/** 注册者自己的业务面：五个读数、干跑生效与否要读的日志路径，加一条写入。 */
+/** 注册者自己的业务面：四个读数、干跑生效与否要读的日志路径，加一条写入。 */
 export interface ResultClipperTabInjected {
   hooks: {
     /** `Config.summarize` 的当前值。 */
     summarize: ObservableSnapshot<boolean>
-    /** `Config.admissionJudge` 的当前值。 */
-    admissionJudge: ObservableSnapshot<boolean>
     /** `Config.privacyGate` 的当前值。 */
     privacyGate: ObservableSnapshot<boolean>
     /** `Config.debug` 的当前值。 */
@@ -106,14 +107,13 @@ function ToggleRow(props: ToggleRowProps) {
 
 /**
  * 渲染这一页。
- * @param props - 注入的六个读数、写入路径与页面文案。
+ * @param props - 注入的读数、写入路径与页面文案。
  * @returns 内置插件里的一个页签内容。
  */
 export function ResultClipperTab(
-  { useSummarize, useAdmissionJudge, usePrivacyGate, useDebug, useDryRun, useDebugPath, setToggle, t }: ResultClipperTabProps,
+  { useSummarize, usePrivacyGate, useDebug, useDryRun, useDebugPath, setToggle, t }: ResultClipperTabProps,
 ) {
   const summarize = useSummarize(value => value)
-  const admissionJudge = useAdmissionJudge(value => value)
   const privacyGate = usePrivacyGate(value => value)
   const debug = useDebug(value => value)
   const dryRun = useDryRun(value => value)
@@ -124,8 +124,6 @@ export function ResultClipperTab(
   return <div>
     <ToggleRow label={t('summarize')} hint={t('summarizeHint')} failedHint={t('failedHint')}
       checked={summarize} onChange={onChange('summarize')} />
-    <ToggleRow label={t('admissionJudge')} hint={t('admissionJudgeHint')} failedHint={t('failedHint')}
-      checked={admissionJudge} onChange={onChange('admissionJudge')} />
     <ToggleRow label={t('privacyGate')} hint={t('privacyGateHint')} failedHint={t('failedHint')}
       checked={privacyGate} onChange={onChange('privacyGate')} />
     <ToggleRow label={t('debug')} hint={t('debugHint')} failedHint={t('failedHint')}

@@ -39,6 +39,7 @@ import type { ResultClipperLocaleKey } from './locales.ts'
 export type ResultClipperCardField =
   | 'routeProvider'
   | 'routeModel'
+  | 'admissionJudge'
   | 'privacyProvider'
   | 'privacyModel'
   | 'privacyConfirmedLocal'
@@ -82,6 +83,8 @@ export interface ResultClipperCardInjected {
     admissionProvider: ObservableSnapshot<string>
     /** 准入 route 的 model id；空串表示跟随摘要 route。 */
     admissionModel: ObservableSnapshot<string>
+    /** 摘要准入判断开关：关闭时准入组整组收起，也就没有这一步。 */
+    admissionJudge: ObservableSnapshot<boolean>
     /** 隐私 route 的 provider；空串表示跟随摘要 route。 */
     privacyProvider: ObservableSnapshot<string>
     /** 隐私 route 的 model id；空串表示跟随摘要 route。 */
@@ -170,14 +173,6 @@ const INPUT_STYLE = {
   font: 'inherit',
   fontSize: 13,
   lineHeight: '20px',
-} as const
-
-/** 下拉框的排版：宽度跟着自己的内容走，原生箭头才贴在文字后面，而不是被拉到格子最右。 */
-const SELECT_STYLE = {
-  ...INPUT_STYLE,
-  width: 'auto',
-  maxWidth: '100%',
-  alignSelf: 'flex-start',
 } as const
 
 /** 下拉框的七个档位与它们的文案键；候选集与 host 半 schema 的取值同一份（`reasoning.ts`）。 */
@@ -422,7 +417,7 @@ function RouteRow(props: RouteRowProps) {
       id={props.id}
       value={props.value}
       aria-label={props.label}
-      style={SELECT_STYLE}
+      style={INPUT_STYLE}
       onChange={(event) => { props.onChange(event.target.value) }}
     >
       <option value="">{props.emptyLabel}</option>
@@ -494,7 +489,7 @@ function EffortRow(props: {
       id={props.id}
       value={props.value}
       aria-label={props.label}
-      style={SELECT_STYLE}
+      style={INPUT_STYLE}
       onChange={(event) => { props.onChange(event.target.value as ReasoningEffort) }}
     >
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -582,8 +577,9 @@ const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
 ]
 
-/** 准入组的字段：route、推理档位与提示词。 */
+/** 准入组的字段：启用开关、route、推理档位与提示词。 */
 const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
+  { field: 'admissionJudge', kind: 'boolean' },
   { field: 'admissionProvider', kind: 'text' },
   { field: 'admissionModel', kind: 'text' },
   { field: 'admissionReasoningEffort', kind: 'text', fallback: 'off' },
@@ -614,6 +610,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const failurePolicy = props.useFailurePolicy(value => value)
   const routeProvider = props.useRouteProvider(value => value)
   const routeModel = props.useRouteModel(value => value)
+  const admissionJudge = props.useAdmissionJudge(value => value)
   const admissionProvider = props.useAdmissionProvider(value => value)
   const admissionModel = props.useAdmissionModel(value => value)
   const privacyProvider = props.usePrivacyProvider(value => value)
@@ -637,7 +634,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     summaryPrompt: summaryPrompt === '' ? DEFAULT_SUMMARY_RULE : summaryPrompt,
   }, props.saveFields)
   const admission = useGroupDraft(ADMISSION_FIELDS, {
-    admissionProvider, admissionModel, admissionReasoningEffort,
+    admissionJudge, admissionProvider, admissionModel, admissionReasoningEffort,
     admissionPrompt: admissionPrompt === '' ? DEFAULT_ADMISSION_RULE : admissionPrompt,
   }, props.saveFields)
   const privacy = useGroupDraft(PRIVACY_FIELDS, {
@@ -665,6 +662,24 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     dirty: group.dirty, busy: group.busy, failed: group.failed, failedHint,
     saveLabel, resetLabel, onSave: group.save, onReset: group.reset,
   })
+  /**
+   * 改一个角色的 provider：model 跟着走——当前 model 不是新 provider 的候选就清空，不留跨 provider 的残缺配对；
+   * provider 被清空时同样清掉 model（摘要组＝不摘要，另两组＝跟随摘要模型）。目录读不到时不猜，保留手填值。
+   */
+  const changeProvider = (
+    group: DraftedGroup,
+    providerField: ResultClipperCardField,
+    modelField: ResultClipperCardField,
+    next: string,
+  ): void => {
+    group.change(providerField, next)
+    const current = group.value(modelField)
+    if (typeof current !== 'string' || current === '') return
+    const known = modelOptions(next)
+    if (next === '' || (known.length > 0 && !known.some(option => option.value === current))) {
+      group.change(modelField, '')
+    }
+  }
 
   return <div>
     <p style={{ ...HINT_STYLE, padding: '4px 0' }}>{props.t('flowWarning')}</p>
@@ -679,7 +694,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
           value: summary.value('routeProvider') as string, options: providerOptions,
           emptyLabel: props.t('routeUnset'),
-          onChange: next => { summary.change('routeProvider', next) },
+          onChange: next => { changeProvider(summary, 'routeProvider', 'routeModel', next) },
         }}
         model={{
           ...routeText, id: 'plugin-config-result-clipper-route-model',
@@ -711,13 +726,19 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     <hr style={DIVIDER_STYLE} />
 
     <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
+      {/* 折起来就等于不启用：开关（草稿）决定这一组是否有内容，勾上才出现下面这整组设置。 */}
+      <CheckRow id="plugin-config-result-clipper-admission-enabled" label={props.t('admissionJudge')}
+        hint={props.t('admissionJudgeHint')}
+        checked={admission.value('admissionJudge') as boolean}
+        onChange={next => { admission.change('admissionJudge', next) }} />
+      {admission.value('admissionJudge') === true && <>
       <RouteLine
         provider={{
           ...routeText, id: 'plugin-config-result-clipper-admission-provider',
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
           value: admission.value('admissionProvider') as string, options: providerOptions,
           emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { admission.change('admissionProvider', next) },
+          onChange: next => { changeProvider(admission, 'admissionProvider', 'admissionModel', next) },
         }}
         model={{
           ...routeText, id: 'plugin-config-result-clipper-admission-model',
@@ -736,6 +757,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
         hint={props.t('promptHint')} value={admission.value('admissionPrompt') as string}
         onChange={next => { admission.change('admissionPrompt', next) }} />
+      </>}
     </Group>
 
     <hr style={DIVIDER_STYLE} />
@@ -747,7 +769,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
           value: privacy.value('privacyProvider') as string, options: providerOptions,
           emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { privacy.change('privacyProvider', next) },
+          onChange: next => { changeProvider(privacy, 'privacyProvider', 'privacyModel', next) },
         }}
         model={{
           ...routeText, id: 'plugin-config-result-clipper-privacy-model',

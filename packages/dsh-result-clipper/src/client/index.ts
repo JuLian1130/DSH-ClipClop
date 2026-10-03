@@ -117,7 +117,6 @@ export function apply(ctx: Context): void {
       inject: () => ({
         hooks: {
           summarize: booleanField(form, 'summarize'),
-          admissionJudge: booleanField(form, 'admissionJudge'),
           privacyGate: booleanField(form, 'privacyGate'),
           debug: booleanField(form, 'debug'),
           dryRun: booleanField(form, 'dryRun'),
@@ -141,6 +140,8 @@ export function apply(ctx: Context): void {
           failurePolicy: policyField(form),
           routeProvider: stringField(form, 'routeProvider'),
           routeModel: stringField(form, 'routeModel'),
+          // 准入判断的启用开关跟着它的 route 与提示词一起在准入组里（勾选＝启用，收起＝不启用）。
+          admissionJudge: booleanField(form, 'admissionJudge'),
           admissionProvider: stringField(form, 'admissionProvider'),
           admissionModel: stringField(form, 'admissionModel'),
           privacyProvider: stringField(form, 'privacyProvider'),

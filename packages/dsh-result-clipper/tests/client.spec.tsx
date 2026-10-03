@@ -93,7 +93,7 @@ describe('票 02 第 2 条：两处座位注册在设置页里', () => {
 })
 
 describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () => {
-  it('页面上有摘要、摘要准入判断、隐私闸门、debug、干跑五个开关，初始都读 host 的默认值（关闭）', async () => {
+  it('页面上有摘要、隐私闸门、debug、干跑四个开关，初始都读 host 的默认值（关闭）', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
@@ -102,16 +102,14 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const { container } = render(<TabComponent {...props} />)
 
     const switches = [...container.querySelectorAll('[role="switch"]')]
-    expect(switches).toHaveLength(5)
-    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'false', 'false'])
+    expect(switches).toHaveLength(4)
+    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'false'])
     expect(container.textContent).toContain('工具结果摘要')
-    expect(container.textContent).toContain('摘要准入判断')
     expect(container.textContent).toContain('隐私闸门')
     expect(container.textContent).toContain('debug 记录')
     expect(container.textContent).toContain('干跑')
-    // 五个开关各自都在**自己那一行**里，行文案与控件成对出现。
+    // 四个开关各自都在**自己那一行**里，行文案与控件成对出现。
     expect(rowSwitch(container, '工具结果摘要')).not.toBeNull()
-    expect(rowSwitch(container, '摘要准入判断')).not.toBeNull()
     expect(rowSwitch(container, '隐私闸门')).not.toBeNull()
     expect(rowSwitch(container, 'debug 记录')).not.toBeNull()
     expect(rowSwitch(container, '干跑')).not.toBeNull()
@@ -168,7 +166,7 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     expect(face.hooks.debug.getSnapshot()).toBe(true)
   })
 
-  it('点摘要准入判断开关写 admissionJudge=true（不是摘要或隐私那一路）', async () => {
+  it('这一页只剩四个开关：摘要准入判断的启用跟着它的 route 搬进了包详情页的准入组', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'settings.plugins.tab')
     const face = entry.options.inject!() as ResultClipperTabInjected
@@ -176,12 +174,10 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
     const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
     const { container } = render(<TabComponent {...props} />)
 
-    await fireEvent.click(rowSwitch(container, '摘要准入判断'))
-    expect(fixture.form.writes).toEqual([{ field: 'admissionJudge', value: true }])
-    // 读回绑定也要落在准入那个字段上：只断言写入数组的话，把 hook 映射到别的字段仍会绿。
-    expect(face.hooks.admissionJudge.getSnapshot()).toBe(true)
-    expect(face.hooks.summarize.getSnapshot()).toBe(false)
-    expect(face.hooks.privacyGate.getSnapshot()).toBe(false)
+    expect([...container.querySelectorAll('[role="switch"]')]).toHaveLength(4)
+    expect(container.textContent).not.toContain(fixture.t('admissionJudge'))
+    // 业务面也不再读它：一个字段只有一处写入路径，不留下两套语义（这边立即写、那边要保存）。
+    expect('admissionJudge' in face.hooks).toBe(false)
   })
 
   it('Host 业务拒绝（resolve false）时该行出现 role="alert"', async () => {
@@ -255,7 +251,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   const settle = (): Promise<void> => act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
 
   it('page 视图显示数据流向与端点归属提示，控件读 schema 的默认值', async () => {
-    const { container, fixture } = await renderPage()
+    // 准入组默认是收起的，要看到它的控件得先启用（默认折叠的用例在下面单列）。
+    const { container, fixture } = await renderPage({ admissionJudge: true })
     expect(container.textContent).toContain('摘要与隐私分别把工具正文发送给各自所选 route')
     // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，三个 provider 行同样各指一次。
     expect(container.textContent).toContain(fixture.t('modelSourceHint'))
@@ -269,7 +266,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   })
 
   it('三个角色各自成组：每组的 route、推理档位与该角色的其余设置都在同一个标题下，组间用长横线隔开', async () => {
-    const { fixture, container } = await renderPage()
+    const { fixture, container } = await renderPage({ admissionJudge: true })
     for (const [title, prefix, role] of [
       ['摘要模型', 'route', 'summary'],
       ['摘要准入判断模型', 'admission', 'admission'],
@@ -302,8 +299,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     }
   })
 
-  it('一行放得下：provider、model 与推理档位同一行，摘要下限与上限同一行；下拉不被拉满整行', async () => {
-    const { container } = await renderPage()
+  it('一行放得下：provider、model 与推理档位同一行，摘要下限与上限同一行；下拉与输入框同宽', async () => {
+    const { container } = await renderPage({ admissionJudge: true })
     /** 某个控件所在的那一格（每格自己是一个 section）。 */
     const cell = (id: string): Element => container.querySelector(`#${id}`)!.closest('section')!
     const row = cell('plugin-config-result-clipper-route-provider').parentElement as HTMLElement
@@ -320,20 +317,77 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(pair).toBe(cell('plugin-config-result-clipper-max-summarize').parentElement)
     expect(pair.style.gridTemplateColumns).toBe('1fr 1fr')
 
-    // 下拉不拉伸到整行（拉伸会把箭头推到最右边）：宽度跟着内容走，箭头贴在文字后面。
+    // 下拉与文本输入同宽：都铺满自己那一格（上一版收窄到内容宽，用户反馈「太窄了」）。
     for (const id of [
       'plugin-config-result-clipper-route-provider',
       'plugin-config-result-clipper-summary-effort',
       'plugin-config-result-clipper-privacy-effort',
     ]) {
-      const control = container.querySelector(`#${id}`) as HTMLElement
-      expect(control.style.alignSelf).toBe('flex-start')
-      expect(control.style.width).toBe('auto')
+      expect((container.querySelector(`#${id}`) as HTMLElement).style.width).toBe('100%')
     }
+    // 三个单行输入框同宽，理由同上：宽度来自同一份排版常量，不会各写各的。
+    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLElement).style.width).toBe('100%')
+  })
+
+  it('准入组默认收起（收起＝不启用）：勾上启用位才出现整组设置，保存时把启用与其他改动一次写回', async () => {
+    const { fixture, container } = await renderPage()
+    const group = groupOf(container, '摘要准入判断模型')
+    const toggle = (): HTMLInputElement =>
+      group.querySelector('#plugin-config-result-clipper-admission-enabled input') as HTMLInputElement
+
+    expect(toggle().checked).toBe(false)
+    // 收起时整组设置都不在 DOM 上：route、档位、提示词一个都不渲染。
+    for (const id of [
+      'plugin-config-result-clipper-admission-provider',
+      'plugin-config-result-clipper-admission-model',
+      'plugin-config-result-clipper-admission-effort',
+      'plugin-config-result-clipper-admission-prompt',
+    ]) {
+      expect(group.querySelector(`#${id}`)).toBeNull()
+    }
+    // 没勾也没改别的字段：这一组没有可保存的东西。
+    expect(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')).disabled).toBe(true)
+
+    // 勾上启用位：整组设置出现，但还只是草稿——不点保存什么都不写。
+    await fireEvent.click(toggle())
+    expect(group.querySelector('#plugin-config-result-clipper-admission-provider')).not.toBeNull()
+    expect(group.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
+    expect(fixture.form.mutations).toEqual([])
+    await fireEvent.click(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['admissionJudge'], value: true }]])
+    expect(fixture.form.value.admissionJudge).toBe(true)
+  })
+
+  it('已启用的准入组直接展开：勾上启用位那里的读回落在 admissionJudge 上', async () => {
+    const { container } = await renderPage({ admissionJudge: true })
+    const group = groupOf(container, '摘要准入判断模型')
+    expect((group.querySelector('#plugin-config-result-clipper-admission-enabled input') as HTMLInputElement).checked).toBe(true)
+    expect(group.querySelector('#plugin-config-result-clipper-admission-provider')).not.toBeNull()
+    expect(group.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
+  })
+
+  it('换 provider 时 model 跟着走：不属于新 provider 的 model 被清空，不留跨 provider 的配对', async () => {
+    const { fixture, container } = await renderPage({ routeProvider: 'local', routeModel: 'qwen3' })
+    const provider = container.querySelector('#plugin-config-result-clipper-route-provider')!
+    const model = (): HTMLSelectElement => container.querySelector('#plugin-config-result-clipper-route-model') as HTMLSelectElement
+    expect(model().value).toBe('qwen3')
+
+    // 换到另一条 route：候选跟着换，原来的 model 不属于它 → 清空，只改草稿。
+    await fireEvent.change(provider, { target: { value: 'remote' } })
+    expect(model().value).toBe('')
+    expect([...model().querySelectorAll('option')].map(option => option.value)).toEqual(['', 'big-model'])
+    expect(fixture.form.mutations).toEqual([])
+
+    // 把 provider 清空（摘要组＝不摘要）同样不留孤儿 model。
+    await fireEvent.change(provider, { target: { value: 'local' } })
+    await fireEvent.change(model(), { target: { value: 'llama3' } })
+    await fireEvent.change(provider, { target: { value: '' } })
+    expect(model().value).toBe('')
   })
 
   it('三个角色的下拉都能把取值清空：第一项就是清空，选中并保存后字段变空串', async () => {
-    const { fixture, container } = await renderPage({ routeProvider: 'local', routeModel: 'qwen3' })
+    const { fixture, container } = await renderPage({ admissionJudge: true, routeProvider: 'local', routeModel: 'qwen3' })
     /** 某个下拉第一项（置空项）的文案与取值。 */
     const blankOf = (id: string): { text: string; value: string } => {
       const option = container.querySelector(`#${id}`)!.querySelector('option')! as HTMLOptionElement
@@ -348,22 +402,31 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.t('routeUnset')).toContain('清空')
     expect(fixture.t('followSummaryRoute')).toContain('清空')
 
-    // 选中置空项只改草稿；点保存后写回空串（模型没动，所以只有 provider 一条 op）。
+    // 清空 provider（摘要组＝不摘要）时 model 也跟着清掉，两条 op 一次写回——不留孤儿 model。
     await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: '' } })
     expect((container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLSelectElement).value).toBe('')
+    expect((container.querySelector('#plugin-config-result-clipper-route-model') as HTMLInputElement).value).toBe('')
     expect(fixture.form.mutations).toEqual([])
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
-    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['routeProvider'], value: '' }]])
-    expect(fixture.form.value.routeProvider).toBe('')
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['routeProvider'], value: '' },
+      { op: 'set', path: ['routeModel'], value: '' },
+    ]])
+    expect(fixture.form.value).toMatchObject({ routeProvider: '', routeModel: '' })
   })
 
-  it('简介与单位是面向用户的说法：三个角色各说清用途，阈值单位写明 token', async () => {
+  it('三个模型组的标注都先说好处再说怎么设：阈值单位写明 token', async () => {
     const { fixture, container } = await renderPage()
-    // 摘要：说明省下缓存反复失效与 token 反复计费的成本，以及清空 route 的后果（不摘要、原样透传）。
+    // 用户只关心「对我有什么好处、为了这个好处怎么设」：三组都按这两段写。
+    for (const hint of ['summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
+      expect(fixture.t(hint)).toContain('好处')
+      expect(fixture.t(hint)).toContain('怎么设')
+    }
+    // 摘要：省下缓存反复失效与 token 反复计费，以及清空 route 的后果（不摘要、原样透传）。
     expect(fixture.t('summaryGroupHint')).toContain('缓存')
     expect(fixture.t('summaryGroupHint')).toContain('token')
-    expect(fixture.t('summaryGroupHint')).toContain('清空就等于不摘要')
+    expect(fixture.t('summaryGroupHint')).toContain('就等于不摘要')
     expect(fixture.t('summaryGroupHint')).toContain('原样透传')
     // 准入：写明可以不设置（留空跟随摘要模型），以及省 token。
     expect(fixture.t('admissionGroupHint')).toContain('可以不设置')
@@ -380,14 +443,21 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.t('minInlineTokens')).toContain('token')
     expect(fixture.t('maxSummarizeTokens')).toContain('token')
 
-    // 英文侧同样按这五条要求钉住（它不经 `fixture.t` 渲染，所以要单独断言，避免单独漂移）。
+    // 英文侧同样按这些要求钉住（它不经 `fixture.t` 渲染，所以要单独断言，避免单独漂移）。
     expect(en.routeUnset).toContain('clear')
     expect(en.followSummaryRoute).toContain('clear')
+    for (const hint of ['summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
+      expect(en[hint]).toContain('Benefit:')
+      expect(en[hint]).toContain('How to set it up:')
+    }
     expect(en.summaryGroupHint).toContain('prompt cache')
     expect(en.summaryGroupHint).toContain('passed through unchanged')
     expect(en.admissionGroupHint).toContain('Optional')
     expect(en.admissionGroupHint).toContain('follow the summary model')
     expect(en.privacyGroupHint).toContain('local model')
+    // 准入的启用位是卡片上的复选框，它的文案也在这一份字典里。
+    expect(en.admissionJudge).toContain('Enable')
+    expect(en.admissionJudgeHint).toContain('Unchecked')
     for (const hint of ['modelSourceHint', 'summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
       expect(en[hint]).not.toContain('role')
     }
@@ -402,7 +472,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   })
 
   it('provider 与 model 是下拉框：候选来自 DSH 已配置的 route，model 候选跟着该角色的 provider 走', async () => {
-    const { fixture, container } = await renderPage()
+    const { fixture, container } = await renderPage({ admissionJudge: true })
     /** 某个下拉框当前列出的全部选项值。 */
     const optionsOf = (id: string): string[] => {
       const control = container.querySelector(`#${id}`)
@@ -615,7 +685,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   })
 
   it('提示词没有覆盖时框里显示内置正文，且没改动就没有可保存的东西', async () => {
-    const { fixture, container } = await renderPage()
+    const { fixture, container } = await renderPage({ admissionJudge: true })
     for (const [id, rule] of [
       ['plugin-config-result-clipper-summary-prompt', DEFAULT_SUMMARY_RULE],
       ['plugin-config-result-clipper-admission-prompt', DEFAULT_ADMISSION_RULE],
