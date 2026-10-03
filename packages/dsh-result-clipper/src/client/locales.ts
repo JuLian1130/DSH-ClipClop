@@ -16,21 +16,26 @@ export type ResultClipperLocaleKey =
   | 'dryRunInactiveHint'
   | 'flowWarning'
   | 'summaryGroup'
+  | 'summaryGroupHint'
   | 'admissionGroup'
+  | 'admissionGroupHint'
   | 'privacyGroup'
+  | 'privacyGroupHint'
   | 'diagnosticsGroup'
+  | 'diagnosticsGroupHint'
   | 'routeProvider'
   | 'routeProviderHint'
   | 'routeModel'
   | 'routeModelHint'
+  | 'routeUnset'
+  | 'followSummaryRoute'
+  | 'customValue'
+  | 'pickFromCatalog'
+  | 'notInCatalog'
   | 'admissionProvider'
-  | 'admissionProviderHint'
   | 'admissionModel'
-  | 'admissionModelHint'
   | 'privacyProvider'
-  | 'privacyProviderHint'
   | 'privacyModel'
-  | 'privacyModelHint'
   | 'minInlineTokens'
   | 'minInlineTokensHint'
   | 'maxSummarizeTokens'
@@ -79,27 +84,32 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   flowWarning: '摘要与隐私分别把工具正文发送给各自所选 route。',
   modelSourceHint: '模型端点与 API key 不在本卡片：先在「设置 → 模型 → 自定义提供方」建好 route（那里填 baseURL 与 API key，本地服务填它的地址），再在下面按角色选它的 provider 与 model。三个角色可以填同一条。',
   summaryGroup: '摘要模型',
+  summaryGroupHint: '把工具结果改写成与当前任务相关的短说明，并留下取回原文的入口；三个角色里只有它会替换正文。',
   admissionGroup: '摘要准入判断模型',
+  admissionGroupHint: '判断一条结果值不值得发一次带正文的摘要请求：不读正文，只回答 yes/no；它只决定要不要摘要。',
   privacyGroup: '隐私闸门模型',
+  privacyGroupHint: '判断结果是否涉及隐私或机密：判定敏感就拦下、不进主模型；也是唯一要求「已确认为本地 route」的角色。',
   diagnosticsGroup: '诊断',
+  diagnosticsGroupHint: 'debug 记录与干跑的日志位置；记录 metadata，不含原文、提示词与凭据。',
   routeProvider: 'provider',
-  routeProviderHint: '摘要请求发往这条 provider route；留空时摘要路径失败并原样透传。下拉候选就是「设置 → 模型」里已配好的 route（baseURL 与 API key 也在那里配，本插件不保存凭据）；目录外的 provider 仍可手填，但请求会因 route 不存在而失败。',
+  routeProviderHint: '候选是「设置 → 模型」里已配好的 route；端点与 API key 也在那里配。',
   routeModel: 'model',
-  routeModelHint: '与 provider 一起决定请求发往哪条 route。下拉候选是该 provider 在 DSH 目录里的模型；目录没列出的 model id 仍可手填。',
+  routeModelHint: '该 route 的模型；目录外的 id 用「自定义…」手填。',
+  routeUnset: '未配置',
+  followSummaryRoute: '跟随摘要 route',
+  customValue: '自定义…',
+  pickFromCatalog: '从目录里选',
+  notInCatalog: '（不在目录里）',
   admissionProvider: 'provider',
-  admissionProviderHint: '准入请求发往这条 route；留空时跟随摘要 route。下拉候选同样是「设置 → 模型」里已配好的 route。',
   admissionModel: 'model',
-  admissionModelHint: '与 provider 一起决定请求发往哪条 route。下拉候选是该 provider 在 DSH 目录里的模型；也可以手填。',
   privacyProvider: 'provider',
-  privacyProviderHint: '隐私请求发往这条 route；留空时跟随摘要 route。下拉候选同样是「设置 → 模型」里已配好的 route。',
   privacyModel: 'model',
-  privacyModelHint: '与 provider 一起决定请求发往哪条 route。下拉候选是该 provider 在 DSH 目录里的模型；也可以手填。',
   minInlineTokens: '摘要下限（估算单位）',
   minInlineTokensHint: '低于它的结果原样保留；0 表示不设下限。',
   maxSummarizeTokens: '摘要上限（估算单位）',
   maxSummarizeTokensHint: 'bash 与 web_fetch 达到或超过它的结果交给 spill；read 不受它约束。',
   reasoningEffort: '推理档位',
-  reasoningEffortHint: '档位由所选 route 声明的档位表决定；默认「不推理」以降低延迟，route 不声明该档位时插件会去掉该字段重发一次。',
+  reasoningEffortHint: '默认「不推理」以降低延迟；档位由该 route 声明，不声明时去掉该字段重发一次。',
   effortOff: '不推理',
   effortMinimal: '极低',
   effortLow: '低',
@@ -142,27 +152,32 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   flowWarning: 'Summarization and the privacy gate each send the tool body to their own selected route.',
   modelSourceHint: 'Model endpoints and API keys are not in this card: create the route first in Settings → Models → custom provider (that is where baseURL and API key go, and where a local server address is entered), then pick its provider and model per role below. All three roles may name the same route.',
   summaryGroup: 'Summary model',
+  summaryGroupHint: 'Rewrites a tool result into a short task-relevant note and leaves an entry back to the original; of the three roles only this one replaces the body.',
   admissionGroup: 'Admission judge model',
+  admissionGroupHint: 'Decides whether a result is worth one body-carrying summary request: it never reads the body and only answers yes/no.',
   privacyGroup: 'Privacy gate model',
+  privacyGroupHint: 'Decides whether a result touches privacy or secrets: a sensitive verdict is blocked before the main model sees it, and this is the only role that needs a route confirmed local.',
   diagnosticsGroup: 'Diagnostics',
+  diagnosticsGroupHint: 'Where debug records and dry runs are written; metadata only, never the original text, prompts, or credentials.',
   routeProvider: 'Provider',
-  routeProviderHint: 'Summary requests go to this provider route; while empty the summary path fails and passes the result through. The suggestions are the routes already configured in Settings → Models, which is also where a custom provider\'s baseURL and API key go; a provider outside that list can still be typed, but the request fails because the route does not exist.',
+  routeProviderHint: 'The options are the routes already configured in Settings → Models; a custom provider\'s baseURL and API key are configured there too.',
   routeModel: 'Model',
-  routeModelHint: 'Together with the provider this picks the exact route requests go to. The suggestions are this provider\'s models in the DSH catalog; a model id outside the catalog can still be typed.',
+  routeModelHint: 'A model of that route; use "Custom…" to type an id outside the catalog.',
+  routeUnset: 'Not configured',
+  followSummaryRoute: 'Follow the summary route',
+  customValue: 'Custom…',
+  pickFromCatalog: 'Pick from the catalog',
+  notInCatalog: ' (not in the catalog)',
   admissionProvider: 'Provider',
-  admissionProviderHint: 'Admission requests go to this route; while empty they follow the summary route. The suggestions are the routes already configured in Settings → Models.',
   admissionModel: 'Model',
-  admissionModelHint: 'Together with the provider this picks the admission route. The suggestions are this provider\'s models in the DSH catalog; any id can be typed.',
   privacyProvider: 'Provider',
-  privacyProviderHint: 'Privacy requests go to this route; while empty they follow the summary route. The suggestions are the routes already configured in Settings → Models.',
   privacyModel: 'Model',
-  privacyModelHint: 'Together with the provider this picks the privacy route. The suggestions are this provider\'s models in the DSH catalog; any id can be typed.',
   minInlineTokens: 'Summarize floor (estimated units)',
   minInlineTokensHint: 'Results below it are kept as-is; 0 removes the floor.',
   maxSummarizeTokens: 'Summarize ceiling (estimated units)',
   maxSummarizeTokensHint: 'bash and web_fetch results at or above it go to spill; read is not bound by it.',
   reasoningEffort: 'Reasoning effort',
-  reasoningEffortHint: 'The levels are declared by the selected route; "Off" is the default because it lowers latency, and the plugin drops the field and retries once when the route rejects the level.',
+  reasoningEffortHint: '"Off" is the default because it lowers latency; the levels are declared by the route, and the plugin drops the field and retries once when the route rejects it.',
   effortOff: 'Off',
   effortMinimal: 'Minimal',
   effortLow: 'Low',

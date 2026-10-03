@@ -141,8 +141,11 @@ const GROUP_STYLE = { margin: '24px 0 0', fontSize: 13, fontWeight: 600, lineHei
 /** 分组之间的长横线。 */
 const DIVIDER_STYLE = { border: 0, borderTop: '1px solid var(--dsw-alias-border-l2)', margin: '12px 0 0' } as const
 
-/** 一个角色的 route 里 provider 与 model 并排的排版。 */
-const ROUTE_STYLE = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } as const
+/** 一个角色的 route 行：provider、model 与推理档位并排。 */
+const ROUTE_STYLE = { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 } as const
+
+/** 成对的数字参数（摘要下限与上限）并排。 */
+const PAIR_STYLE = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } as const
 
 /** 一组底部的「保存 / 恢复默认」按钮行排版。 */
 const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '12px 0 0' } as const
@@ -309,6 +312,8 @@ function useGroupDraft(
  */
 function Group(props: {
   readonly title: string
+  /** 该角色是做什么的：一行简介，放在标题下方。 */
+  readonly description: string
   readonly children: ReactNode
   readonly dirty: boolean
   readonly busy: boolean
@@ -321,6 +326,7 @@ function Group(props: {
 }) {
   return <section style={{ padding: '4px 0' }}>
     <h4 style={GROUP_STYLE}>{props.title}</h4>
+    <div style={HINT_STYLE}>{props.description}</div>
     {props.children}
     <div style={ACTIONS_STYLE}>
       <button type="button" disabled={props.busy || !props.dirty} onClick={props.onSave}>{props.saveLabel}</button>
@@ -332,10 +338,7 @@ function Group(props: {
 
 /**
  * 一行文本参数；编辑只改草稿，由所在组的「保存」写回。
- *
- * 给出 `options` 时挂一份 `datalist`：下拉里是 DSH 已配置的候选，同时保留手填——路由表之外的 model id 也能生效
- * （DSH 的核心路由接受未列出的 model），目录读不到时候选为空、控件就是原来的纯文本。
- * @param props - 行文案、提示、草稿值、改动回调与可选的候选。
+ * @param props - 行文案、提示、草稿值与改动回调。
  * @returns 一行文本控件。
  */
 function TextRow(props: {
@@ -344,7 +347,6 @@ function TextRow(props: {
   readonly hint: string
   readonly value: string
   readonly onChange: (next: string) => void
-  readonly options?: readonly { readonly value: string; readonly label: string }[]
 }) {
   return <section style={ROW_STYLE}>
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
@@ -353,29 +355,90 @@ function TextRow(props: {
       type="text"
       style={INPUT_STYLE}
       value={props.value}
-      list={props.options === undefined ? undefined : `${props.id}-options`}
       onChange={(event) => { props.onChange(event.target.value) }}
     />
-    {props.options !== undefined && <datalist id={`${props.id}-options`}>
-      {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-    </datalist>}
     <div style={HINT_STYLE}>{props.hint}</div>
   </section>
 }
 
-/**
- * 一个角色的 route：provider 与 model 并排，用户按角色一次配完「发给谁」。
- * @param props - 行前缀与 provider / model 两行的文案、草稿值与改动回调。
- * @returns 一行两个文本控件。
- */
-function RouteFields(props: {
+/** 一行 route 字段（provider 或 model）的 props。 */
+interface RouteRowProps {
   readonly id: string
-  readonly provider: Omit<Parameters<typeof TextRow>[0], 'id'>
-  readonly model: Omit<Parameters<typeof TextRow>[0], 'id'>
+  readonly label: string
+  readonly hint: string
+  readonly value: string
+  /** 目录里的候选；空数组表示目录不可用，此时退回纯文本输入。 */
+  readonly options: readonly { readonly value: string; readonly label: string }[]
+  /** 空串这一档的说法（`未配置` / `跟随摘要 route`）；给出时空串是一条可选项。 */
+  readonly emptyLabel: string
+  /** 「自定义…」按钮文案。 */
+  readonly customLabel: string
+  /** 「从目录里选」按钮文案。 */
+  readonly pickLabel: string
+  /** 当前值不在目录里时那条选项的后缀。 */
+  readonly unknownSuffix: string
+  readonly onChange: (next: string) => void
+}
+
+/**
+ * 一行 route 字段：**下拉框**列出目录里的全部候选，另有一个「自定义…」入口用于目录外的 id。
+ *
+ * 三种形态：① 有候选时是 `<select>`（当前值不在目录里就把它作为一条带后缀的选项保留，不会丢）；
+ * ② 点了「自定义…」（或目录里根本没有候选）时是文本输入，目录可用时给一个「从目录里选」的回退按钮——
+ * DSH 的核心路由接受未列出的 model id，纯下拉会把这种部署变成不可配置。
+ * @param props - 行文案、草稿值、候选与三处按钮/选项文案。
+ * @returns 一行 route 控件。
+ */
+function RouteRow(props: RouteRowProps) {
+  const [typing, setTyping] = useState(false)
+  const known = props.options.some(option => option.value === props.value)
+  if (typing || props.options.length === 0) {
+    return <section style={ROW_STYLE}>
+      <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
+      <input
+        id={props.id}
+        type="text"
+        style={INPUT_STYLE}
+        value={props.value}
+        onChange={(event) => { props.onChange(event.target.value) }}
+      />
+      {props.options.length > 0 && <div>
+        <button type="button" onClick={() => { setTyping(false) }}>{props.pickLabel}</button>
+      </div>}
+      <div style={HINT_STYLE}>{props.hint}</div>
+    </section>
+  }
+  return <section style={ROW_STYLE}>
+    <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
+    <select
+      id={props.id}
+      value={props.value}
+      aria-label={props.label}
+      style={{ ...INPUT_STYLE, alignSelf: 'flex-start', minWidth: 160, maxWidth: '100%' }}
+      onChange={(event) => { props.onChange(event.target.value) }}
+    >
+      <option value="">{props.emptyLabel}</option>
+      {!known && props.value !== ''
+        && <option value={props.value}>{`${props.value}${props.unknownSuffix}`}</option>}
+      {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </select>
+    <div>
+      <button type="button" onClick={() => { setTyping(true) }}>{props.customLabel}</button>
+    </div>
+    <div style={HINT_STYLE}>{props.hint}</div>
+  </section>
+}
+
+/** 一个角色的 route 行：provider、model 与推理档位并排。 */
+function RouteLine(props: {
+  readonly provider: RouteRowProps
+  readonly model: RouteRowProps
+  readonly effort: Parameters<typeof EffortRow>[0]
 }) {
   return <div style={ROUTE_STYLE}>
-    <TextRow {...props.provider} id={`${props.id}-provider`} />
-    <TextRow {...props.model} id={`${props.id}-model`} />
+    <RouteRow {...props.provider} />
+    <RouteRow {...props.model} />
+    <EffortRow {...props.effort} />
   </div>
 }
 
@@ -423,7 +486,7 @@ function EffortRow(props: {
       id={props.id}
       value={props.value}
       aria-label={props.label}
-      style={{ ...INPUT_STYLE, width: 'auto', minWidth: 160 }}
+      style={{ ...INPUT_STYLE, alignSelf: 'flex-start', minWidth: 160, maxWidth: '100%' }}
       onChange={(event) => { props.onChange(event.target.value as ReasoningEffort) }}
     >
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -578,9 +641,15 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const failedHint = props.t('failedHint')
   const effortOptions = REASONING_EFFORT_IDS.map(choice => ({ value: choice, label: props.t(EFFORT_LABELS[choice]) }))
   const providerOptions = catalog.map(group => ({ value: group.id, label: group.name }))
-  /** 某个 provider 在目录里的模型候选；provider 还不在目录里时为空（手填仍然可用）。 */
+  /** 某个 provider 在目录里的模型候选；provider 还不在目录里时为空（「自定义…」仍然可用）。 */
   const modelOptions = (provider: string): readonly { readonly value: string; readonly label: string }[] =>
     catalog.find(group => group.id === provider)?.models.map(model => ({ value: model.id, label: model.name })) ?? []
+  /** route 行共用的三处「不在目录里」文案。 */
+  const routeText = {
+    customLabel: props.t('customValue'),
+    pickLabel: props.t('pickFromCatalog'),
+    unknownSuffix: props.t('notInCatalog'),
+  }
   const saveLabel = props.t('saveGroup')
   const resetLabel = props.t('resetGroup')
   /** 一组底部的按钮与失败提示。 */
@@ -595,30 +664,37 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     {privacyGate && !privacyConfirmedLocal
       && <div role="alert" style={WARNING_STYLE}>{props.t('routeUnconfirmedWarning')}</div>}
 
-    <Group title={props.t('summaryGroup')} {...actions(summary)}>
-      <RouteFields id="plugin-config-result-clipper-route"
+    <Group title={props.t('summaryGroup')} description={props.t('summaryGroupHint')} {...actions(summary)}>
+      <RouteLine
         provider={{
+          ...routeText, id: 'plugin-config-result-clipper-route-provider',
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
-          value: summary.value('routeProvider') as string,
-          options: providerOptions,
+          value: summary.value('routeProvider') as string, options: providerOptions,
+          emptyLabel: props.t('routeUnset'),
           onChange: next => { summary.change('routeProvider', next) },
         }}
         model={{
+          ...routeText, id: 'plugin-config-result-clipper-route-model',
           label: props.t('routeModel'), hint: props.t('routeModelHint'),
           value: summary.value('routeModel') as string,
           options: modelOptions(summary.value('routeProvider') as string),
+          emptyLabel: props.t('routeUnset'),
           onChange: next => { summary.change('routeModel', next) },
+        }}
+        effort={{
+          id: 'plugin-config-result-clipper-summary-effort', label: props.t('reasoningEffort'),
+          hint: props.t('reasoningEffortHint'), options: effortOptions,
+          value: summary.value('summaryReasoningEffort') as ReasoningEffort,
+          onChange: next => { summary.change('summaryReasoningEffort', next) },
         }} />
-      <EffortRow id="plugin-config-result-clipper-summary-effort" label={props.t('reasoningEffort')}
-        hint={props.t('reasoningEffortHint')} options={effortOptions}
-        value={summary.value('summaryReasoningEffort') as ReasoningEffort}
-        onChange={next => { summary.change('summaryReasoningEffort', next) }} />
-      <NumberRow id="plugin-config-result-clipper-min-inline" label={props.t('minInlineTokens')}
-        hint={props.t('minInlineTokensHint')} value={summary.value('minInlineTokens') as string}
-        onChange={next => { summary.change('minInlineTokens', next) }} />
-      <NumberRow id="plugin-config-result-clipper-max-summarize" label={props.t('maxSummarizeTokens')}
-        hint={props.t('maxSummarizeTokensHint')} value={summary.value('maxSummarizeTokens') as string}
-        onChange={next => { summary.change('maxSummarizeTokens', next) }} />
+      <div style={PAIR_STYLE}>
+        <NumberRow id="plugin-config-result-clipper-min-inline" label={props.t('minInlineTokens')}
+          hint={props.t('minInlineTokensHint')} value={summary.value('minInlineTokens') as string}
+          onChange={next => { summary.change('minInlineTokens', next) }} />
+        <NumberRow id="plugin-config-result-clipper-max-summarize" label={props.t('maxSummarizeTokens')}
+          hint={props.t('maxSummarizeTokensHint')} value={summary.value('maxSummarizeTokens') as string}
+          onChange={next => { summary.change('maxSummarizeTokens', next) }} />
+      </div>
       <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
         hint={props.t('promptHint')} value={summary.value('summaryPrompt') as string}
         onChange={next => { summary.change('summaryPrompt', next) }} />
@@ -626,24 +702,29 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
     <hr style={DIVIDER_STYLE} />
 
-    <Group title={props.t('admissionGroup')} {...actions(admission)}>
-      <RouteFields id="plugin-config-result-clipper-admission"
+    <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
+      <RouteLine
         provider={{
-          label: props.t('admissionProvider'), hint: props.t('admissionProviderHint'),
-          value: admission.value('admissionProvider') as string,
-          options: providerOptions,
+          ...routeText, id: 'plugin-config-result-clipper-admission-provider',
+          label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
+          value: admission.value('admissionProvider') as string, options: providerOptions,
+          emptyLabel: props.t('followSummaryRoute'),
           onChange: next => { admission.change('admissionProvider', next) },
         }}
         model={{
-          label: props.t('admissionModel'), hint: props.t('admissionModelHint'),
+          ...routeText, id: 'plugin-config-result-clipper-admission-model',
+          label: props.t('routeModel'), hint: props.t('routeModelHint'),
           value: admission.value('admissionModel') as string,
           options: modelOptions(admission.value('admissionProvider') as string),
+          emptyLabel: props.t('followSummaryRoute'),
           onChange: next => { admission.change('admissionModel', next) },
+        }}
+        effort={{
+          id: 'plugin-config-result-clipper-admission-effort', label: props.t('reasoningEffort'),
+          hint: props.t('reasoningEffortHint'), options: effortOptions,
+          value: admission.value('admissionReasoningEffort') as ReasoningEffort,
+          onChange: next => { admission.change('admissionReasoningEffort', next) },
         }} />
-      <EffortRow id="plugin-config-result-clipper-admission-effort" label={props.t('reasoningEffort')}
-        hint={props.t('reasoningEffortHint')} options={effortOptions}
-        value={admission.value('admissionReasoningEffort') as ReasoningEffort}
-        onChange={next => { admission.change('admissionReasoningEffort', next) }} />
       <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
         hint={props.t('promptHint')} value={admission.value('admissionPrompt') as string}
         onChange={next => { admission.change('admissionPrompt', next) }} />
@@ -651,24 +732,29 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
     <hr style={DIVIDER_STYLE} />
 
-    <Group title={props.t('privacyGroup')} {...actions(privacy)}>
-      <RouteFields id="plugin-config-result-clipper-privacy"
+    <Group title={props.t('privacyGroup')} description={props.t('privacyGroupHint')} {...actions(privacy)}>
+      <RouteLine
         provider={{
-          label: props.t('privacyProvider'), hint: props.t('privacyProviderHint'),
-          value: privacy.value('privacyProvider') as string,
-          options: providerOptions,
+          ...routeText, id: 'plugin-config-result-clipper-privacy-provider',
+          label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
+          value: privacy.value('privacyProvider') as string, options: providerOptions,
+          emptyLabel: props.t('followSummaryRoute'),
           onChange: next => { privacy.change('privacyProvider', next) },
         }}
         model={{
-          label: props.t('privacyModel'), hint: props.t('privacyModelHint'),
+          ...routeText, id: 'plugin-config-result-clipper-privacy-model',
+          label: props.t('routeModel'), hint: props.t('routeModelHint'),
           value: privacy.value('privacyModel') as string,
           options: modelOptions(privacy.value('privacyProvider') as string),
+          emptyLabel: props.t('followSummaryRoute'),
           onChange: next => { privacy.change('privacyModel', next) },
+        }}
+        effort={{
+          id: 'plugin-config-result-clipper-privacy-effort', label: props.t('reasoningEffort'),
+          hint: props.t('reasoningEffortHint'), options: effortOptions,
+          value: privacy.value('privacyReasoningEffort') as ReasoningEffort,
+          onChange: next => { privacy.change('privacyReasoningEffort', next) },
         }} />
-      <EffortRow id="plugin-config-result-clipper-privacy-effort" label={props.t('reasoningEffort')}
-        hint={props.t('reasoningEffortHint')} options={effortOptions}
-        value={privacy.value('privacyReasoningEffort') as ReasoningEffort}
-        onChange={next => { privacy.change('privacyReasoningEffort', next) }} />
       <CheckRow id="plugin-config-result-clipper-privacy-confirmed" label={props.t('privacyConfirmedLocal')}
         hint={props.t('privacyConfirmedLocalHint')}
         checked={privacy.value('privacyConfirmedLocal') as boolean}
@@ -686,7 +772,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
     <hr style={DIVIDER_STYLE} />
 
-    <Group title={props.t('diagnosticsGroup')} {...actions(diagnostics)}>
+    <Group title={props.t('diagnosticsGroup')} description={props.t('diagnosticsGroupHint')} {...actions(diagnostics)}>
       <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
         hint={props.t('debugPathHint')} value={diagnostics.value('debugPath') as string}
         onChange={next => { diagnostics.change('debugPath', next) }} />

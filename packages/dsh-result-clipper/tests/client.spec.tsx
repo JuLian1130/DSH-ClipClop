@@ -268,7 +268,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   })
 
   it('三个角色各自成组：每组的 route、推理档位与该角色的其余设置都在同一个标题下，组间用长横线隔开', async () => {
-    const { container } = await renderPage()
+    const { fixture, container } = await renderPage()
     for (const [title, prefix, role] of [
       ['摘要模型', 'route', 'summary'],
       ['摘要准入判断模型', 'admission', 'admission'],
@@ -290,31 +290,104 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(groupOf(container, '诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
     // 四个分组之间三条长横线：三个模型组各有自己的边界，诊断组同样被隔开。
     expect([...container.querySelectorAll('hr')]).toHaveLength(3)
+    // 每个分组都有一行「这是做什么的」。
+    for (const [title, hint] of [
+      ['摘要模型', 'summaryGroupHint'],
+      ['摘要准入判断模型', 'admissionGroupHint'],
+      ['隐私闸门模型', 'privacyGroupHint'],
+      ['诊断', 'diagnosticsGroupHint'],
+    ] as const) {
+      expect(groupOf(container, title).textContent).toContain(fixture.t(hint))
+    }
   })
 
-  it('provider 与 model 有候选：来自 DSH 已配置的 route，model 候选跟着该角色的 provider 走', async () => {
+  it('一行放得下：provider、model 与推理档位同一行，摘要下限与上限同一行；下拉不被拉满整行', async () => {
+    const { container } = await renderPage()
+    /** 某个控件所在的那一格（每格自己是一个 section）。 */
+    const cell = (id: string): Element => container.querySelector(`#${id}`)!.closest('section')!
+    const row = cell('plugin-config-result-clipper-route-provider').parentElement as HTMLElement
+    expect(row).toBe(cell('plugin-config-result-clipper-route-model').parentElement)
+    expect(row).toBe(cell('plugin-config-result-clipper-summary-effort').parentElement)
+    expect(row.style.gridTemplateColumns).toBe('1fr 1fr 1fr')
+    // 准入与隐私两组也是同一行的三格。
+    expect((cell('plugin-config-result-clipper-admission-provider').parentElement as HTMLElement).style.gridTemplateColumns)
+      .toBe('1fr 1fr 1fr')
+    expect((cell('plugin-config-result-clipper-privacy-provider').parentElement as HTMLElement).style.gridTemplateColumns)
+      .toBe('1fr 1fr 1fr')
+
+    const pair = cell('plugin-config-result-clipper-min-inline').parentElement as HTMLElement
+    expect(pair).toBe(cell('plugin-config-result-clipper-max-summarize').parentElement)
+    expect(pair.style.gridTemplateColumns).toBe('1fr 1fr')
+
+    // 下拉不拉伸到整行（拉伸会把箭头推到最右边）：两个 route 下拉与档位下拉都贴自己的内容。
+    for (const id of [
+      'plugin-config-result-clipper-route-provider',
+      'plugin-config-result-clipper-summary-effort',
+      'plugin-config-result-clipper-privacy-effort',
+    ]) {
+      expect((container.querySelector(`#${id}`) as HTMLElement).style.alignSelf).toBe('flex-start')
+    }
+  })
+
+  it('provider 与 model 是下拉框：候选来自 DSH 已配置的 route，model 候选跟着该角色的 provider 走', async () => {
     const { fixture, container } = await renderPage()
-    /** 某个输入框挂的候选值。 */
-    const optionsOf = (inputId: string): string[] => {
-      const input = container.querySelector(`#${inputId}`) as HTMLInputElement
-      const list = input.getAttribute('list')
-      if (list === null) throw new Error(`fixture: input ${inputId} has no candidate list`)
-      return [...container.querySelectorAll(`#${list} option`)].map(option => (option as HTMLOptionElement).value)
+    /** 某个下拉框当前列出的全部选项值。 */
+    const optionsOf = (id: string): string[] => {
+      const control = container.querySelector(`#${id}`)
+      if (control === null || control.tagName !== 'SELECT') throw new Error(`fixture: ${id} is not a select`)
+      return [...control.querySelectorAll('option')].map(option => (option as HTMLOptionElement).value)
     }
 
-    // provider 候选就是目录里的 route；摘要组此刻还没选 provider，所以 model 候选为空。
-    expect(optionsOf('plugin-config-result-clipper-route-provider')).toEqual(['local', 'remote'])
-    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual([])
-    // 准入与隐私两组同样有 provider 候选（留空 = 跟随摘要 route 仍然可行：框可以清空）。
-    expect(optionsOf('plugin-config-result-clipper-admission-provider')).toEqual(['local', 'remote'])
-    expect(optionsOf('plugin-config-result-clipper-privacy-provider')).toEqual(['local', 'remote'])
+    // 空串那一档有自己的说法：摘要组是「未配置」，另外两组是「跟随摘要 route」。
+    expect(optionsOf('plugin-config-result-clipper-route-provider')).toEqual(['', 'local', 'remote'])
+    expect(optionsOf('plugin-config-result-clipper-admission-provider')).toEqual(['', 'local', 'remote'])
+    expect(optionsOf('plugin-config-result-clipper-privacy-provider')).toEqual(['', 'local', 'remote'])
+    // 摘要组还没选 provider：model 没有候选，控件退回手填（不是「只显示当前选择」——选了 provider 就有全量候选）。
+    expect(container.querySelector('#plugin-config-result-clipper-route-model')!.tagName).toBe('INPUT')
 
-    // 选了 provider 之后，model 候选换成那条 route 的模型；换 provider 就换一批。
+    // 选了 provider 之后，model 列出那条 route 的全部模型；换 provider 就换一批。
     await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'local' } })
-    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual(['qwen3', 'llama3'])
+    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual(['', 'qwen3', 'llama3'])
     await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'remote' } })
-    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual(['big-model'])
+    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual(['', 'big-model'])
     // 换候选只是改草稿，不写任何字段。
+    expect(fixture.form.writes).toEqual([])
+    expect(fixture.form.mutations).toEqual([])
+  })
+
+  it('目录外的取值不会丢：它不是当前选择也不是候选，但作为一条带后缀的选项留在下拉里', async () => {
+    const { fixture, container } = await renderPage({ routeProvider: 'hand-typed' })
+    const provider = container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLSelectElement
+    expect(provider.value).toBe('hand-typed')
+    const options = [...provider.querySelectorAll('option')]
+    expect(options.map(option => option.value)).toEqual(['', 'hand-typed', 'local', 'remote'])
+    expect(options[1]!.textContent).toBe(`hand-typed${fixture.t('notInCatalog')}`)
+  })
+
+  it('「自定义…」切到文本输入，「从目录里选」切回下拉；两种形态都只改草稿', async () => {
+    const { fixture, container } = await renderPage()
+    const rowButton = (id: string, label: string): HTMLButtonElement => {
+      const section = container.querySelector(`#${id}`)!.closest('section')!
+      const button = [...section.querySelectorAll('button')].find(candidate => candidate.textContent === label)
+      if (button === undefined) throw new Error(`fixture: no button labelled ${label} in row ${id}`)
+      return button
+    }
+    const providerId = 'plugin-config-result-clipper-route-provider'
+
+    // 从下拉切到手填：控件换成文本输入，原值保留。
+    await fireEvent.click(rowButton(providerId, fixture.t('customValue')))
+    const typed = container.querySelector(`#${providerId}`)!
+    expect(typed.tagName).toBe('INPUT')
+    await fireEvent.change(typed, { target: { value: 'unlisted-route' } })
+    expect((container.querySelector(`#${providerId}`) as HTMLInputElement).value).toBe('unlisted-route')
+
+    // 切回下拉：目录可用，控件回到 select，手填的值作为「不在目录里」的一条选项留下。
+    await fireEvent.click(rowButton(providerId, fixture.t('pickFromCatalog')))
+    const picked = container.querySelector(`#${providerId}`) as HTMLSelectElement
+    expect(picked.tagName).toBe('SELECT')
+    expect([...picked.querySelectorAll('option')].map(option => option.value))
+      .toEqual(['', 'unlisted-route', 'local', 'remote'])
+    // 两条路都只改草稿。
     expect(fixture.form.writes).toEqual([])
     expect(fixture.form.mutations).toEqual([])
   })
@@ -386,7 +459,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     await fireEvent.change(container.querySelector('#plugin-config-result-clipper-summary-effort')!, { target: { value: 'high' } })
     await fireEvent.change(container.querySelector('#plugin-config-result-clipper-min-inline')!, { target: { value: '256' } })
     // 另一组也改一个字段：它不该被摘要组的保存带走。
-    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-privacy-provider')!, { target: { value: 'guard' } })
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-privacy-provider')!, { target: { value: 'remote' } })
 
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
@@ -437,19 +510,19 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   })
 
   it('「恢复默认」把 provider、model 与 debug 路径送回上一次保存的值（丢掉未保存的改动）', async () => {
-    const { fixture, container } = await renderPage({ routeProvider: 'saved', routeModel: 'saved-model', debugPath: '/tmp/saved.jsonl' })
-    const provider = container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLInputElement
+    const { fixture, container } = await renderPage({ routeProvider: 'local', routeModel: 'qwen3', debugPath: '/tmp/saved.jsonl' })
+    const provider = container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLSelectElement
     const debugPath = container.querySelector('#plugin-config-result-clipper-debug-path') as HTMLInputElement
-    await fireEvent.change(provider, { target: { value: 'draft' } })
+    await fireEvent.change(provider, { target: { value: 'remote' } })
     await fireEvent.change(debugPath, { target: { value: '/tmp/draft.jsonl' } })
-    expect(provider.value).toBe('draft')
+    expect(provider.value).toBe('remote')
 
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('resetGroup')))
     await fireEvent.click(groupButton(container, '诊断', fixture.t('resetGroup')))
     await settle()
 
-    expect((container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLInputElement).value).toBe('saved')
-    expect((container.querySelector('#plugin-config-result-clipper-route-model') as HTMLInputElement).value).toBe('saved-model')
+    expect((container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLSelectElement).value).toBe('local')
+    expect((container.querySelector('#plugin-config-result-clipper-route-model') as HTMLSelectElement).value).toBe('qwen3')
     expect((container.querySelector('#plugin-config-result-clipper-debug-path') as HTMLInputElement).value).toBe('/tmp/saved.jsonl')
     expect(fixture.form.mutations).toEqual([])
   })
