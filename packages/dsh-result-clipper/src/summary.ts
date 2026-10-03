@@ -26,8 +26,6 @@ import {
 import type { ContentBlock, GenerateOptions, LlmRuntime, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_SUMMARY_RULE } from './rules.ts'
 
-export { DEFAULT_SUMMARY_RULE }
-
 /** 摘要输出上限（固定常量，不可配）：输出 512 token。 */
 export const SUMMARY_MAX_TOKENS = 512
 

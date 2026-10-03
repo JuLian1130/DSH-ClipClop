@@ -20,8 +20,6 @@ import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, composeRequestPrefix, requestMo
 import type { ModelCallUsage } from './summary.ts'
 import { DEFAULT_ADMISSION_RULE } from './rules.ts'
 
-export { DEFAULT_ADMISSION_RULE }
-
 /** 固定安全外壳：只陈述输出形状与数据边界，不含任何可编辑规则。 */
 const FIXED_SHELL = [
   '规则：',

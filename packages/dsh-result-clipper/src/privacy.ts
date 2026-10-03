@@ -24,8 +24,6 @@ import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, parseAction, requestModelText }
 import type { ModelCallUsage, ModelRequestFailure, SummaryAction } from './summary.ts'
 import { DEFAULT_PRIVACY_RULE } from './rules.ts'
 
-export { DEFAULT_PRIVACY_RULE }
-
 // 消息来源是生产者自报的 kind（会话格式拒绝通用 `plugin` 包装），所以本插件在这里登记自己的来源类型。
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {

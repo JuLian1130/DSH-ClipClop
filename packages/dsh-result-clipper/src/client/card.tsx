@@ -345,12 +345,12 @@ function PromptRow(props: {
   readonly resetLabel: string
   /** 用户写下的覆盖；空串表示没有覆盖。 */
   readonly value: string
-  /** 内置规则正文：没有覆盖时框里显示它，也是请求实际用的正文。 */
-  readonly fallback: string
+  /** 内置规则正文；没有覆盖时，框里显示的和请求实际拼装用的都是它。 */
+  readonly builtinRule: string
   readonly write: (value: string) => Promise<boolean>
   readonly reset: () => Promise<boolean>
 }) {
-  const effective = props.value === '' ? props.fallback : props.value
+  const effective = props.value === '' ? props.builtinRule : props.value
   const [draft, setDraft] = useState(effective)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -369,7 +369,7 @@ function PromptRow(props: {
   const dirty = draft !== effective
   const save = (): void => {
     if (!dirty) return
-    settle(draft === props.fallback ? props.reset() : props.write(draft))
+    settle(draft === props.builtinRule ? props.reset() : props.write(draft))
   }
 
   return <section style={ROW_STYLE}>
@@ -457,17 +457,17 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       failedHint={props.t('failedHint')} checked={privacyDisableReasoning}
       onChange={write('privacyDisableReasoning') as (next: boolean) => Promise<boolean>} />
     <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
-      hint={props.t('summaryPromptHint')} failedHint={props.t('failedHint')}
+      hint={props.t('promptHint')} failedHint={props.t('failedHint')}
       saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-      value={summaryPrompt} fallback={DEFAULT_SUMMARY_RULE} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
+      value={summaryPrompt} builtinRule={DEFAULT_SUMMARY_RULE} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
     <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
-      hint={props.t('admissionPromptHint')} failedHint={props.t('failedHint')}
+      hint={props.t('promptHint')} failedHint={props.t('failedHint')}
       saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-      value={admissionPrompt} fallback={DEFAULT_ADMISSION_RULE} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
+      value={admissionPrompt} builtinRule={DEFAULT_ADMISSION_RULE} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
     <PromptRow id="plugin-config-result-clipper-privacy-prompt" label={props.t('privacyPrompt')}
-      hint={props.t('privacyPromptHint')} failedHint={props.t('failedHint')}
+      hint={props.t('promptHint')} failedHint={props.t('failedHint')}
       saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-      value={privacyPrompt} fallback={DEFAULT_PRIVACY_RULE} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
+      value={privacyPrompt} builtinRule={DEFAULT_PRIVACY_RULE} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
     <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
       hint={props.t('debugPathHint')} failedHint={props.t('failedHint')}
       value={debugPath} write={write('debugPath')} />
