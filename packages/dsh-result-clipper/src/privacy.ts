@@ -22,6 +22,9 @@ import { boundContextSummary, createUserMessage, ReasoningEffortId } from '@deep
 import type { ContextFormed, GenerateOptions, LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
 import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, parseAction, requestModelText } from './summary.ts'
 import type { ModelCallUsage, ModelRequestFailure, SummaryAction } from './summary.ts'
+import { DEFAULT_PRIVACY_RULE } from './rules.ts'
+
+export { DEFAULT_PRIVACY_RULE }
 
 // 消息来源是生产者自报的 kind（会话格式拒绝通用 `plugin` 包装），所以本插件在这里登记自己的来源类型。
 declare module '@deepseek-ai/dsh-llm' {
@@ -29,13 +32,6 @@ declare module '@deepseek-ai/dsh-llm' {
     'dsh-result-clipper': { kind: 'dsh-result-clipper' } & ContextFormed
   }
 }
-
-/** 内置的隐私规则正文，也是页面「恢复默认」回落到的值（用户故事 46）。 */
-export const DEFAULT_PRIVACY_RULE = [
-  '你会拿到一条工具结果的正文与附加上下文。判断它是否涉及用户定义的隐私或机密：',
-  '涉及就返回 sensitive；无法判断时返回 uncertain，不要猜；可以安全交给主模型的内容返回 safe，',
-  '并像摘要那样给出 action（需要逐字完整时用 keep）与 summary。',
-].join('\n')
 
 /** 固定安全外壳：只陈述输出形状与数据边界，不含任何可编辑规则。 */
 const FIXED_SHELL = [

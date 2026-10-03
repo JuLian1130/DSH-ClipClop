@@ -13,11 +13,13 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
+import { useSyncExternalStore } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
 import type { ResultClipperTabInjected, ResultClipperTabProps } from '../src/client/tab.tsx'
+import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
 import { mountClient } from './support/client.ts'
 import type { ClientFixture, StubForm, StubSection } from './support/client.ts'
 
@@ -29,14 +31,16 @@ afterEach(async () => {
 })
 
 /**
- * 按渲染机的形状把 `hooks.<key>` 绑成 `use<Key>`：夹具不求响应式，选择器直接投影当前快照。
+ * 按渲染机的形状把 `hooks.<key>` 绑成 `use<Key>`：选择器从 `ObservableSnapshot` 投影当前值，并订阅它的
+ * `subscribe`，所以 Host 写回后控件会重新渲染——提示词框「清掉覆盖后回落」这类判据必须观察重渲染后的控件。
  * @param hooks - 注册面注入的读数。
  * @returns 以 `use<Key>` 为键的 props 片段。
  */
 function boundHooks(hooks: Record<string, ObservableSnapshot<unknown>>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(hooks).map(([key, source]) => [
     `use${key.charAt(0).toUpperCase()}${key.slice(1)}`,
-    <Selected,>(selector: (value: unknown) => Selected): Selected => selector(source.getSnapshot()),
+    <Selected,>(selector: (value: unknown) => Selected): Selected =>
+      useSyncExternalStore(source.subscribe, () => selector(source.getSnapshot())),
   ]))
 }
 
@@ -274,6 +278,39 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     const { fixture, container } = await renderPage()
     await fireEvent.click(container.querySelector('[role="switch"]')!)
     expect(fixture.form.writes).toEqual([{ field: 'summaryDisableReasoning', value: false }])
+  })
+
+  /** 三份提示词的行标识与内置默认正文：显示与回落两条判据都按它逐条核对。 */
+  const promptRows = [
+    { field: 'summaryPrompt', id: 'plugin-config-result-clipper-summary-prompt', rule: DEFAULT_SUMMARY_RULE },
+    { field: 'admissionPrompt', id: 'plugin-config-result-clipper-admission-prompt', rule: DEFAULT_ADMISSION_RULE },
+    { field: 'privacyPrompt', id: 'plugin-config-result-clipper-privacy-prompt', rule: DEFAULT_PRIVACY_RULE },
+  ] as const
+
+  it('三个提示词框显示内置默认正文；没改动就失焦不写覆盖', async () => {
+    const { fixture, container } = await renderPage()
+    for (const row of promptRows) {
+      const box = container.querySelector(`#${row.id}`) as HTMLTextAreaElement
+      expect(box.value).toBe(row.rule)
+      await fireEvent.blur(box)
+    }
+    // 框里预置的就是生效正文：没动过它就不该写出一条与内置默认逐字相同的覆盖。
+    expect(fixture.form.writes).toEqual([])
+  })
+
+  it('有覆盖时框里显示覆盖正文；清掉覆盖后回落到内置默认正文', async () => {
+    const overrides = { summaryPrompt: '摘要口径', admissionPrompt: '准入口径', privacyPrompt: '隐私口径' }
+    const { fixture, container } = await renderPage(overrides)
+    for (const row of promptRows) {
+      expect((container.querySelector(`#${row.id}`) as HTMLTextAreaElement).value).toBe(overrides[row.field])
+    }
+    for (const row of promptRows) {
+      await fireEvent.click(promptReset(container, row.id, fixture.t('resetPrompt')))
+      // 清空是异步写：等它结算并让一次 setState 触发的重渲染把内置正文重新播种进控件。
+      await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
+      expect(fixture.form.resets).toContain(row.field)
+      expect((container.querySelector(`#${row.id}`) as HTMLTextAreaElement).value).toBe(row.rule)
+    }
   })
 
   it('编辑摘要提示词失焦写 summaryPrompt；「恢复默认」清掉该字段的覆盖', async () => {

@@ -20,6 +20,8 @@ import { useEffect, useState } from 'react'
 import { Checkbox, SegmentedControl, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+// 无依赖的共享模块：host 半拼装请求用的是同一份文字，所以框里显示的默认与真正发出的正文不会漂移。
+import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../rules.ts'
 
 /** 卡片的可写字段，与 host 半 `Config` 的字段同名（也是 settings section 里的键）。 */
 export type ResultClipperCardField =
@@ -328,8 +330,9 @@ function CheckRow(props: {
 }
 
 /**
- * 提示词规则正文：失焦即写；「恢复默认」清掉覆盖，控件随 Host 的值重新播种。
- * @param props - 控件 id、行文案、提示、当前值、写入与清空动作。
+ * 提示词规则正文：框里显示**当前生效的正文**（有覆盖用覆盖，否则用内置默认）；失焦即写，「恢复默认」清掉
+ * 覆盖、控件回落到内置默认。
+ * @param props - 控件 id、行文案、提示、覆盖值、内置默认正文、写入与清空动作。
  * @returns 一行文本域加一个恢复默认按钮。
  */
 function PromptRow(props: {
@@ -338,14 +341,18 @@ function PromptRow(props: {
   readonly hint: string
   readonly failedHint: string
   readonly resetLabel: string
+  /** 用户写下的覆盖；空串表示没有覆盖。 */
   readonly value: string
+  /** 内置规则正文：没有覆盖时框里显示它，也是请求实际用的正文。 */
+  readonly fallback: string
   readonly write: (value: string) => Promise<boolean>
   readonly reset: () => Promise<boolean>
 }) {
-  const [draft, setDraft] = useState(props.value)
+  const effective = props.value === '' ? props.fallback : props.value
+  const [draft, setDraft] = useState(effective)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
-  useEffect(() => { setDraft(props.value) }, [props.value])
+  useEffect(() => { setDraft(effective) }, [effective])
 
   const settle = (action: Promise<boolean>): void => {
     setFailed(false)
@@ -357,7 +364,8 @@ function PromptRow(props: {
   }
 
   const commit = (): void => {
-    if (draft === props.value) return
+    // 框里预置的就是生效正文：没动过它就不该写出一条与内置默认逐字相同的覆盖。
+    if (draft === effective) return
     settle(props.write(draft))
   }
 
@@ -447,13 +455,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       onChange={write('privacyDisableReasoning') as (next: boolean) => Promise<boolean>} />
     <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
       hint={props.t('summaryPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
-      value={summaryPrompt} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
+      value={summaryPrompt} fallback={DEFAULT_SUMMARY_RULE} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
     <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
       hint={props.t('admissionPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
-      value={admissionPrompt} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
+      value={admissionPrompt} fallback={DEFAULT_ADMISSION_RULE} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
     <PromptRow id="plugin-config-result-clipper-privacy-prompt" label={props.t('privacyPrompt')}
       hint={props.t('privacyPromptHint')} failedHint={props.t('failedHint')} resetLabel={props.t('resetPrompt')}
-      value={privacyPrompt} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
+      value={privacyPrompt} fallback={DEFAULT_PRIVACY_RULE} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
     <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
       hint={props.t('debugPathHint')} failedHint={props.t('failedHint')}
       value={debugPath} write={write('debugPath')} />

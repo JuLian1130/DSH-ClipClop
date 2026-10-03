@@ -5,9 +5,9 @@
  * {@link composeRequestPrefix}（准入请求由 `admission.ts` 在它之后接自己的规则正文）与一次起落的模型请求
  * {@link requestModelText}。
  *
- * **外壳与输出格式不可改**：页面只编辑规则正文（本文件的 {@link DEFAULT_SUMMARY_RULE} 是它的默认值），
- * 工具正文始终作为不可信数据分隔输入，输出的 JSON schema 由这里写死。摘要模型可以要求保留全文
- * （`action: 'keep'`），程序不复用它的任何正文——`keep` 只是信号。
+ * **外壳与输出格式不可改**：页面只编辑规则正文（{@link DEFAULT_SUMMARY_RULE} 是它的默认值，与浏览器半共用
+ * `rules.ts` 里的那一份），工具正文始终作为不可信数据分隔输入，输出的 JSON schema 由这里写死。摘要模型可以
+ * 要求保留全文（`action: 'keep'`），程序不复用它的任何正文——`keep` 只是信号。
  *
  * 失败一律以 `undefined` 交回调用点（模型不可用、超时、空结果、非法结果），由调用点按「原文透传」处理。
  * 这一层不抛：`tools/post-execute` 抛错会把工具调用变成错误结果。
@@ -24,6 +24,9 @@ import {
   isHarnessError,
 } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, LlmRuntime, TokenUsage } from '@deepseek-ai/dsh-llm'
+import { DEFAULT_SUMMARY_RULE } from './rules.ts'
+
+export { DEFAULT_SUMMARY_RULE }
 
 /** 摘要输出上限（固定常量，不可配）：输出 512 token。 */
 export const SUMMARY_MAX_TOKENS = 512
@@ -34,12 +37,6 @@ export const SUMMARY_TIMEOUT_MS = 20_000
 /** 摘要候选的正文在提示词里的分隔标记；模型只该把它之间的内容当作数据。 */
 const BODY_OPEN = '<<<TOOL_RESULT>>>'
 const BODY_CLOSE = '<<<END_TOOL_RESULT>>>'
-
-/** 内置的摘要规则正文，也是页面「恢复默认」回落到的值（用户故事 46）。 */
-export const DEFAULT_SUMMARY_RULE = [
-  '你会拿到一条工具结果。判断它对当前任务是否需要逐字完整：用户明确要求逐行、逐条或完整查看这类内容时，',
-  '返回 keep；否则把它改写成一段更短的说明，只保留对继续工作有用的部分。',
-].join('\n')
 
 /** 固定安全外壳：只陈述任务、数据边界与下一步，不含任何可编辑规则。 */
 const FIXED_SHELL = [
