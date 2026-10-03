@@ -299,7 +299,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     }
   })
 
-  it('一行放得下：provider、model 与推理档位同一行，摘要下限与上限同一行；下拉与输入框同宽', async () => {
+  it('一行放得下：provider、model 与推理档位同一行，摘要下限与上限同一行；控件照搬「设置 → 模型」那一页', async () => {
     const { container } = await renderPage({ admissionJudge: true })
     /** 某个控件所在的那一格（每格自己是一个 section）。 */
     const cell = (id: string): Element => container.querySelector(`#${id}`)!.closest('section')!
@@ -317,16 +317,37 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(pair).toBe(cell('plugin-config-result-clipper-max-summarize').parentElement)
     expect(pair.style.gridTemplateColumns).toBe('1fr 1fr')
 
-    // 下拉与文本输入同宽：都铺满自己那一格（上一版收窄到内容宽，用户反馈「太窄了」）。
+    // 控件照搬「设置 → 模型 → 提供商」那一页：同为整格宽，32px 高、0.5px 描边、同一档圆角与底色。
     for (const id of [
       'plugin-config-result-clipper-route-provider',
       'plugin-config-result-clipper-summary-effort',
       'plugin-config-result-clipper-privacy-effort',
     ]) {
-      expect((container.querySelector(`#${id}`) as HTMLElement).style.width).toBe('100%')
+      const control = container.querySelector(`#${id}`) as HTMLElement
+      expect(control.style.width).toBe('100%')
+      expect(control.style.height).toBe('32px')
+      expect(control.style.border).toBe('0.5px solid var(--dsw-alias-border-l4)')
+      expect(control.style.borderRadius).toBe('var(--dsw-radius-md)')
+      expect(control.style.background).toBe('var(--dsw-alias-bg-layer-1)')
     }
-    // 三个单行输入框同宽，理由同上：宽度来自同一份排版常量，不会各写各的。
-    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLElement).style.width).toBe('100%')
+    // 单行输入框与文本域是同一套外观（同一份排版常量展开出来的，不会各写各的）。
+    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLElement).style.height).toBe('32px')
+    const textarea = container.querySelector('#plugin-config-result-clipper-summary-prompt') as HTMLElement
+    expect(textarea.style.minHeight).toBe('80px')
+    expect(textarea.style.height).toBe('auto')
+    expect(textarea.style.padding).toBe('6px 10px')
+    expect(textarea.style.resize).toBe('vertical')
+
+    // 下拉另外三样：系统箭头换成内缩的雪佛龙、宽度封顶 240px、指针形状（值取自那一页的 `.selectInput`）。
+    const select = container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLElement
+    expect(select.style.appearance).toBe('none')
+    expect(select.style.paddingRight).toBe('32px')
+    expect(select.style.maxWidth).toBe('240px')
+    expect(select.style.cursor).toBe('pointer')
+    expect(select.style.backgroundImage).toContain('data:image/svg+xml')
+    expect(select.style.backgroundImage).toContain('%2381858C')
+    expect(select.style.backgroundRepeat).toBe('no-repeat')
+    expect(select.style.backgroundSize).toBe('12px 12px')
   })
 
   it('准入组默认收起（收起＝不启用）：勾上启用位才出现整组设置，保存时把启用与其他改动一次写回', async () => {
@@ -452,25 +473,18 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ routeProvider: '', routeModel: '' })
   })
 
-  it('三个模型组的标注都先说好处再说怎么设：阈值单位写明 token', async () => {
+  it('三个模型组的标注只用用户指定的原文（只讲带来什么），阈值单位写明 token', async () => {
     const { fixture, container } = await renderPage()
-    // 用户只关心「对我有什么好处、为了这个好处怎么设」：三组都按这两段写。
-    for (const hint of ['summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
-      expect(fixture.t(hint)).toContain('好处')
-      expect(fixture.t(hint)).toContain('怎么设')
-    }
-    // 摘要：省下缓存反复失效与 token 反复计费，以及清空 route 的后果（不摘要、原样透传）。
-    expect(fixture.t('summaryGroupHint')).toContain('缓存')
-    expect(fixture.t('summaryGroupHint')).toContain('token')
-    expect(fixture.t('summaryGroupHint')).toContain('就等于不摘要')
-    expect(fixture.t('summaryGroupHint')).toContain('原样透传')
-    // 准入：写明可以不设置（留空跟随摘要模型），以及省 token。
-    expect(fixture.t('admissionGroupHint')).toContain('可以不设置')
-    expect(fixture.t('admissionGroupHint')).toContain('跟随摘要模型')
-    expect(fixture.t('admissionGroupHint')).toContain('token')
-    // 隐私：不说「要求确认的角色」这类内部口径，说清设成本地模型就不会外流。
-    expect(fixture.t('privacyGroupHint')).toContain('本地模型')
-    expect(fixture.t('privacyGroupHint')).toContain('不会发往外部网络')
+    // 这一轮用户把三条说明逐字定死，并明确「只留」这些字：多的一个「好处：/怎么设：」层级都会被这里拦下。
+    expect(fixture.t('summaryGroupHint')).toBe(
+      '主模型不用反复读长正文——节省缓存计费，上下文也更干净，可以提升模型效果。清空等于请求不发，结果原样透传。',
+    )
+    expect(fixture.t('admissionGroupHint')).toBe(
+      '不值得摘要的结果不会再产生摘要请求，省下这部分 token 费用，强烈建议跟随摘要模型。不启用会直接走摘要模型。',
+    )
+    expect(fixture.t('privacyGroupHint')).toBe(
+      '每条工具结果先判一次，判定敏感就在进主模型之前拦下，敏感内容不会发往外部网络，应该设成本地模型。',
+    )
     // 卡片上的说明都不出现「角色」这类内部说法（用户在反馈里点名的就是这个口吻）。
     for (const hint of ['modelSourceHint', 'summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
       expect(fixture.t(hint)).not.toContain('角色')
@@ -481,18 +495,18 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 隐私确认位是对具体 route 的声明：文案要说清「换了 route 就作废」。
     expect(fixture.t('privacyConfirmedLocalHint')).toContain('作废')
 
-    // 英文侧同样按这些要求钉住（它不经 `fixture.t` 渲染，所以要单独断言，避免单独漂移）。
+    // 英文侧逐条对上中文（它不经 `fixture.t` 渲染，所以要单独断言，避免单独漂移）。
     expect(en.routeUnset).toContain('clear')
     expect(en.followSummaryRoute).toContain('clear')
-    for (const hint of ['summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
-      expect(en[hint]).toContain('Benefit:')
-      expect(en[hint]).toContain('How to set it up:')
-    }
-    expect(en.summaryGroupHint).toContain('prompt cache')
+    expect(en.summaryGroupHint).toContain('cache billing')
+    expect(en.summaryGroupHint).toContain('improve model output')
     expect(en.summaryGroupHint).toContain('passed through unchanged')
-    expect(en.admissionGroupHint).toContain('Optional')
-    expect(en.admissionGroupHint).toContain('follow the summary model')
+    expect(en.admissionGroupHint).toContain('strongly recommended')
+    expect(en.admissionGroupHint).toContain('follow')
+    expect(en.admissionGroupHint).toContain('straight to summarization')
     expect(en.privacyGroupHint).toContain('local model')
+    expect(en.privacyGroupHint).toContain('never leaves for an external network')
+    expect(en.privacyGroupHint).toContain('blocked before it reaches the main model')
     // 准入的启用位是卡片上的复选框，它的文案也在这一份字典里。
     expect(en.admissionJudge).toContain('Enable')
     expect(en.admissionJudgeHint).toContain('Unchecked')

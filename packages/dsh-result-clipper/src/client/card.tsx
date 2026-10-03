@@ -161,18 +161,51 @@ const WARNING_STYLE = {
   padding: '8px 0',
 } as const
 
-/** 输入框与文本域的排版；没有 CSS 管线，所以只用内联样式与主题变量。 */
+/**
+ * 输入类控件的排版，照搬「设置 → 模型 → 提供商」那一页的 `.input`：32px 高、0.5px 描边、同一档圆角与底色。
+ * 这是本卡片唯一一处抄外部样式的决定，理由是用户直接点名那一页好看——控件长得像同一套，卡片才不像半成品。
+ * 没有 CSS 管线，所以这些值只能内联；伪类（`:focus` / `::placeholder`）内联不了，焦点态留给浏览器的默认焦点圈。
+ */
 const INPUT_STYLE = {
   boxSizing: 'border-box',
   width: '100%',
-  padding: '6px 8px',
-  border: '1px solid var(--dsw-alias-border-l2)',
-  borderRadius: 6,
-  background: 'var(--dsw-alias-bg-base)',
+  height: 32,
+  padding: '0 10px',
+  border: '0.5px solid var(--dsw-alias-border-l4)',
+  borderRadius: 'var(--dsw-radius-md)',
+  background: 'var(--dsw-alias-bg-layer-1)',
   color: 'var(--dsw-alias-label-primary)',
   font: 'inherit',
-  fontSize: 13,
-  lineHeight: '20px',
+  fontSize: 14,
+  lineHeight: '22px',
+} as const
+
+/**
+ * 下拉箭头：与「设置 → 模型」那一页同一枚 12px 雪佛龙。用背景图把它从右边缘内缩 12px，替掉系统箭头
+ * （系统箭头贴着自己的右边缘，整格宽时看着就在格子尽头）；数据 URI 里取不到 CSS 变量，颜色写死 #81858C。
+ */
+const CHEVRON = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")"
+
+/** 下拉框：输入框加 `appearance: none` 与内缩的雪佛龙，并像那一页一样把宽度封在 240px（枚举值都短）。 */
+const SELECT_STYLE = {
+  ...INPUT_STYLE,
+  appearance: 'none',
+  paddingRight: 32,
+  maxWidth: 240,
+  cursor: 'pointer',
+  backgroundImage: CHEVRON,
+  backgroundRepeat: 'no-repeat',
+  backgroundPosition: 'right 12px center',
+  backgroundSize: '12px 12px',
+} as const
+
+/** 文本域：同一套描边与底色，但要能竖向写多行、能拖高。 */
+const TEXTAREA_STYLE = {
+  ...INPUT_STYLE,
+  height: 'auto',
+  padding: '6px 10px',
+  minHeight: 80,
+  resize: 'vertical',
 } as const
 
 /** 下拉框的七个档位与它们的文案键；候选集与 host 半 schema 的取值同一份（`reasoning.ts`）。 */
@@ -417,7 +450,7 @@ function RouteRow(props: RouteRowProps) {
       id={props.id}
       value={props.value}
       aria-label={props.label}
-      style={INPUT_STYLE}
+      style={SELECT_STYLE}
       onChange={(event) => { props.onChange(event.target.value) }}
     >
       <option value="">{props.emptyLabel}</option>
@@ -489,7 +522,7 @@ function EffortRow(props: {
       id={props.id}
       value={props.value}
       aria-label={props.label}
-      style={INPUT_STYLE}
+      style={SELECT_STYLE}
       onChange={(event) => { props.onChange(event.target.value as ReasoningEffort) }}
     >
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -559,7 +592,7 @@ function PromptRow(props: {
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
     <textarea
       id={props.id}
-      style={{ ...INPUT_STYLE, minHeight: 80, resize: 'vertical' }}
+      style={TEXTAREA_STYLE}
       value={props.value}
       onChange={(event) => { props.onChange(event.target.value) }}
     />
