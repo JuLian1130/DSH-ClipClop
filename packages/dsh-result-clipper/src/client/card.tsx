@@ -25,7 +25,7 @@
 
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Checkbox, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Checkbox, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { REASONING_EFFORT_IDS } from '../reasoning.ts'
@@ -112,6 +112,10 @@ export interface ResultClipperCardInjected {
   }
   /**
    * 重读一次模型目录：卡片挂载时调用，把刚在「设置 → 模型」里配好的 route 带进候选。
+   *
+   * **这不是转发**：`hooks` 到了组件侧只剩 `use<Name>` 选择器（`ui-slots` 的 `PropsHooks` 取的是 observable
+   * 的**值**，见 `packages/client/ui-slots/src/index.ts:567-570`），所以卡片手里只有候选数组、拿不到
+   * `ModelCatalogSnapshot` 那个对象，`refresh` 这条路只能单独注入。
    */
   refreshModelCatalog(): void
   /**
@@ -343,6 +347,10 @@ function useGroupDraft(
 
 /**
  * 一个分组：标题、该角色的控件、底部的「保存 / 恢复默认」与失败提示。
+ *
+ * 按钮用原语的 `Button` 而不是内联样式的原生 `<button>`：本插件没有 CSS 管线，`:hover` / `:active` /
+ * `:disabled` 这类状态内联表达不了，而原语那套自带它们，圆角还与输入框同一档（`--dsw-radius-md`）。产物里
+ * 它来自壳的模块表——页签的 `Switch` 走的就是同一条路，不是本插件新增的依赖。
  * @param props - 分组标题与内容、草稿状态与按钮文案。
  * @returns 一组设置。
  */
@@ -365,8 +373,8 @@ function Group(props: {
     <div style={HINT_STYLE}>{props.description}</div>
     {props.children}
     <div style={ACTIONS_STYLE}>
-      <button type="button" disabled={props.busy || !props.dirty} onClick={props.onSave}>{props.saveLabel}</button>
-      <button type="button" disabled={props.busy} onClick={props.onReset}>{props.resetLabel}</button>
+      <Button variant="outline" disabled={props.busy || !props.dirty} onClick={props.onSave}>{props.saveLabel}</Button>
+      <Button variant="outline" disabled={props.busy} onClick={props.onReset}>{props.resetLabel}</Button>
     </div>
     {props.failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
@@ -439,7 +447,7 @@ function RouteRow(props: RouteRowProps) {
         onChange={(event) => { props.onChange(event.target.value) }}
       />
       {props.options.length > 0 && <div>
-        <button type="button" onClick={() => { setTyping(false) }}>{props.pickLabel}</button>
+        <Button variant="ghost" size="sm" onClick={() => { setTyping(false) }}>{props.pickLabel}</Button>
       </div>}
       <div style={HINT_STYLE}>{props.hint}</div>
     </section>
@@ -459,7 +467,7 @@ function RouteRow(props: RouteRowProps) {
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
     <div>
-      <button type="button" onClick={() => { setTyping(true) }}>{props.customLabel}</button>
+      <Button variant="ghost" size="sm" onClick={() => { setTyping(true) }}>{props.customLabel}</Button>
     </div>
     <div style={HINT_STYLE}>{props.hint}</div>
   </section>

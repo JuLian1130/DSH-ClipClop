@@ -473,6 +473,26 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ routeProvider: '', routeModel: '' })
   })
 
+  it('四个按钮用原语的 Button 原子：两组动作是 outline 家族，两处小入口是 ghost + sm', async () => {
+    const { container, fixture } = await renderPage()
+    // 每组底部那一对动作：outline 家族（与输入框同一档圆角），且仍是原生 button 语义（type="button"、禁得住 disabled）。
+    for (const title of ['摘要模型', '隐私闸门模型']) {
+      const save = groupButton(container, title, fixture.t('saveGroup'))
+      const reset = groupButton(container, title, fixture.t('resetGroup'))
+      expect(save.tagName).toBe('BUTTON')
+      expect(save.getAttribute('type')).toBe('button')
+      expect(save.className).toMatch(/_button_\w+/)
+      expect(save.className).toMatch(/_outline_\w+/)
+      expect(save.className).toMatch(/_md_\w+/)
+      expect(reset.className).toMatch(/_outline_\w+/)
+    }
+    // 两处小入口切到文本输入／切回下拉，用的是 28px 的紧凑档。
+    const custom = [...container.querySelectorAll('button')]
+      .find(candidate => candidate.textContent === fixture.t('customValue'))!
+    expect(custom.className).toMatch(/_ghost_\w+/)
+    expect(custom.className).toMatch(/_sm_\w+/)
+  })
+
   it('三个模型组的标注只用用户指定的原文（只讲带来什么），阈值单位写明 token', async () => {
     const { fixture, container } = await renderPage()
     // 这一轮用户把三条说明逐字定死，并明确「只留」这些字：多的一个「好处：/怎么设：」层级都会被这里拦下。
