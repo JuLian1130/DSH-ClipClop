@@ -319,14 +319,69 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(pair).toBe(cell('plugin-config-result-clipper-max-summarize').parentElement)
     expect(pair.style.gridTemplateColumns).toBe('1fr 1fr')
 
-    // 下拉不拉伸到整行（拉伸会把箭头推到最右边）：两个 route 下拉与档位下拉都贴自己的内容。
+    // 下拉不拉伸到整行（拉伸会把箭头推到最右边）：宽度跟着内容走，箭头贴在文字后面。
     for (const id of [
       'plugin-config-result-clipper-route-provider',
       'plugin-config-result-clipper-summary-effort',
       'plugin-config-result-clipper-privacy-effort',
     ]) {
-      expect((container.querySelector(`#${id}`) as HTMLElement).style.alignSelf).toBe('flex-start')
+      const control = container.querySelector(`#${id}`) as HTMLElement
+      expect(control.style.alignSelf).toBe('flex-start')
+      expect(control.style.width).toBe('auto')
     }
+  })
+
+  it('三个角色的下拉都能把取值清空：第一项就是清空，选中并保存后字段变空串', async () => {
+    const { fixture, container } = await renderPage({ routeProvider: 'local', routeModel: 'qwen3' })
+    /** 某个下拉第一项（置空项）的文案与取值。 */
+    const blankOf = (id: string): { text: string; value: string } => {
+      const option = container.querySelector(`#${id}`)!.querySelector('option')! as HTMLOptionElement
+      return { text: option.textContent ?? '', value: option.value }
+    }
+    // 摘要组清空后是「没配」；准入与隐私组清空后是「跟随摘要模型」。
+    expect(blankOf('plugin-config-result-clipper-route-provider')).toEqual({ text: fixture.t('routeUnset'), value: '' })
+    expect(blankOf('plugin-config-result-clipper-route-model')).toEqual({ text: fixture.t('routeUnset'), value: '' })
+    expect(blankOf('plugin-config-result-clipper-admission-provider')).toEqual({ text: fixture.t('followSummaryRoute'), value: '' })
+    expect(blankOf('plugin-config-result-clipper-privacy-provider')).toEqual({ text: fixture.t('followSummaryRoute'), value: '' })
+    // 文案里点明这是清空动作，不是又一种选项。
+    expect(fixture.t('routeUnset')).toContain('清空')
+    expect(fixture.t('followSummaryRoute')).toContain('清空')
+
+    // 选中置空项只改草稿；点保存后写回空串（模型没动，所以只有 provider 一条 op）。
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: '' } })
+    expect((container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLSelectElement).value).toBe('')
+    expect(fixture.form.mutations).toEqual([])
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['routeProvider'], value: '' }]])
+    expect(fixture.form.value.routeProvider).toBe('')
+  })
+
+  it('简介与单位是面向用户的说法：三个角色各说清用途，阈值单位写明 token', async () => {
+    const { fixture, container } = await renderPage()
+    // 摘要：说明省下缓存反复失效与 token 反复计费的成本。
+    expect(fixture.t('summaryGroupHint')).toContain('缓存')
+    expect(fixture.t('summaryGroupHint')).toContain('token')
+    // 准入：写明可以不设置（留空跟随摘要模型），以及省 token。
+    expect(fixture.t('admissionGroupHint')).toContain('可以不设置')
+    expect(fixture.t('admissionGroupHint')).toContain('跟随摘要模型')
+    expect(fixture.t('admissionGroupHint')).toContain('token')
+    // 隐私：不说「要求确认的角色」这类内部口径，说清设成本地模型就不会外流。
+    expect(fixture.t('privacyGroupHint')).toContain('本地模型')
+    expect(fixture.t('privacyGroupHint')).toContain('不会发往外部网络')
+    // 三份简介都不出现「角色」这类内部说法（用户在反馈里点名的就是这个口吻）。
+    for (const hint of ['summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
+      expect(fixture.t(hint)).not.toContain('角色')
+    }
+    // 两个阈值都注明单位是 token。
+    expect(fixture.t('minInlineTokens')).toContain('token')
+    expect(fixture.t('maxSummarizeTokens')).toContain('token')
+
+    // 页面上渲染的就是这些文案（简介与阈值标题都进了 DOM）。
+    expect(groupOf(container, '摘要模型').textContent).toContain(fixture.t('summaryGroupHint'))
+    expect(groupOf(container, '隐私闸门模型').textContent).toContain(fixture.t('privacyGroupHint'))
+    expect(container.textContent).toContain(fixture.t('minInlineTokens'))
+    expect(container.textContent).toContain(fixture.t('maxSummarizeTokens'))
   })
 
   it('provider 与 model 是下拉框：候选来自 DSH 已配置的 route，model 候选跟着该角色的 provider 走', async () => {

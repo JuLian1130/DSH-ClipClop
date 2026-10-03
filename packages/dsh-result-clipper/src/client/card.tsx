@@ -172,6 +172,14 @@ const INPUT_STYLE = {
   lineHeight: '20px',
 } as const
 
+/** 下拉框的排版：宽度跟着自己的内容走，原生箭头才贴在文字后面，而不是被拉到格子最右。 */
+const SELECT_STYLE = {
+  ...INPUT_STYLE,
+  width: 'auto',
+  maxWidth: '100%',
+  alignSelf: 'flex-start',
+} as const
+
 /** 下拉框的七个档位与它们的文案键；候选集与 host 半 schema 的取值同一份（`reasoning.ts`）。 */
 const EFFORT_LABELS: Record<ReasoningEffort, ResultClipperLocaleKey> = {
   off: 'effortOff',
@@ -414,7 +422,7 @@ function RouteRow(props: RouteRowProps) {
       id={props.id}
       value={props.value}
       aria-label={props.label}
-      style={{ ...INPUT_STYLE, alignSelf: 'flex-start', minWidth: 160, maxWidth: '100%' }}
+      style={SELECT_STYLE}
       onChange={(event) => { props.onChange(event.target.value) }}
     >
       <option value="">{props.emptyLabel}</option>
@@ -486,7 +494,7 @@ function EffortRow(props: {
       id={props.id}
       value={props.value}
       aria-label={props.label}
-      style={{ ...INPUT_STYLE, alignSelf: 'flex-start', minWidth: 160, maxWidth: '100%' }}
+      style={SELECT_STYLE}
       onChange={(event) => { props.onChange(event.target.value as ReasoningEffort) }}
     >
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
