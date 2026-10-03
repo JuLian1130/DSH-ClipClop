@@ -25,7 +25,7 @@ import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { AppendedNotice, HostFixture } from './support/host.ts'
 import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
 import type { LiveFixture } from './support/profile.ts'
-import { FakeRoute, requestText } from './support/route.ts'
+import { FakeRoute, UNSUPPORTED_EFFORT_REPLY, requestText } from './support/route.ts'
 import type { FakeReply } from './support/route.ts'
 import { FakeSpill } from './support/spill.ts'
 
@@ -574,5 +574,21 @@ describe('票 07 第 12 条：隐私提示词可编辑，安全外壳与输出�
     expect(editedText).not.toContain(DEFAULT_PRIVACY_RULE)
     // 外壳与输出格式由程序写死：可编辑段之后的部分两种情况下逐字相同。
     expect(editedText.split('只看我定义的机密')[1]).toBe(builtinText.split(DEFAULT_PRIVACY_RULE)[1])
+  })
+})
+
+describe('票 09：隐私请求的「关闭推理」在无 off 档的 route 上重试一次', () => {
+  it('隐私判断先被拒收、去掉 reasoningEffort 重发后得到 safe 结论并替换正文', async () => {
+    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT_REPLY, { text: SAFE }])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(2)
+    expect(route.requests[0]?.reasoningEffort).toBe('off')
+    expect(route.requests[1]?.reasoningEffort).toBeUndefined()
+    // 重发的是同一次隐私判断：判断对象仍是模型即将看到的正文投影。
+    expect(requestText(route.requests[1]!)).toContain(LONG_BODY)
+    expect(textOf(result.content)).toContain(SAFE_SUMMARY)
+    expect(records(path)).toEqual([expect.objectContaining({ action: 'summarized' })])
   })
 })

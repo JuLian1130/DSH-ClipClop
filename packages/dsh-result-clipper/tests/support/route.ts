@@ -10,11 +10,19 @@
 
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 
-/** 一段脚本化答复：文本（可带用量）、抛错，或挂到请求的 signal 中止。 */
+/** 一段脚本化答复：文本（可带用量）、抛错、以带稳定错误码的终止错误块收场，或挂到请求的 signal 中止。 */
 export type FakeReply =
   | { readonly text: string; readonly usage?: TokenUsage }
   | { readonly error: string }
+  /** 走 DSH 的终止错误块（真实现的适配器选择与 setup 失败就是这条路），`code` 是稳定机器码。 */
+  | { readonly failure: { readonly code: string; readonly message?: string } }
   | { readonly hang: true }
+
+/**
+ * 档位表不含 `off` 的 route 拒收「关闭推理」时的那种收场：DSH 的终止错误块带稳定机器码（票 09 的重试只认它）。
+ * 码写字面量而不是从实现里引常量——测试与实现共用同一个字面量就等于断言自己。
+ */
+export const UNSUPPORTED_EFFORT_REPLY: FakeReply = { failure: { code: 'UNSUPPORTED_REASONING_EFFORT' } }
 
 /** 一次假 route 的答复。 */
 export class FakeRoute {
@@ -51,6 +59,16 @@ export class FakeRoute {
       return
     }
     if ('error' in reply) throw new Error(reply.error)
+    if ('failure' in reply) {
+      yield {
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: { code: reply.failure.code, message: reply.failure.message ?? reply.failure.code },
+        },
+      }
+      return
+    }
     yield { type: 'block-start', index: 0, blockType: 'text' }
     yield { type: 'text-delta', index: 0, text: reply.text }
     yield { type: 'block-end', index: 0, block: { type: 'text', text: reply.text } }

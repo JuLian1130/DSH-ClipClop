@@ -147,12 +147,41 @@ export interface SummaryOutcome {
 }
 
 /**
+ * DSH 的稳定错误码：请求的推理档位不在该 route 声明的档位表里。它由 `llm` 服务在 provider I/O **之前**抛出
+ * （DSH 的 `resolveCallWithInfo`），并被适配器边界收成终止错误块——所以按它重发不产生第二次真实请求。
+ */
+const UNSUPPORTED_REASONING_EFFORT_CODE = 'UNSUPPORTED_REASONING_EFFORT'
+
+/**
  * 发一次摘要路径的模型请求并取回文本正文。准入、摘要与隐私三类请求共用它。
+ *
+ * **档位 id 由 route 声明，没有全局词表**（`ReasoningEffortId` 只是品牌字符串），所以「关闭推理」显式传的
+ * `off` 会被不提供 `off` 的 route 拒收（例如 dsh-cline-pass 的档位表是 `none|minimal|low|…`，注释自陈 `off`
+ * 是故意不放的）。这类拒绝发生在 provider I/O 之前，因此这里去掉该字段重发一次：不重试就永远摘要不了，而重试
+ * 不产生第二次真实请求。重试条件只认这一个码，且只在请求确实带了这个字段时成立——其余失败码与未带字段的请求
+ * 一律不重发。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param options - 请求参数。
  * @returns 组装出的文本正文与用量；模型不可用、请求中止、错误结束或抛出时按 {@link ModelRequestFailure} 交回。
  */
 export async function requestModelText(llm: LlmRuntime, options: GenerateOptions): Promise<ModelTextResult> {
+  const first = await attemptModelText(llm, options)
+  if (first.code !== UNSUPPORTED_REASONING_EFFORT_CODE || options.reasoningEffort === undefined) return first.result
+  const withoutEffort: GenerateOptions = { ...options }
+  delete withoutEffort.reasoningEffort
+  return (await attemptModelText(llm, withoutEffort)).result
+}
+
+/**
+ * 一次模型请求：拿文本与用量，或按失败分类交回，并带出这次失败的稳定错误码（重试只认它）。
+ * @param llm - 模型运行时。
+ * @param options - 请求参数。
+ * @returns 这次请求的收场与失败码；成功时码为 `undefined`。
+ */
+async function attemptModelText(
+  llm: LlmRuntime,
+  options: GenerateOptions,
+): Promise<{ readonly result: ModelTextResult; readonly code: string | undefined }> {
   const assembler = new BlockAssembler()
   let thrown: unknown
   try {
@@ -161,14 +190,18 @@ export async function requestModelText(llm: LlmRuntime, options: GenerateOptions
     thrown = error
   }
   if (thrown !== undefined) {
-    return { ok: false, failure: classifyFailure(isHarnessError(thrown) ? thrown.code : undefined, errorChain(thrown)) }
+    const code = isHarnessError(thrown) ? thrown.code : undefined
+    return { result: { ok: false, failure: classifyFailure(code, errorChain(thrown)) }, code }
   }
   const finish = assembler.finish
-  if (finish.kind === 'aborted') return { ok: false, failure: 'failed' }
+  if (finish.kind === 'aborted') return { result: { ok: false, failure: 'failed' }, code: undefined }
   if (finish.kind === 'error') {
-    return { ok: false, failure: classifyFailure(finish.failure.code, finish.failure.message) }
+    return {
+      result: { ok: false, failure: classifyFailure(finish.failure.code, finish.failure.message) },
+      code: finish.failure.code,
+    }
   }
-  return { ok: true, text: textOf(assembler.blocks()), usage: usageOf(assembler.usage) }
+  return { result: { ok: true, text: textOf(assembler.blocks()), usage: usageOf(assembler.usage) }, code: undefined }
 }
 
 /**

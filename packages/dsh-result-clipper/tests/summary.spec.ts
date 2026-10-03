@@ -21,7 +21,7 @@ import { composeEntry } from '../src/entry.ts'
 import { DEFAULT_SUMMARY_RULE } from '../src/summary.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
-import { FakeRoute, requestText } from './support/route.ts'
+import { FakeRoute, UNSUPPORTED_EFFORT_REPLY, requestText } from './support/route.ts'
 import type { FakeReply } from './support/route.ts'
 
 /** 刚过下限的正文：估价 = ceil(5000/4)+4，落在 `[1024, 12500)` 内。 */
@@ -321,5 +321,54 @@ describe('票 03：透传路径的结果取值互不相同', () => {
 
     expect(reasons).toEqual(['not-candidate', 'kept', 'not-shorter', 'failed'])
     expect(new Set(reasons).size).toBe(4)
+  })
+})
+
+/** 档位表不含 `off` 的 route 拒收「关闭推理」时的那种收场：DSH 的终止错误块带稳定机器码。 */
+const UNSUPPORTED_EFFORT = UNSUPPORTED_EFFORT_REPLY
+
+describe('票 09：route 不支持 off 档时，「关闭推理」仍然按不请求推理档工作', () => {
+  it('先被拒收、去掉 reasoningEffort 重发一次后摘要完成替换', async () => {
+    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT, { text: REPLY }])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(2)
+    expect(route.requests[0]?.reasoningEffort).toBe('off')
+    expect(route.requests[1]?.reasoningEffort).toBeUndefined()
+    // 重发只去掉该字段：其余请求参数逐字相同。
+    expect({ ...route.requests[1], reasoningEffort: route.requests[0]?.reasoningEffort }).toEqual(route.requests[0])
+    expect(textOf(result.content)).toBe(replacedText(fixture))
+    expect(records(path)).toEqual([expect.objectContaining({ action: 'summarized' })])
+  })
+
+  it('route 支持 off 时不重试：只发一次，且那次请求带 off', async () => {
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(1)
+    expect(route.requests[0]?.reasoningEffort).toBe('off')
+  })
+
+  it('其它错误码不触发重试：只发一次并记 failed', async () => {
+    const { fixture, route, path } = await mounted({}, [{ failure: { code: 'SOME_OTHER_FAILURE' } }])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(1)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'failed' }))
+  })
+
+  it('「关闭推理」关闭时不重试：请求本就没带该字段，重发一次没有意义', async () => {
+    const { fixture, route, path } = await mounted({ summaryDisableReasoning: false }, [UNSUPPORTED_EFFORT])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(1)
+    expect(route.requests[0]?.reasoningEffort).toBeUndefined()
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'failed' }))
   })
 })

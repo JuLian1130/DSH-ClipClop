@@ -27,7 +27,7 @@ import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
 import type { LiveFixture } from './support/profile.ts'
-import { FakeRoute, requestText } from './support/route.ts'
+import { FakeRoute, UNSUPPORTED_EFFORT_REPLY, requestText } from './support/route.ts'
 import type { FakeReply } from './support/route.ts'
 import { FakeSpill } from './support/spill.ts'
 
@@ -424,5 +424,24 @@ describe('票 06 第 9 条：准入提示词可编辑，安全外壳与输出格
     expect(editedText).not.toContain(DEFAULT_ADMISSION_RULE)
     // 外壳与输出格式由程序写死：可编辑段之外的部分两种情况下逐字相同。
     expect(editedText.split('只看体积与工具名')[1]).toBe(builtinText.split(DEFAULT_ADMISSION_RULE)[1])
+  })
+})
+
+describe('票 09：准入请求的「关闭推理」在无 off 档的 route 上重试一次', () => {
+  it('准入先被拒收、去掉 reasoningEffort 重发后拿到判断结论，摘要照常替换', async () => {
+    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT_REPLY, YES, { text: SUMMARY_REPLY }])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(3)
+    expect(route.requests[0]?.reasoningEffort).toBe('off')
+    // 重发的是同一次准入请求：仍然不带工具正文。
+    expect(route.requests[1]?.reasoningEffort).toBeUndefined()
+    expect(requestText(route.requests[1]!)).not.toContain(LONG_BODY)
+    // 摘要请求不受影响，照常带正文。
+    expect(route.requests[2]?.reasoningEffort).toBe('off')
+    expect(requestText(route.requests[2]!)).toContain(LONG_BODY)
+    expect(textOf(result.content)).toContain(SHORT_SUMMARY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'summarized', admission: 'yes' }))
   })
 })
