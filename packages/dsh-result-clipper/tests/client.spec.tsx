@@ -551,7 +551,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.catalogCalls()).toBe(2)
   })
 
-  it('目录读不到时候选为空，provider 与 model 仍可手填并保存', async () => {
+  it('目录读不到时候选为空：provider 与 model 退回手填，且改 provider 不会清掉手填的 model', async () => {
     const fixture = await mountClient([])
     open.push(fixture)
     const entry = only(fixture, 'plugins.bundle.config')
@@ -563,13 +563,18 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
     const { container } = render(<CardComponent {...props} />)
 
-    expect([...container.querySelectorAll('datalist option')]).toHaveLength(0)
+    // 没有候选：两个控件都是手填输入框（不是空下拉）。
+    expect(container.querySelector('#plugin-config-result-clipper-route-provider')!.tagName).toBe('INPUT')
+    expect(container.querySelector('#plugin-config-result-clipper-route-model')!.tagName).toBe('INPUT')
     await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'hand-typed' } })
     await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-model')!, { target: { value: 'unlisted-model' } })
+    // 换 provider 时「model 跟着走」只在有目录时不猜：目录读不到就保留手填值，否则这个部署会变成不可配置。
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'hand-typed-2' } })
+    expect((container.querySelector('#plugin-config-result-clipper-route-model') as HTMLInputElement).value).toBe('unlisted-model')
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
     expect(fixture.form.mutations).toEqual([[
-      { op: 'set', path: ['routeProvider'], value: 'hand-typed' },
+      { op: 'set', path: ['routeProvider'], value: 'hand-typed-2' },
       { op: 'set', path: ['routeModel'], value: 'unlisted-model' },
     ]])
   })
