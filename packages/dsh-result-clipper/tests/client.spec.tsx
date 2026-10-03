@@ -2,9 +2,9 @@
 /**
  * 票 02 第 2 条：设置页里的两个开关（以及 debug 开关与路径）与保存即生效。
  *
- * 观察面分两层：注册层断言两处座位与它们的 id / 页签名（`settings.plugins.tab` 一个页签放开关，`plugins.item`
- * 一张详情卡片放参数）；控件层把注册面注入的业务面按渲染机的形状绑定到组件上，断言点了开关就写对应字段、
- * Host 拒绝时出现 `role="alert"`、路径输入失焦即写。
+ * 观察面分两层：注册层断言两处座位与它们的 id / 页签名 / 包名键（`settings.plugins.tab` 一个页签放开关，
+ * `plugins.bundle.config` 以包名为键放参数）；控件层把注册面注入的业务面按渲染机的形状绑定到组件上，断言点了
+ * 开关就写对应字段、Host 拒绝时出现 `role="alert"`、路径输入失焦即写。
  *
  * 注册 id、页签名与字段名都是判据的一部分：`{ id: 'result-clipper', locale }` 决定页签出现在哪里，
  * `set('summarize', true)` 决定写回的是哪个 settings 键。
@@ -80,11 +80,10 @@ describe('票 02 第 2 条：两处座位注册在设置页里', () => {
     expect(label()).toBe('Result clipper')
   })
 
-  it('插件详情卡片注册一个参数页，id 与插件本体一致', async () => {
+  it('包详情页配置区以包名为键注册一个参数页，与 profile 里的包名逐字相同', async () => {
     const fixture = await mounted()
-    const entry = only(fixture, 'plugins.item')
-    expect(entry.options.id).toBe('dsh-result-clipper')
-    expect((entry.options.label as () => string)()).toBe('工具结果裁剪')
+    const entry = only(fixture, 'plugins.bundle.config')
+    expect(entry.options.key).toBe('@dsh-clipclop/dsh-result-clipper')
   })
 })
 
@@ -197,9 +196,9 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
   })
 })
 
-describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径与摘要、准入、隐私参数在详情卡片上', () => {
+describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径与摘要、准入、隐私参数在包详情页配置区上', () => {
   /**
-   * 按详情卡片页的形状渲染一次，返回容器与注入面。
+   * 按配置区页的形状渲染一次，返回容器与注入面。
    * @param initial - 渲染前先写进 settings 替身的取值（常驻警告这类静态状态的用例要用它）。
    */
   async function renderPage(
@@ -207,7 +206,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
   ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
     const fixture = await mounted()
     fixture.form.value = { ...fixture.form.value, ...initial }
-    const entry = only(fixture, 'plugins.item')
+    const entry = only(fixture, 'plugins.bundle.config')
     const face = entry.options.inject!() as ResultClipperCardInjected
     const props = {
       view: 'page',
@@ -236,24 +235,6 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     if (button === undefined) throw new Error(`fixture: no reset button in row ${textareaId}`)
     return button
   }
-
-  it('summary 视图只给一行简介，不渲染输入控件', async () => {
-    const fixture = await mounted()
-    const entry = only(fixture, 'plugins.item')
-    const face = entry.options.inject!() as ResultClipperCardInjected
-    const props = {
-      view: 'summary',
-      t: fixture.t,
-      ...boundHooks(face.hooks),
-      setField: face.setField,
-      resetSummaryPrompt: face.resetSummaryPrompt,
-      resetAdmissionPrompt: face.resetAdmissionPrompt,
-    } as unknown as ResultClipperCardProps
-    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
-    const { container } = render(<CardComponent {...props} />)
-    expect(container.querySelector('input')).toBeNull()
-    expect(container.textContent).toBe(fixture.t('description'))
-  })
 
   it('page 视图显示「摘要会把工具正文发送给所选 route」与 schema 的默认值', async () => {
     const { container } = await renderPage()

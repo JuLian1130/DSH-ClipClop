@@ -1,11 +1,13 @@
 /**
  * dsh-result-clipper 的浏览器半：把两项能力开关、摘要准入判断开关、debug 开关与干跑开关注册成「设置 →
  * 内置插件」里的一个页签，并把摘要与准入两路参数（route、阈值、「关闭推理」、提示词）与 debug 日志路径注册
- * 成插件详情卡片上的参数。
+ * 成包详情页的配置区。
  *
- * 座位分两处的依据是设计文档「配置面与设置座位」：开关在插件页签，参数在插件自己的详情卡片；两处都经
+ * 座位分两处的依据是设计文档「配置面与设置座位」：开关在插件页签，参数在包自己的详情页配置区；两处都经
  * `ctx.configForms.get(ns)` 取得同一个 settings 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口
- * `name`，不是包名）。
+ * `name`，不是包名）。配置区走 `plugins.bundle.config` 而不是 `plugins.item`：本插件按 profile bundle 装载
+ * （`dsh.bundle.patch` + `dsh.profile.bundles`），插件管理器给它的卡片是包卡片，而包详情页只渲染按包名索引
+ * 的 `plugins.bundle.config`，注册到 `plugins.item` 会得到另一张「官方插件」卡片、包详情页仍是空的。
  *
  * 当前值与写回全走 `ctx.configForms`：`getSnapshot()` 读、`set(field, value)` 写；`set` 在 Host 拒绝时
  * **resolve `false`**（不是 reject、也不抛），所以失败态由各控件在 await 之后核验返回值置位。注册包在
@@ -24,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // 类型专用：`ctx.configForms` 的 Context 合并、`ConfigForm` 类型与 `settings.plugins.tab` 槽位声明。
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
-// 类型专用：`plugins.item` 槽位声明。
+// 类型专用：`plugins.bundle.config` 槽位声明。
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 // 类型专用：`ctx.slots` 的 Context 合并（槽位服务由渲染器提供）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -34,7 +36,7 @@ import { ResultClipperTab, type ResultClipperToggle } from './tab.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** 本页签与卡片的文案字典。 */
+    /** 本页签与配置区的文案字典。 */
     'resultClipper': ResultClipperLocaleKey
   }
 }
@@ -48,11 +50,11 @@ const TAB_ID = 'result-clipper'
 /** 本页签的排序位。 */
 const TAB_ORDER = 30
 
-/** 本卡片在 `plugins.item` 里的注册 id：插件管理器按它把这个 `plugins.item` 与插件本体对上。 */
-const CARD_ID = PREFERENCE_NAMESPACE
-
-/** 本卡片的排序位。 */
-const CARD_ORDER = 50
+/**
+ * 本插件在 profile 里的包名：`plugins.bundle.config` 是按包名索引的 keyed 槽位，包详情页用
+ * `entryKey: pkg.name` 取它，所以这里与 `package.json` 的 `name` 逐字相同。
+ */
+const BUNDLE_NAME = '@dsh-clipclop/dsh-result-clipper'
 
 /** 本插件在客户端 locale 里的字典命名空间。 */
 const LOCALE_NAMESPACE = 'resultClipper'
@@ -85,12 +87,12 @@ interface PreferenceSection {
 export const inject = ['slots', 'locale', 'configForms']
 
 /**
- * 注册页签与详情卡片。
+ * 注册页签与包详情页配置区。
  * @param ctx - 客户端插件 context；上面 inject 的服务都已就绪。
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, { zh, en }), 'dsh-result-clipper: dictionaries')
-  // 页签名与卡片名是 thunk：内置插件那一节与插件管理器每次投影都重读它，所以语言切换不必重新注册。
+  // 页签名是 thunk：内置插件那一节每次投影都重读它，所以语言切换不必重新注册。
   const t = ctx.locale.bind(LOCALE_NAMESPACE)
   const form = ctx.configForms.get<PreferenceSection>(PREFERENCE_NAMESPACE)
   ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
@@ -116,12 +118,10 @@ export function apply(ctx: Context): void {
     }, ResultClipperTab),
   )), 'dsh-result-clipper: built-in plugins tab')
   ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
-    'plugins.item',
+    'plugins.bundle.config',
     () => ctx.slots.register({
-      name: 'plugins.item',
-      id: CARD_ID,
-      order: CARD_ORDER,
-      label: () => t('title'),
+      name: 'plugins.bundle.config',
+      key: BUNDLE_NAME,
       locale: LOCALE_NAMESPACE,
       inject: () => ({
         hooks: {
@@ -148,7 +148,7 @@ export function apply(ctx: Context): void {
         resetPrivacyPrompt: () => form.unset('privacyPrompt'),
       }),
     }, ResultClipperCard),
-  )), 'dsh-result-clipper: plugin detail card')
+  )), 'dsh-result-clipper: bundle config page')
 }
 
 /**

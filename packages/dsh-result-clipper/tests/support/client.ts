@@ -117,6 +117,8 @@ export interface CapturedEntry {
   readonly options: {
     readonly name: string
     readonly id?: string
+    /** keyed 槽位的键（`plugins.bundle.config` 用包名）。 */
+    readonly key?: string
     readonly order?: number
     readonly label?: string | (() => string)
     readonly locale?: string

@@ -78,8 +78,8 @@
 
 ## 配置面与设置座位
 
-- 开关放在「设置 → 内置插件」；参数放在插件自己的详情卡片。
-- 座位：插件自身的 profile 条目即 settings 命名空间（`SettingsNamespace`，Host 侧由 `ctx.settings.describe()` 投影出表单）+ 浏览器半注册一个 `plugins.item` 卡片（`view: 'page'`，经 `ctx.configForms.get(ns)` 取得该命名空间），照 `@deepseek-ai/dsh-client-ui-settings-web-search` 的先例；逐字段恢复默认用卡片注入的 `resetField`（stage 一次清空，保存后回落到 schema/base 默认，底层是 `op: 'unset'`）。需要「保存即生效」的字段在 schema 上声明 `volatile`。提示词恢复默认通过清除用户覆盖实现。不需要 YAML 兼容路径。
+- 开关放在「设置 → 内置插件」；参数放在装它的那个包自己的详情页配置区。
+- 座位：插件自身的 profile 条目即 settings 命名空间（`SettingsNamespace`，Host 侧由 `ctx.settings.describe()` 投影出表单）+ 浏览器半注册一个 `plugins.bundle.config` 配置区（keyed 槽位，键是包名 `@dsh-clipclop/dsh-result-clipper`；`view: 'page'`，经 `ctx.configForms.get(ns)` 取得该命名空间）。本插件按 profile bundle 装载（`dsh.bundle.patch` + `dsh.profile.bundles`），插件管理器给它的卡片是包卡片，而包详情页只渲染按包名索引的 `plugins.bundle.config`；注册到 `plugins.item` 会落在分组里的另一张「官方插件」卡片上，包卡片详情页仍是空的（`@deepseek-ai/dsh-client-ui-settings-web-search` 那条先例是内置插件、不按 profile bundle 装载，所以它的 `plugins.item` 座位不适用于本插件）。逐字段恢复默认用卡片注入的 `resetField`（stage 一次清空，保存后回落到 schema/base 默认，底层是 `op: 'unset'`）。需要「保存即生效」的字段在 schema 上声明 `volatile`。提示词恢复默认通过清除用户覆盖实现。不需要 YAML 兼容路径。
 - **固定常量**（页面只读展示，不开放配置）：摘要模型请求的超时 20s；相关摘要 ≤3 条、每条 ≤600 字符；`additionalContexts` ≤2,000 估算器单位；摘要输出 ≤512 token；重复读取 memo 上限 200 条。固定前缀的字段与长度上限由程序控制，页面不开放任意扩大上下文。
 - **可配**：两项能力开关；摘要准入判断开关（默认关闭）；主 route 选择（摘要与隐私共用）与准入 route 选择（留空跟随主 route）；「主 route 已确认为本地」确认位（仅隐私模式要求）；`minInlineTokens`（1024）；`maxSummarizeTokens`（12500，只作用于 `bash`/`web_fetch`）；失败策略（`passthrough` | `block`）；准入、摘要、隐私三类请求各自的「关闭推理」开关（默认都关闭推理）；摘要/隐私/准入提示词的规则正文；debug 开关与路径；干跑（默认关闭）。
 - 页面加一句静态警告：摘要会把工具正文发送给所选 route。

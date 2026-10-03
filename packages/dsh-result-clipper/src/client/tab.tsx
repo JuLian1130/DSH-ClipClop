@@ -5,7 +5,7 @@
  * 重启。失败形态照框架先例：页内自带 `busy` / `failed` 两态、失败渲染 `role="alert"`；`ConfigForm.set` 在
  * Host 拒绝时 resolve `false`（不是 reject、也不抛），所以失败态必须在 await 之后核验返回值才能置位。
  *
- * 干跑还要读 debug 开关与日志路径（在详情卡片上）：两者缺一干跑不生效，这一行就地显示提示，避免用户以为
+ * 干跑还要读 debug 开关与日志路径（在包详情页配置区上）：两者缺一干跑不生效，这一行就地显示提示，避免用户以为
  * 自己已经在干跑。
  *
  * 本产物只把 React 与 `dsh-client-ui-primitives` 列为 external（`scripts/build-client.mjs`），没有 CSS 管线，

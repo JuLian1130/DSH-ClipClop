@@ -1,10 +1,8 @@
-/** 浏览器半自己持有的文案：内置插件页签与插件详情卡片的文案。 */
+/** 浏览器半自己持有的文案：内置插件页签与包详情页配置区的文案。 */
 
 /** 本命名空间的文案键。 */
 export type ResultClipperLocaleKey =
   | 'tab'
-  | 'title'
-  | 'description'
   | 'summarize'
   | 'summarizeHint'
   | 'admissionJudge'
@@ -56,8 +54,6 @@ export type ResultClipperLocaleKey =
 /** 中文文案。 */
 export const zh: Record<ResultClipperLocaleKey, string> = {
   tab: '工具结果裁剪',
-  title: '工具结果裁剪',
-  description: '摘要把适合继续工作的工具结果改写成较短的说明并保留原结果入口；隐私闸门在结果进入模型前做一次本地判断。两项能力都默认关闭。',
   summarize: '工具结果摘要',
   summarizeHint: '开启后工具结果才可能被改写；关闭时结果保持 DSH 原有行为。',
   admissionJudge: '摘要准入判断',
@@ -110,8 +106,6 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
 /** 英文文案。 */
 export const en: Record<ResultClipperLocaleKey, string> = {
   tab: 'Result clipper',
-  title: 'Result clipper',
-  description: 'Summarization rewrites tool results worth continuing with into a shorter note and keeps an entry back to the original; the privacy gate judges each result locally before it reaches the model. Both abilities are off by default.',
   summarize: 'Summarize tool results',
   summarizeHint: 'Only with this on can a tool result be rewritten; while off, results keep the original DSH behavior.',
   admissionJudge: 'Summary admission judge',

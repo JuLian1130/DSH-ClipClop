@@ -1,9 +1,9 @@
 /**
- * `plugins.item` 的插件详情卡片：摘要参数（主 route、两个阈值、「关闭推理」开关、提示词规则正文）、准入参数
- * （准入 route、「关闭推理」开关、提示词规则正文）、隐私参数（主 route 确认位、失败策略、隐私「关闭推理」
- * 开关、隐私提示词规则正文）与 debug 日志路径。
+ * `plugins.bundle.config` 的包详情页配置区：摘要参数（主 route、两个阈值、「关闭推理」开关、提示词规则正文）、
+ * 准入参数（准入 route、「关闭推理」开关、提示词规则正文）、隐私参数（主 route 确认位、失败策略、隐私
+ * 「关闭推理」开关、隐私提示词规则正文）与 debug 日志路径。
  *
- * 卡片与页签分座是设计文档「配置面与设置座位」的座位约定——开关在插件页签、参数在插件详情卡片。写入走
+ * 配置区与页签分座是设计文档「配置面与设置座位」的座位约定——开关在插件页签、参数在包自己的详情页；写入走
  * `configForms` 的立即写：这些字段在 schema 上都是 `volatile`，失焦即写、保存即生效。失败形态与页签同源
  * ——`set` 在 Host 拒绝时 resolve `false`，所以失败态在 await 之后核验返回值才置位。
  *
@@ -99,9 +99,9 @@ export interface ResultClipperCardInjected {
   resetPrivacyPrompt(): Promise<boolean>
 }
 
-/** 渲染机为本卡片合成的 props：槽位运行面（含 `view`）、本插件的文案命名空间、注入的业务面。 */
+/** 渲染机为本配置区合成的 props：槽位运行面（含 `view`）、本插件的文案命名空间、注入的业务面。 */
 export type ResultClipperCardProps =
-  PropsRuntime<'plugins.item'>
+  PropsRuntime<'plugins.bundle.config'>
   & PropsLocale<'resultClipper'>
   & InjectFace<ResultClipperCardInjected>
 
@@ -380,9 +380,9 @@ function PromptRow(props: {
 }
 
 /**
- * 渲染这张卡片。
- * @param props - 被请求的视图、注入的读数与写入路径、页面文案。
- * @returns `summary` 视图下的一行简介，或 `page` 视图下参数控件。
+ * 渲染这个配置区。
+ * @param props - 注入的读数与写入路径、页面文案。
+ * @returns 参数控件。
  */
 export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyGate = props.usePrivacyGate(value => value)
@@ -401,8 +401,6 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const admissionPrompt = props.useAdmissionPrompt(value => value)
   const privacyPrompt = props.usePrivacyPrompt(value => value)
   const debugPath = props.useDebugPath(value => value)
-
-  if (props.view === 'summary') return props.t('description')
 
   const write = (field: ResultClipperCardField) => (value: string | number | boolean) => props.setField(field, value)
 
