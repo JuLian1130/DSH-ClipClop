@@ -3,11 +3,12 @@
  * 插件写法由 profile 的 `cordis.patch.yml` 装载。
  *
  * 本插件当前交付 01（基座）、02（落盘通路与投影消费）、03（激活点②：按步数节流批量推进）、05（激活
- * 点①：溢出救援）与 06（激活点④：手动命令入口与可用性开关）。装载后的动作是四件：为承载类型注册消息
- * 投影，在 `agent/pre-step` 上按**会话级步数**（日志里的 `step/start` 条数，不是载荷 `step`——后者每
- * turn 从 1 重数）的 `M` 的整数倍推进一次裁剪边界，在 `agent/request-error` 上对
- * `CONTEXT_WINDOW_EXCEEDED` 做一次溢出救援，以及注册 ④ 的插件自有命令。开关（设置 → 内置插件的页签）
- * 是 ④ 的另一半，在浏览器半（`src/client/`）——它只控制这个命令的可用性，不参与 ①/②。
+ * 点①：溢出救援）、06（激活点④：手动命令入口与可用性开关）与 09（激活点⑤：裁剪拒收后的还原与停用）。
+ * 装载后的动作是五件：为承载类型注册消息投影，在 `agent/pre-step` 上按**会话级步数**（日志里的
+ * `step/start` 条数，不是载荷 `step`——后者每 turn 从 1 重数）的 `M` 的整数倍推进一次裁剪边界，在
+ * `agent/request-error` 上对 `CONTEXT_WINDOW_EXCEEDED` 做一次溢出救援、对「请求被拒」那一支做一次还原
+ * 加停用，以及注册 ④ 的插件自有命令。开关（设置 → 内置插件的页签）是 ④ 的另一半，在浏览器半
+ * （`src/client/`）——它只控制这个命令的可用性，不参与 ①/②。
  *
  * 注册投影有一条不可避免的代价，记在这里以免被当成缺陷：投影命中就推进 `contentGeneration`
  * （与投影返回什么无关），而承载类型是宿主自己也在写的类型，所以**宿主每产生一条该类型事件**，下一步
@@ -28,9 +29,9 @@ import { CONTEXT_WINDOW_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 // 显式引入服务包，让本文件的 `ctx.sessions` / `ctx.commands` 类型不依赖 projection.ts 的偶然 import 链。
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-commands'
-import { persistReasoningPrune, pruneAtRequestError, pruneAtStepBoundary, pruneTargetsAtCommand } from './persist.ts'
+import { persistReasoningPrune, pruneAtRequestError, pruneAtStepBoundary, pruneTargetsAtCommand, readPrunedSteps, suspendPruningAndRestore, isPruningRejection, REJECTION_WORDING } from './persist.ts'
 import { reasoningPrunerProjection } from './projection.ts'
-import type { Config } from './types.ts'
+import type { Config, RejectionErrorCode } from './types.ts'
 
 export * from './types.ts'
 export * from './replay.ts'
@@ -87,6 +88,29 @@ export function apply(ctx: Context, config: Required<Config>): void {
   ctx.on('agent/request-error', ({ agent, failure, signal }, next): Promise<RequestErrorAction> => {
     if (failure.code === CONTEXT_WINDOW_EXCEEDED_CODE) pruneAtRequestError(agent.session, signal, config)
     return next()
+  }, { prepend: true })
+  // ⑤：裁剪拒收。**独立注册**（不是并进上面那个监听器）：两个监听的判据互斥（`CONTEXT_WINDOW_EXCEEDED`
+  // 与「请求被拒」那一支的码不相交），而分开口后「① 这一支不返回 retry」这个负向判据仍然只作用于 ① 那一段
+  // 源码（票 05 第 8 条）。两者都以 `prepend` 注册即都在 hooks 队首，顺序由注册先后决定（`unshift`）——
+  // 判据互斥，所以顺序这里不构成判据，也不为它加断言。
+  ctx.on('agent/request-error', ({ agent, provider, failure, signal }, next): Promise<RequestErrorAction> => {
+    // 三把锁：码属于「请求被拒」这一支、正文同时命中三词、本会话已存在裁剪事件。任一不成立就原样放行。
+    if (!isPruningRejection(failure) || readPrunedSteps(agent.session).size === 0) return next()
+    const seq = suspendPruningAndRestore(agent.session, {
+      // `provider` 取载荷里的那条（失败发生的那条路由）；`model` 只能从 `agent.options` 读，与 agent-loop
+      // 自己组路由时同源（`agent.ts:558`）。
+      provider,
+      model: agent.options.model ?? '',
+      errorCode: failure.code as RejectionErrorCode,
+      wording: REJECTION_WORDING,
+    })
+    // 信号已中止时**仍然落盘**（上面已经落了）、但不得重试：「端点拒收这个形状」与「这次要不要立刻重试」
+    // 无关，不落盘会在下一次请求里再撞一次。
+    //
+    // `seq === undefined` 表示本会话此前已停用。这比重试上界的「每 `(turn, step)` 一次」更严：停用是一次
+    // 性状态，同一个会话的自动重试至多一次，所以另有成因的 400 也不会变成死循环。
+    if (seq === undefined || signal.aborted) return next()
+    return Promise.resolve<RequestErrorAction>({ kind: 'retry' })
   }, { prepend: true })
   // ④ 手动入口：立刻对本会话做一次裁剪。选区不设保留窗口（`K` 是 ② 的参数），资格判定仍由
   // `persistReasoningPrune` 逐步骤强制——界面开关只管这个入口可不可用，不是安全保证。

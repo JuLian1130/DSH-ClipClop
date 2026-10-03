@@ -1,6 +1,6 @@
 {
   "name": "@dsh-clipclop/dsh-reasoning-pruner",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "让已完成步骤的推理块不再进入此后的模型请求，省下每次请求都要重付的那部分输入；记录本身不变，只有模型可见的历史被改变。对于长推理模型可以聚焦有效上下文提升效果，对于 3%-10% 缓存计价的模型可有效降低计费和额度消耗。",
   "type": "module",
@@ -54,6 +54,7 @@
     "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-modules": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-store": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-ui-layout": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-model-selection": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-client-ui-renderer": "^0.2.0-rc.1",

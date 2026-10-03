@@ -35,6 +35,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import type { ReasoningPrunerTabInjected } from '../../src/client/tab.tsx'
+import type { RejectionNoticeInjected } from '../../src/client/Notice.tsx'
 import type { SettingsWire, WireReply } from './settings-host.ts'
 
 const nodeRequire = createRequire(import.meta.url)
@@ -139,6 +140,31 @@ function observable<T>(read: () => T): { getSnapshot: () => T, subscribe: () => 
 }
 
 /**
+ * 一个**可通知**的可观察读数（`shell.overlay` 的事件窗口与 `sessions.list` 用它）。
+ * @param initial - 初值。
+ * @returns 读数、订阅与一个推送动作。
+ */
+function mutableObservable<T>(initial: T): {
+  getSnapshot: () => T
+  subscribe: (listener: () => void) => () => void
+  publish: (next: T) => void
+  notify: () => void
+} {
+  let value = initial
+  const listeners = new Set<() => void>()
+  const notify = (): void => { for (const listener of [...listeners]) listener() }
+  return {
+    getSnapshot: () => value,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    publish: (next) => { value = next; notify() },
+    notify,
+  }
+}
+
+/**
  * 客户端 locale 的替身：够本插件用（`register` + `bind`），同时它就是渲染机要的 LocaleFace。字典按命名空间
  * 记账、`bind` 在调用时读当前语言，所以「页签名随语言切换」这条判据能在这个夹具上成立。
  * @returns 服务面、渲染面，以及切换当前语言的动作。
@@ -181,6 +207,16 @@ export interface ClientTabHarness {
   entries(): readonly SlotEntryLike[]
   /** 注册面注入的业务面。 */
   injected(): ReasoningPrunerTabInjected
+  /** `shell.overlay` 当前的注册条目（停用提示）。 */
+  overlayEntries(): readonly SlotEntryLike[]
+  /** 停用提示注册面注入的业务面。 */
+  notice(): RejectionNoticeInjected
+  /** 往当前会话的事件窗口推一批条目（真 wire 上历史就是这么加载/追加的）。 */
+  publishWindow(entries: readonly unknown[]): void
+  /** 切到另一条会话（`undefined` 表示没有选中会话）。 */
+  selectSession(next: string | undefined): void
+  /** 为哪些会话建过引用（`source` 是插件自己的标签）。 */
+  retainCalls(): readonly { readonly id: unknown, readonly source: string }[]
   /** 切到另一种界面语言（页签名的观察面用）。 */
   setLocaleActive(next: 'zh' | 'en'): void
   /** 渲染这一页并返回容器。 */
@@ -211,21 +247,56 @@ export async function mountClientTab(options: {
 
   const ctx = new Context()
   const sessionId = options.sessionId ?? 'session-1'
+  /** 第二条会话：用来验「只对**当前显示**的会话渲染」。默认不占 mainView，所以它不是当前会话。 */
+  const otherSessionId = `${sessionId}-other`
+  let selected = sessionId
   const listState = {
     phase: 'ready',
-    ids: [sessionId],
-    byId: { [sessionId]: { id: sessionId, running: false, retainedBy: { mainView: 1 } } },
+    ids: [sessionId, otherSessionId],
+    byId: {
+      [sessionId]: { id: sessionId, running: false, retainedBy: { mainView: 1 } },
+      [otherSessionId]: { id: otherSessionId, running: false, retainedBy: { mainView: 0 } },
+    },
     projectionsBySession: {},
   }
-  const projection = observable<ModelSelectionProjection | undefined>(() => options.projection)
-  const binding = {
-    sessionId,
-    // `ui-session` 会在这个作用域 context 上挂 effect（binding 的 release）；夹具给一个只会记账的替身。
-    ctx: { effect: () => () => {}, get: () => undefined },
-    session: {
-      sessionId,
-      projections: { faceOf: (key: string) => key === 'modelSelection' ? projection : observable(() => undefined) },
-    },
+  const list = mutableObservable(listState)
+  const retainInfoStates = new Map<string, ReturnType<typeof mutableObservable<{ retainedBy: { mainView: number } }>>>()
+  /** 每条会话一个事件窗口（客户端的 `SessionEventWindow` 形状；停用提示只读 `entries`）。 */
+  const windows = new Map<string, ReturnType<typeof mutableObservable<{ entries: readonly unknown[], hasMore: boolean, revision: number }>>>()
+  const windowFor = (id: string) => {
+    const existing = windows.get(id)
+    if (existing !== undefined) return existing
+    const created = mutableObservable<{ entries: readonly unknown[], hasMore: boolean, revision: number }>(
+      { entries: [], hasMore: false, revision: 0 },
+    )
+    windows.set(id, created)
+    return created
+  }
+  const retainCalls: { id: unknown, source: string }[] = []
+  /** 被 release 过的会话 id（`retain` 的对偶；换会话时旧引用必须放掉）。 */
+  const released: string[] = []
+  const projection = mutableObservable<ModelSelectionProjection | undefined>(options.projection)
+  const bindings = new Map<string, unknown>()
+  /** 与该 id 对应的 SessionBinding 替身；`eventSource` 就是上面那条窗口。 */
+  const bindingFor = (id: string): Record<string, unknown> => {
+    const cached = bindings.get(id)
+    if (cached !== undefined) return cached as Record<string, unknown>
+    const created = {
+      sessionId: id,
+      // `ui-session` 会在这个作用域 context 上挂 effect（binding 的 release）；夹具给一个只会记账的替身。
+      ctx: { effect: () => () => {}, get: () => undefined },
+      session: {
+        sessionId: id,
+        projections: {
+          faceOf: (key: string) => key === 'modelSelection' && id === selected
+            ? projection
+            : observable(() => undefined),
+        },
+      },
+      eventSource: windowFor(id),
+    }
+    bindings.set(id, created)
+    return created
   }
   // `ctx.remote.<ns>` 读的是 remote 服务值上的属性（生产里由 remotes 插件挂命名空间代理），而 inject 的
   // `'remote.<ns>'` 走 cordis 的扁平服务名——两条路都要给。
@@ -239,11 +310,34 @@ export async function mountClientTab(options: {
   const locale = fixtureLocale()
   const services: Record<string, unknown> = {
     sessions: {
-      list: observable(() => listState),
-      retainInfo: () => observable(() => ({ retainedBy: { mainView: 1 } })),
-      binding: (id: unknown) => id === sessionId ? binding : undefined,
+      list,
+      retainInfo: (id: unknown) => {
+        const key = String(id)
+        const existing = retainInfoStates.get(key)
+        if (existing !== undefined) return existing
+        const created = mutableObservable({
+          get retainedBy() {
+            return (listState.byId as Record<string, { retainedBy: { mainView: number } }>)[key]?.retainedBy
+              ?? { mainView: 0 }
+          },
+        })
+        retainInfoStates.set(key, created)
+        return created
+      },
+      // 停用提示只为当前显示的会话建引用；这里记账 + 给引用，release 也记一笔。
+      retain: (id: unknown, options: { source: string }) => {
+        retainCalls.push({ id, source: options.source })
+        const binding = bindingFor(String(id))
+        return {
+          sessionId: id,
+          binding,
+          ready: Promise.resolve(binding),
+          release: () => { released.push(String(id)) },
+        }
+      },
+      binding: (id: unknown) => typeof id === 'string' ? bindingFor(id) : undefined,
       // `directoryFor` 把作用域 effect 挂在这个 context 上；夹具用根 context 顶替（只为拿到 disposer）。
-      scope: (id: unknown) => id === sessionId ? ctx : undefined,
+      scope: (id: unknown) => id === selected ? ctx : undefined,
       subagentAddress: () => undefined,
     },
     remote: {
@@ -276,26 +370,53 @@ export async function mountClientTab(options: {
   // （未声明槽位），不会静默通过。
   await mount(ctx, pruner)
 
-  // 内置插件那一节：声明并渲染 `settings.plugins.tab` 这个 additive list seat。
+  // 内置插件那一节与 frame 浮层：声明并渲染这两个 additive list seat。`shell.overlay` 是 `scope: 'root'`
+  // 且不按会话分区——「只对当前显示的会话渲染」因此只能在条目自己那一侧做完。
   await ctx.slots.register({
     name: 'root',
-    children: { 'settings.plugins.tab': { kind: 'list', scope: 'root' } },
-  }, (props: ComposedProps<'root', string, 'settings.plugins.tab', undefined, object>) =>
-    React.createElement('div', { 'data-fixture': 'settings-plugins' }, props.renderSlot('settings.plugins.tab', {})))
+    children: {
+      'settings.plugins.tab': { kind: 'list', scope: 'root' },
+      'shell.overlay': { kind: 'list', scope: 'root' },
+    },
+  }, (props: ComposedProps<'root', string, 'settings.plugins.tab' | 'shell.overlay', undefined, object>) =>
+    React.createElement('div', { 'data-fixture': 'settings-plugins' },
+      props.renderSlot('settings.plugins.tab', {}),
+      props.renderSlot('shell.overlay', {})))
 
   // 注册还包在 `whileServed` 里，所以它要等 settings 镜像真的 serve 了本插件的命名空间才出现——观察面因此
   // 是「镜像 ready 后」，不是 `apply` 同步返回时。
   await ctx.configForms.describe().ensure()
 
   let view: { container: HTMLElement, unmount: () => void } | undefined
+  const entriesOf = (slot: 'settings.plugins.tab' | 'shell.overlay'): readonly SlotEntryLike[] =>
+    ctx.slots.entries(slot) as readonly SlotEntryLike[]
   return {
     ctx,
-    entries: () => ctx.slots.entries('settings.plugins.tab') as readonly SlotEntryLike[],
+    entries: () => entriesOf('settings.plugins.tab'),
     injected: () => {
       const entry = ctx.slots.entries('settings.plugins.tab')[0] as SlotEntryLike | undefined
       if (entry?.inject === undefined) throw new Error('fixture: the pruner tab is not registered')
       return entry.inject() as ReasoningPrunerTabInjected
     },
+    overlayEntries: () => entriesOf('shell.overlay'),
+    notice: () => {
+      const entry = ctx.slots.entries('shell.overlay')[0] as SlotEntryLike | undefined
+      if (entry?.inject === undefined) throw new Error('fixture: the rejection notice is not registered')
+      return entry.inject() as RejectionNoticeInjected
+    },
+    publishWindow: (entries) => {
+      const window = windowFor(selected)
+      window.publish({ entries, hasMore: false, revision: window.getSnapshot().revision + 1 })
+    },
+    selectSession: (next) => {
+      selected = next ?? sessionId
+      for (const [id, state] of Object.entries(listState.byId)) {
+        ;(state as { retainedBy: { mainView: number } }).retainedBy.mainView = id === selected ? 1 : 0
+      }
+      list.notify()
+      for (const state of retainInfoStates.values()) state.notify()
+    },
+    retainCalls: () => retainCalls,
     setLocaleActive: (next) => { locale.setActive(next) },
     push: (event: string) => {
       for (const handler of [...pushes.get(event) ?? []]) handler()

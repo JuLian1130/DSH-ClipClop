@@ -427,7 +427,12 @@ describe('票 05 · 第 8 条：首版不自持重试', () => {
     // 有界计数（照 compaction-basic 的 `overflowRetries` 形状，含 `agent/status → idle` 重置），否则会在
     // 裁剪救不回来的请求上无限重试。首版不做，所以断言实现里**没有**这条分支——它防的正是无界重试。
     const entry = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
-    const listener = entry.slice(entry.indexOf("ctx.on('agent/request-error'"))
+    // 作用域写死为**① 这一个监听器**（到下一个 `ctx.on(` 为止）：09 的 ⑤ 按设计要返回 `{kind:'retry'}`，
+    // 上界是「停用是一次性状态，同一会话至多重试一次」，所以「实现里没有 retry 分支」这句只对 ① 那一支成立。
+    // 票 05 `:16` 已按此把判据收窄到 ①，判据本身（① 委托 `next()`，不自持重试）没有变。
+    const from = entry.indexOf("ctx.on('agent/request-error'")
+    const rest = entry.indexOf("ctx.on('", from + 1)
+    const listener = entry.slice(from, rest === -1 ? undefined : rest)
     expect(listener).not.toContain("kind: 'retry'")
     expect(listener).not.toContain('kind: "retry"')
     // 而它确实预置了本插件的溢出监听器（否则上面那句在一个没有该监听器的实现上也成立）。

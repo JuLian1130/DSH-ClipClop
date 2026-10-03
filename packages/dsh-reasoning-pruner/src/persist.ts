@@ -20,10 +20,25 @@
 
 import type { AssistantMessage } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { Session, SessionEventMap, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionEventMap, SessionSeq } from '@deepseek-ai/dsh-session'
 import { isReasoningPrunable } from './replay.ts'
 import { CARRIER_EVENT_TYPE } from './types.ts'
-import type { Config, ReasoningPrunePayload } from './types.ts'
+import type { Config, ReasoningPrunePayload, ReasoningSuspendPayload, RejectionWording } from './types.ts'
+
+/**
+ * 承载事件的自有封装：顶层带 `clipclop` 键的才是本插件的事件（宿主自己也在写同一个类型，它的事件没有这个
+ * 键）。两条 payload 共用这个键，靠内层有没有 `restore` 判别。
+ * @param event - 一条事件。
+ * @returns 内层封装；不是本插件的事件或形状不是对象时为 `undefined`。
+ */
+function carrierEnvelope(event: SessionEvent): Record<string, unknown> | undefined {
+  const data: unknown = event.data
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined
+  const envelope = (data as Record<string, unknown>)['clipclop']
+  return typeof envelope === 'object' && envelope !== null && !Array.isArray(envelope)
+    ? envelope as Record<string, unknown>
+    : undefined
+}
 
 /**
  * 选区与节流只读这两个数值参数：④ 的开关（`manualPrune`）与它们无关，所以这里的入参不要求调用方凑齐整个
@@ -67,11 +82,84 @@ export function readPrunedSteps(session: Session): Set<SessionSeq> {
   const pruned = new Set<SessionSeq>()
   for (const event of session.snapshotEvents()) {
     if (event.type !== CARRIER_EVENT_TYPE) continue
-    const envelope = (event.data as unknown as ReasoningPrunePayload | undefined)?.clipclop
-    if (envelope === undefined) continue
-    for (const target of envelope.targets) pruned.add(target)
+    const targets = carrierEnvelope(event)?.['targets']
+    // 没有 `targets` 的承载事件是**停用**那一笔（内层带 `restore`），不是裁剪决策。
+    if (!Array.isArray(targets)) continue
+    for (const target of targets) pruned.add(target as SessionSeq)
   }
   return pruned
+}
+
+/**
+ * 本会话是否已停用裁剪（激活点 ⑤）。
+ *
+ * 停用是「日志里存在一条带 `restore` 的承载事件」这个**事实**，不落任何内存状态、也没有外部文件：于是它
+ * 天然按会话生效（新会话的日志里没有这条）、天然被 fork 继承（子会话继承日志前缀）、重载后天然仍然成立。
+ * 三个入口（①②④）共用这一条判定——它们都从 {@link persistReasoningPrune} 这一个写入漏斗落盘。
+ * @param session - 会话。
+ * @returns 已停用时为 true。
+ */
+export function isPruningSuspended(session: Session): boolean {
+  for (const event of session.snapshotEvents()) {
+    if (event.type !== CARRIER_EVENT_TYPE) continue
+    const envelope = carrierEnvelope(event)
+    if (envelope !== undefined && Object.hasOwn(envelope, 'restore')) return true
+  }
+  return false
+}
+
+/**
+ * 第二把锁的三词：三词**同时**命中才算「拒的是推理没回传这件事」。任一不命中就不动作，避免把别的 400
+ * （例如请求体别处越界）当成裁剪的锅。
+ */
+const REJECTION_WORDING_PATTERNS: readonly RegExp[] = [
+  /reasoning[_ ]content/i,
+  /thinking mode/i,
+  /passed back/i,
+]
+
+/** 第一把锁的码面。与 `RejectionErrorCode` 是同一份取值，运行期这里只回答「属不属于这一支」。 */
+const REJECTION_CODES: readonly string[] = ['INVALID_REQUEST', 'PI_AI_ERROR']
+
+/** 第二把锁命中时的措辞类别（三词全中，所以是一元的）。 */
+export const REJECTION_WORDING: RejectionWording = 'reasoning-content-required'
+
+/**
+ * 前两把锁（激活点 ⑤）：错误码属于「请求被拒」这一支，且正文同时命中三词。
+ *
+ * 第三把锁（本会话已存在裁剪事件）是调用方读 {@link readPrunedSteps} 得到的，因为它与写路径共用同一个
+ * 「日志是唯一事实」的口径。
+ * @param failure - `agent/request-error` 载荷里的失败。
+ * @returns 两把锁都成立时为 true。
+ */
+export function isPruningRejection(failure: { readonly code: string, readonly message: string }): boolean {
+  if (!REJECTION_CODES.includes(failure.code)) return false
+  return REJECTION_WORDING_PATTERNS.every(pattern => pattern.test(failure.message))
+}
+
+/**
+ * 落一条**还原 + 停用**决策（激活点 ⑤）。还原与停用是同一条事件，所以这里只有一次 `append`。
+ *
+ * 顺序写死：先判已停用（否则每一次后续拒收都会再落一条、并把会话拖回重试），再算还原范围。还原范围是
+ * 「已裁过的 seq」∩「当前表面节点」：被 compaction 遮蔽过的步骤已不在模型可见历史里，既不是肇因、写回也
+ * 无效（fold 不校验投影返回的键，把非节点写进投影只会留下一条永远不被读到的替换）。
+ * @param session - 活跃会话。
+ * @param diagnostics - 事后可查的四个字段；**不含错误原文**（网关正文可能回显请求内容）。
+ * @returns 落盘的事件序号；本会话已停用时为 `undefined`（不重复落盘）。
+ * @throws 投影校验不通过时（非法形状）。
+ */
+export function suspendPruningAndRestore(
+  session: Session,
+  diagnostics: Pick<ReasoningSuspendPayload['clipclop'], 'provider' | 'model' | 'errorCode' | 'wording'>,
+): SessionSeq | undefined {
+  if (isPruningSuspended(session)) return undefined
+  const nodes = new Set<SessionSeq>(session.surface.nodes)
+  const restore = [...readPrunedSteps(session)].filter(seq => nodes.has(seq)).sort((a, b) => a - b)
+  const payload: ReasoningSuspendPayload = { clipclop: { restore, ...diagnostics } }
+  return session.append(
+    CARRIER_EVENT_TYPE,
+    payload as unknown as SessionEventMap[typeof CARRIER_EVENT_TYPE],
+  ).seq
 }
 
 /**
@@ -244,18 +332,23 @@ function eligiblePruneTargets(session: Session, targets: readonly SessionSeq[]):
  * 属性错误，实测 TS2717），所以写入侧只能 cast——这是「不修改 DSH 核心源码」在本设计里唯一要付的类型
  * 绕过。运行期的形状闸门是投影自己的校验，见模块头注释。
  *
+ * **停用是这里的一道闸门，不是调用方的自觉**（激活点 ⑤）：①②④ 三个入口都从本函数落盘，所以「本会话已
+ * 存在还原/停用事件」这一个判定就把三条路径一起停掉——只停其一没有意义，三个入口产生的是同一种事件与
+ * 同一种线上形状。
+ *
  * **资格判定落在本函数里而不是调用方的自觉上**：候选先过 {@link eligiblePruneTargets}，资格不成立时
  * 一个事件都不写。这是内外两个约束的同一端——投影校验要求 `targets` 非空，所以「无资格」不能落一条空
  * 记录；空记录会污染日志，并让闸门 C 的降级判据难以判断。
  * @param session - 活跃会话。
  * @param targets - 候选历史步骤，按各自的 `assistant/message` seq 列出。
- * @returns 落盘的事件序号；没有资格成立的候选时**不写任何东西**并返回 `undefined`。
+ * @returns 落盘的事件序号；没有资格成立的候选、或本会话已停用时**不写任何东西**并返回 `undefined`。
  * @throws 投影校验不通过时（非法形状、非当前表面节点、不是 `assistant/message`、重复 seq）。
  */
 export function persistReasoningPrune(
   session: Session,
   targets: readonly SessionSeq[],
 ): SessionSeq | undefined {
+  if (isPruningSuspended(session)) return undefined
   const eligible = eligiblePruneTargets(session, targets)
   if (eligible.length === 0) return undefined
   const payload: ReasoningPrunePayload = { clipclop: { targets: eligible } }

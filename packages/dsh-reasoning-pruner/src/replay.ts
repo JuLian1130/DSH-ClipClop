@@ -27,15 +27,21 @@ function piAiResponse(message: AssistantMessage): Record<string, unknown> | unde
 }
 
 /**
- * 裁剪资格：这条 assistant 消息的耐久 replay 信封声明它由 `api === 'openai-completions'` 的传输产生。
+ * 裁剪资格（激活点 ⑤ 的前置修正之后是**两个条件的合取**，见规格「裁剪资格」）：这条 assistant 消息的耐久
+ * replay 信封声明它由 `api === 'openai-completions'` 的传输产生，**且移除推理块后至少还剩一个内容块**。
  *
  * **逐步骤判定**：同一会话中途换模型会混用传输，不得按会话整体判定。没有 `replayState`、信封是
  * `deepseek-messages`（不含 `api`）、或 `api` 是别的传输，一律判为无资格，原样保留。
+ *
+ * **空壳条件不是防御而是承诺边界**：pi-ai 会整条丢弃「既无 content 也无 tool_calls」的 assistant 消息
+ * （`@earendil-works/pi-ai/dist/api/openai-completions.js:1056`，0.87.1 副本；0.85.1 副本在 `:1057`）。
+ * 对一条只有推理块的消息，裁剪会把它**整条从请求里删掉**，那是「移除推理块」之外的行为，所以它不裁。
  * @param message - 一条已记录的 assistant 消息。
  * @returns 可裁剪时为 true。
  */
 export function isReasoningPrunable(message: AssistantMessage): boolean {
-  return piAiResponse(message)?.['api'] === 'openai-completions'
+  if (piAiResponse(message)?.['api'] !== 'openai-completions') return false
+  return message.content.some(block => block.type !== 'reasoning')
 }
 
 /**

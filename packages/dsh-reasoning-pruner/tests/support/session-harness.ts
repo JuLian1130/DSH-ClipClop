@@ -757,19 +757,61 @@ export interface PersistedPrune {
 /**
  * 本插件已落盘的裁剪决策，按事件 seq 升序。
  *
- * 只认顶层带 `clipclop` 键的事件——宿主自己的同类型事件必须不出现在这里（那正是 02 的判别规则）。
+ * 只认顶层带 `clipclop` 键、且内层带 **`targets`** 的事件——宿主自己的同类型事件必须不出现在这里（那正是
+ * 02 的判别规则），而 09 的**还原 + 停用**事件共用同一个承载类型与顶层键、靠内层有没有 `restore` 区分，
+ * 也不算裁剪决策（见 {@link persistedSuspensions}）。
  * @param session - 会话。
  * @returns 每条决策的承载事件 seq 与 `targets`。
  */
 export function persistedPrunes(session: Session): PersistedPrune[] {
-  return session.snapshotEvents()
-    .filter(event => event.type === CARRIER_EVENT_TYPE)
-    .map(event => ({ seq: event.seq, data: event.data as unknown }))
-    .filter(entry => typeof entry.data === 'object' && entry.data !== null && 'clipclop' in entry.data)
-    .map((entry) => {
-      const envelope = (entry.data as { clipclop: { targets: number[] } }).clipclop
-      return { seq: entry.seq, targets: envelope.targets }
-    })
+  return carrierEnvelopes(session)
+    .filter(entry => Array.isArray(entry.envelope['targets']))
+    .map(entry => ({ seq: entry.seq, targets: entry.envelope['targets'] as readonly number[] }))
+}
+
+/** 一条已落盘的**还原 + 停用**决策（激活点 ⑤）。 */
+export interface PersistedSuspension {
+  /** 承载事件自己的 seq。 */
+  readonly seq: number
+  /** 该决策声明要还原为原文的历史步骤，按 seq 升序。 */
+  readonly restore: readonly number[]
+  /** `clipclop` 内层的全部字段（诊断载荷的观察面直接读它）。 */
+  readonly envelope: Record<string, unknown>
+}
+
+/**
+ * 本插件已落盘的还原 + 停用决策，按事件 seq 升序。
+ *
+ * 判别只看内层有没有 `restore` 键——与生产的 `isPruningSuspended` 同一条规则。
+ * @param session - 会话。
+ * @returns 每条停用决策的事件 seq、还原列表与内层载荷。
+ */
+export function persistedSuspensions(session: Session): PersistedSuspension[] {
+  return carrierEnvelopes(session)
+    .filter(entry => Object.hasOwn(entry.envelope, 'restore'))
+    .map(entry => ({
+      seq: entry.seq,
+      restore: (entry.envelope['restore'] ?? []) as readonly number[],
+      envelope: entry.envelope,
+    }))
+}
+
+/**
+ * 日志里本插件的承载事件与它们的内层 `clipclop` 载荷，按 seq 升序。
+ * @param session - 会话。
+ * @returns 每一条的承载事件 seq 与内层封装。
+ */
+function carrierEnvelopes(session: Session): Array<{ seq: number, envelope: Record<string, unknown> }> {
+  const found: Array<{ seq: number, envelope: Record<string, unknown> }> = []
+  for (const event of session.snapshotEvents()) {
+    if (event.type !== CARRIER_EVENT_TYPE) continue
+    const data: unknown = event.data
+    if (typeof data !== 'object' || data === null) continue
+    const envelope = (data as Record<string, unknown>)['clipclop']
+    if (typeof envelope !== 'object' || envelope === null || Array.isArray(envelope)) continue
+    found.push({ seq: event.seq, envelope: envelope as Record<string, unknown> })
+  }
+  return found
 }
 
 /**

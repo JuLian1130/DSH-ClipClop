@@ -28,10 +28,16 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // 类型专用：`ctx.uiSession` / `ctx.modelDirectories` 的 Context 合并。
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
+// 类型专用：`ctx.sessions` 的 Context 合并（停用提示只为当前显示的会话建引用）。
+import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+// 类型专用：`shell.overlay` 这个槽位的声明由 ui-layout（画整个 frame 的那一半）持有。
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // 类型专用：`ctx.slots` 的 Context 合并（槽位服务由渲染器提供）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { createDisabledSnapshot } from './availability.ts'
 import { en, zh, type ReasoningPrunerLocaleKey } from './locales.ts'
+import { ReasoningPrunerNotice, type RejectionNoticeInjected } from './Notice.tsx'
+import { createRejectionNotice } from './notice.ts'
 import { ReasoningPrunerTab } from './tab.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -47,6 +53,9 @@ const PREFERENCE_NAMESPACE = 'dsh-reasoning-pruner'
 /** 本页签在 `settings.plugins.tab` 里的注册 id。 */
 const TAB_ID = 'reasoning-pruner'
 
+/** 停用提示在 `shell.overlay` 里的注册 id。 */
+const NOTICE_ID = 'reasoning-pruner-notice'
+
 /** 本页签的排序位。只读清单页占 10，本页排在它之后。 */
 const TAB_ORDER = 20
 
@@ -59,10 +68,10 @@ interface PreferenceSection {
 }
 
 /** 注册这一页与读置灰那三个事实所需的客户端服务（host 服务不在其中——它们在 host 半）。 */
-export const inject = ['slots', 'locale', 'configForms', 'uiSession', 'modelDirectories', 'remote', 'remote.llm']
+export const inject = ['slots', 'locale', 'configForms', 'uiSession', 'modelDirectories', 'remote', 'remote.llm', 'sessions']
 
 /**
- * 注册 ④ 的内置插件页签。
+ * 注册 ④ 的内置插件页签与 ⑤ 的停用提示。
  * @param ctx - 客户端插件 context；上面 inject 的服务都已就绪。
  */
 export function apply(ctx: Context): void {
@@ -71,6 +80,18 @@ export function apply(ctx: Context): void {
   const t = ctx.locale.bind(LOCALE_NAMESPACE)
   const form = ctx.configForms.get<PreferenceSection>(PREFERENCE_NAMESPACE)
   const disabled = createDisabledSnapshot(ctx)
+  // ⑤ 的用户可见提示：宿主侧没有提示面，唯一的合法瞬时面是这个 root 槽位；条目自己按当前会话过滤。
+  const notice = createRejectionNotice(ctx)
+  const noticeFace = (): RejectionNoticeInjected => ({
+    hooks: { visible: notice },
+    dismiss: () => { notice.dismiss() },
+  })
+  ctx.effect(() => ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+    name: 'shell.overlay',
+    id: NOTICE_ID,
+    locale: LOCALE_NAMESPACE,
+    inject: noticeFace,
+  }, ReasoningPrunerNotice)), 'dsh-reasoning-pruner: rejection notice')
   ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
     'settings.plugins.tab',
     () => ctx.slots.register({
