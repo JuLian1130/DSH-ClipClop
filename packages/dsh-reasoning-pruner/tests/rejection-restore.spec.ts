@@ -221,16 +221,25 @@ describe('票 09 · 第 1 条：三把锁，且三个反例各零写入', () => 
     expect(carrierCount(positive.session)).toBe(carriersBefore + 1)
     await positive.lc.dispose()
 
-    // 反例①：只命中码（正文没有三词）。
-    const codeOnly = await drive([{ text: 'second turn', message: 'Error 400: bad request body.', code: 'INVALID_REQUEST' }])
-    const codeOnlyBefore = carrierCount(codeOnly.session)
-    await codeOnly.lc.step(codeOnly.agent, 'second turn')
-    expect(carrierCount(codeOnly.session)).toBe(codeOnlyBefore)
-    expect(persistedSuspensions(codeOnly.session)).toEqual([])
-    // 判据非空：本会话确有裁剪事件、窗口外也确有候选，所以「零写入」不是因为没有候选。
-    expect(persistedPrunes(codeOnly.session)).toHaveLength(1)
-    expect(pruneTargetsAtCommand(codeOnly.session).length).toBeGreaterThan(0)
-    await codeOnly.lc.dispose()
+    // 反例①：只命中码——正文是三词的**真子集**（零词、一词、两词各覆盖，且缺的分别是不同的词）。
+    // 第二把锁要求三者**同时**命中，所以这一组是「合取」这条判据唯一能证伪的输入：把 `every` 弱化成
+    // `some` 时只有它们会红（已实测：本组存在前，`some` 的变异在整套用例上全绿）。
+    for (const partialWording of [
+      'Error 400: bad request body.',
+      'Error 400: reasoning_content must be returned.',
+      'Error 400: reasoning_content must be passed back.',
+      'Error 400: thinking mode requires the previous turn to be passed back.',
+    ]) {
+      const partial = await drive([{ text: 'second turn', message: partialWording, code: 'INVALID_REQUEST' }])
+      const before = carrierCount(partial.session)
+      await partial.lc.step(partial.agent, 'second turn')
+      expect(carrierCount(partial.session), partialWording).toBe(before)
+      expect(persistedSuspensions(partial.session), partialWording).toEqual([])
+      // 判据非空：本会话确有裁剪事件、窗口外也确有候选，所以「零写入」不是因为没有候选。
+      expect(persistedPrunes(partial.session)).toHaveLength(1)
+      expect(pruneTargetsAtCommand(partial.session).length).toBeGreaterThan(0)
+      await partial.lc.dispose()
+    }
 
     // 反例②：只命中文本（码不属于「请求被拒」这一支）。
     const textOnly = await drive([{ text: 'second turn', message: REJECTION_MESSAGE, code: 'SERVER' }])
@@ -540,9 +549,35 @@ describe('票 09 · 第 7、8 条：重载一致与持久化门禁', () => {
     expect(JSON.stringify(withoutPlugin.deriveMessages())).toBe(JSON.stringify(runtime))
     await plan.dispose()
   })
+
+  it('重载后继续跑步骤，裁剪事件条数不增（在 ② 的触发点上也零写入）', async () => {
+    const { lc, agent, session, id } = await drive([
+      { text: 'second turn', message: REJECTION_MESSAGE, code: 'INVALID_REQUEST' },
+    ])
+    await lc.step(agent, 'second turn')
+    const suspendedCount = carrierCount(session)
+    await lc.ctx.sessions.flush(session)
+    const root = lc.root
+    await lc.dispose()
+
+    // 真重挂载 + 把**已落盘的**会话装回来继续跑：停用是日志事实，重载这条路径上必须照旧拦住写入。
+    const plan = await remount(root, toolCallScript(40), {
+      config: { everySteps: M, keepRecentSteps: K },
+      toolsThrough: FIRST_TURN_STEPS - 1,
+    })
+    registerTool(plan.ctx, 'noop')
+    const resumed = await plan.createSession(id, { resume: true })
+    expect(carrierCount(resumed.session)).toBe(suspendedCount)
+    // 判据非空：重载出来的会话下一步就落在 ② 的触发点上（日志里已有 7 条 `step/start` ⇒ 下一步是第 8 步），
+    // 且窗口外确有候选。
+    expect(pruneTargetsAtStep(resumed.session, { everySteps: M, keepRecentSteps: K }).length).toBeGreaterThan(0)
+    await driveTurns(plan, resumed.agent, 'resumed', 1)
+    expect(carrierCount(resumed.session)).toBe(suspendedCount)
+    await plan.dispose()
+  })
 })
 
-describe('票 09 · 第 9 条：诊断载荷可事后追查，且不含会话文本', () => {
+describe('票 09 · 第 10 条：诊断载荷可事后追查，且不含会话文本', () => {
   it('载荷恰含五个字段，且落盘字节里没有错误原文与会话文本', async () => {
     const { lc, agent, session } = await drive([
       { text: 'second turn', message: REJECTION_MESSAGE, code: 'INVALID_REQUEST' },
@@ -571,7 +606,7 @@ describe('票 09 · 第 9 条：诊断载荷可事后追查，且不含会话文
   })
 })
 
-describe('票 09 · 第 10 条：不引入端点记忆', () => {
+describe('票 09 · 第 11 条：不引入端点记忆', () => {
   it('同一个进程里新会话照常裁剪：停用只按会话生效，没有跨会话/跨进程状态', async () => {
     const { lc, agent, session } = await drive([
       { text: 'second turn', message: REJECTION_MESSAGE, code: 'INVALID_REQUEST' },
