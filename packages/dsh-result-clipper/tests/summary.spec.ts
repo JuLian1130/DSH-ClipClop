@@ -324,12 +324,9 @@ describe('票 03：透传路径的结果取值互不相同', () => {
   })
 })
 
-/** 档位表不含 `off` 的 route 拒收「关闭推理」时的那种收场：DSH 的终止错误块带稳定机器码。 */
-const UNSUPPORTED_EFFORT = UNSUPPORTED_EFFORT_REPLY
-
 describe('票 09：route 不支持 off 档时，「关闭推理」仍然按不请求推理档工作', () => {
   it('先被拒收、去掉 reasoningEffort 重发一次后摘要完成替换', async () => {
-    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT, { text: REPLY }])
+    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT_REPLY, { text: REPLY }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
@@ -362,12 +359,15 @@ describe('票 09：route 不支持 off 档时，「关闭推理」仍然按不�
   })
 
   it('「关闭推理」关闭时不重试：请求本就没带该字段，重发一次没有意义', async () => {
-    const { fixture, route, path } = await mounted({ summaryDisableReasoning: false }, [UNSUPPORTED_EFFORT])
+    const { fixture, route, path } = await mounted({ summaryDisableReasoning: false }, [UNSUPPORTED_EFFORT_REPLY])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
     expect(route.requests).toHaveLength(1)
     expect(route.requests[0]?.reasoningEffort).toBeUndefined()
+    // 请求的其余部分与开关关闭时的现状逐字相同（超时值只在 signal 上，没有可读的观察面）。
+    expect(route.requests[0]?.temperature).toBe(0)
+    expect(route.requests[0]?.maxTokens).toBe(512)
     expect(textOf(result.content)).toBe(LONG_BODY)
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'failed' }))
   })
