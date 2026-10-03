@@ -6,7 +6,7 @@
  * `inject`）。**id 逐字符等于包名**，所以从 package.json 读，不手写第二份。
  *
  * external 就是产物实际 `require` 的那几个：react、react/jsx-runtime，以及平台模块表里的
- * `@deepseek-ai/dsh-client-ui-primitives`（开关行的 `Switch`）。其余跨包协作一律走 cordis 服务
+ * `@deepseek-ai/dsh-client-ui-primitives`（开关行的 `Switch`、按钮的 `Button`）。其余跨包协作一律走 cordis 服务
  * （`import type` 在产物里被擦除），所以没有别的 external——**值引用别的 DSH 包会在这里被内联**，那是错的。
  */
 import { readFileSync } from 'node:fs'

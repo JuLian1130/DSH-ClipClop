@@ -17,6 +17,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { useSyncExternalStore } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
 import type { ResultClipperTabInjected, ResultClipperTabProps } from '../src/client/tab.tsx'
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
@@ -473,24 +474,30 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ routeProvider: '', routeModel: '' })
   })
 
-  it('四个按钮用原语的 Button 原子：两组动作是 outline 家族，两处小入口是 ghost + sm', async () => {
+  it('四个按钮向原语要的是同一套样式：两组动作 outline，两处小入口 ghost + sm', async () => {
     const { container, fixture } = await renderPage()
-    // 每组底部那一对动作：outline 家族（与输入框同一档圆角），且仍是原生 button 语义（type="button"、禁得住 disabled）。
+    // 期望值由原语自己算出来（同一个 Button、同一组 props），**不写死它的 CSS module 类名**：DSH 那边重命名
+    // 不会让本插件的用例变红，但「这里到底要了哪个 variant / size」仍然被钉住——退回裸 `<button>` 或者换档
+    // 都会和这份参考类名不等。
+    const classesFor = (variant: 'outline' | 'ghost', size: 'md' | 'sm'): string => {
+      const one = render(<Button variant={variant} size={size}>参考</Button>)
+      return one.container.querySelector('button')!.className
+    }
+    const actions = classesFor('outline', 'md')
+    const entries = classesFor('ghost', 'sm')
     for (const title of ['摘要模型', '隐私闸门模型']) {
       const save = groupButton(container, title, fixture.t('saveGroup'))
       const reset = groupButton(container, title, fixture.t('resetGroup'))
+      // 仍是原生 button 语义：`type="button"`，且禁用态照旧跟着草稿的脏值走（没改动时保存不可点）。
       expect(save.tagName).toBe('BUTTON')
       expect(save.getAttribute('type')).toBe('button')
-      expect(save.className).toMatch(/_button_\w+/)
-      expect(save.className).toMatch(/_outline_\w+/)
-      expect(save.className).toMatch(/_md_\w+/)
-      expect(reset.className).toMatch(/_outline_\w+/)
+      expect(save.disabled).toBe(true)
+      expect(save.className).toBe(actions)
+      expect(reset.className).toBe(actions)
     }
-    // 两处小入口切到文本输入／切回下拉，用的是 28px 的紧凑档。
     const custom = [...container.querySelectorAll('button')]
       .find(candidate => candidate.textContent === fixture.t('customValue'))!
-    expect(custom.className).toMatch(/_ghost_\w+/)
-    expect(custom.className).toMatch(/_sm_\w+/)
+    expect(custom.className).toBe(entries)
   })
 
   it('三个模型组的标注只用用户指定的原文（只讲带来什么），阈值单位写明 token', async () => {
