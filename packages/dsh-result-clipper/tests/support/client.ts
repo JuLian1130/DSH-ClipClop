@@ -67,13 +67,22 @@ export const SECTION_DEFAULTS: StubSection = {
   privacyPrompt: '',
 }
 
+/** 一次原子写入里的一个字段操作（形状与 settings 的 `SettingsPathOpView` 一致）。 */
+export interface StubSettingOp {
+  readonly op: 'set' | 'unset'
+  readonly path: readonly string[]
+  readonly value?: unknown
+}
+
 /** settings section 的替身：记账写入、可切换「Host 是否接受」。 */
 export class StubForm {
   value: StubSection = { ...SECTION_DEFAULTS }
-  /** 按顺序记下每一次写入。 */
+  /** 按顺序记下每一次**单字段**写入（页签的开关走 `set`）。 */
   writes: Array<{ field: string; value: unknown }> = []
-  /** 按顺序记下每一次字段清空（恢复默认走的是它）。 */
+  /** 按顺序记下每一次字段清空（`unset`）。 */
   resets: string[] = []
+  /** 按顺序记下每一次**原子写入**：每个元素是一组 op（配置区的分组保存走 `mutate`）。 */
+  mutations: StubSettingOp[][] = []
   /** Host 是否接受写入；置为 false 即模拟业务拒绝。 */
   accepted = true
   private readonly listeners = new Set<() => void>()
@@ -102,6 +111,24 @@ export class StubForm {
     this.resets.push(field)
     if (!this.accepted) return false
     this.value = { ...this.value, [field]: SECTION_DEFAULTS[field as keyof StubSection] }
+    this.#publish()
+    return true
+  }
+
+  /**
+   * 一次原子写入：全部 op 要么一起生效、要么一条都不生效（与 Host 的语义一致——被拒时整组不写）。
+   * @param ops - 按顺序的字段操作。
+   * @returns Host 是否接受。
+   */
+  async mutate(ops: readonly StubSettingOp[]): Promise<boolean> {
+    this.mutations.push(ops.map(op => ({ ...op, path: [...op.path] })))
+    if (!this.accepted) return false
+    const next = { ...this.value }
+    for (const op of ops) {
+      const field = op.path[0] as keyof StubSection
+      next[field] = (op.op === 'set' ? op.value : SECTION_DEFAULTS[field]) as never
+    }
+    this.value = next
     this.#publish()
     return true
   }

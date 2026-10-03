@@ -55,8 +55,9 @@ export type ResultClipperLocaleKey =
   | 'admissionPrompt'
   | 'privacyPrompt'
   | 'promptHint'
-  | 'savePrompt'
-  | 'resetPrompt'
+  | 'saveGroup'
+  | 'resetGroup'
+  | 'modelSourceHint'
   | 'debugPath'
   | 'debugPathHint'
   | 'failedHint'
@@ -76,6 +77,7 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   dryRunHint: '开启后走完整流水线但只写诊断记录：不替换内容、不写会话事件、不调用存储、不写 memo。需要同时开启 debug 记录并填好日志路径。',
   dryRunInactiveHint: '干跑未生效：debug 记录关闭或日志路径为空，工具结果仍会被照常替换。',
   flowWarning: '摘要与隐私分别把工具正文发送给各自所选 route。',
+  modelSourceHint: '模型端点与 API key 不在本卡片：先在「设置 → 模型 → 自定义提供方」建好 route（那里填 baseURL 与 API key，本地服务填它的地址），再在下面按角色选它的 provider 与 model。三个角色可以填同一条。',
   summaryGroup: '摘要模型',
   admissionGroup: '摘要准入判断模型',
   privacyGroup: '隐私闸门模型',
@@ -116,11 +118,11 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   admissionPrompt: '准入提示词规则正文',
   privacyPrompt: '隐私提示词规则正文',
   promptHint: '框里是当前生效的规则正文，未改时就是内置默认；改完要点「保存」才写回，没保存就离开不会留下改动；只改规则正文，安全外壳与输出格式由插件固定，不可编辑。',
-  savePrompt: '保存',
-  resetPrompt: '恢复默认',
+  saveGroup: '保存',
+  resetGroup: '恢复默认',
   debugPath: '调试日志路径',
   debugPathHint: 'metadata JSONL 的写入位置；留空时 debug 不写盘。不会自动改用临时路径。',
-  failedHint: '设置未能保存。',
+  failedHint: '设置未能保存：Host 拒绝了这次写入。若插件刚更新过，重启 DSH 后再试；否则检查该组的取值是否合法。',
 }
 
 /** 英文文案。 */
@@ -138,6 +140,7 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   dryRunHint: 'Runs the whole pipeline but only writes diagnostics: no replacement, no session events, no storage, no memo. Needs debug records on and a log path filled in.',
   dryRunInactiveHint: 'Dry run is not in effect: debug records are off or the log path is empty, so tool results are still replaced.',
   flowWarning: 'Summarization and the privacy gate each send the tool body to their own selected route.',
+  modelSourceHint: 'Model endpoints and API keys are not in this card: create the route first in Settings → Models → custom provider (that is where baseURL and API key go, and where a local server address is entered), then pick its provider and model per role below. All three roles may name the same route.',
   summaryGroup: 'Summary model',
   admissionGroup: 'Admission judge model',
   privacyGroup: 'Privacy gate model',
@@ -178,9 +181,9 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   admissionPrompt: 'Admission prompt rule text',
   privacyPrompt: 'Privacy prompt rule text',
   promptHint: 'The box holds the rule text in effect (the built-in default until you change it); press Save to write an edit back, leaving without saving keeps it out of the configuration; only the rule text is editable, the safety shell and output format are fixed by the plugin.',
-  savePrompt: 'Save',
-  resetPrompt: 'Reset to default',
+  saveGroup: 'Save',
+  resetGroup: 'Reset',
   debugPath: 'Debug log path',
   debugPathHint: 'Where the metadata JSONL is written; an empty path writes nothing. The plugin never falls back to a temporary path.',
-  failedHint: 'The setting was not saved.',
+  failedHint: 'Not saved: the Host refused this write. If the plugin was just updated, restart DSH and try again; otherwise check the values in this group.',
 }

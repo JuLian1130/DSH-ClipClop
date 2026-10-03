@@ -200,10 +200,10 @@ describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () 
   })
 })
 
-describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径与摘要、准入、隐私参数在包详情页配置区上', () => {
+describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配置区的分组草稿与保存', () => {
   /**
    * 按配置区页的形状渲染一次，返回容器与注入面。
-   * @param initial - 渲染前先写进 settings 替身的取值（常驻警告这类静态状态的用例要用它）。
+   * @param initial - 渲染前先写进 settings 替身的取值（已存值、常驻警告这类静态状态的用例要用它）。
    */
   async function renderPage(
     initial: Partial<StubSection> = {},
@@ -216,10 +216,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
       view: 'page',
       t: fixture.t,
       ...boundHooks(face.hooks),
-      setField: face.setField,
-      resetSummaryPrompt: face.resetSummaryPrompt,
-      resetAdmissionPrompt: face.resetAdmissionPrompt,
-      resetPrivacyPrompt: face.resetPrivacyPrompt,
+      saveFields: face.saveFields,
     } as unknown as ResultClipperCardProps
     const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
     const { container } = render(<CardComponent {...props} />)
@@ -227,24 +224,39 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
   }
 
   /**
-   * 某一行提示词里的按钮（「保存」或「恢复默认」）。同一个配置区有多份提示词、按钮文案相同，所以按文本域
-   * 所在的那一行取。
+   * 标题所在的那一组：分组标题的父元素就是这一组的容器。
    * @param container - 渲染出来的页面。
-   * @param textareaId - 该行文本域的 id。
-   * @param label - 按钮文案。
-   * @returns 该行里的那个按钮。
+   * @param title - 分组标题文案。
+   * @returns 该分组的元素。
    */
-  function promptButton(container: HTMLElement, textareaId: string, label: string): Element {
-    const section = container.querySelector(`#${textareaId}`)?.closest('section')
-    const button = [...(section?.querySelectorAll('button') ?? [])].find(candidate => candidate.textContent === label)
-    if (button === undefined) throw new Error(`fixture: no button labelled ${label} in row ${textareaId}`)
+  function groupOf(container: HTMLElement, title: string): Element {
+    const heading = [...container.querySelectorAll('h4')].find(node => node.textContent === title)
+    if (heading === undefined) throw new Error(`fixture: no group titled ${title}`)
+    return heading.parentElement!
+  }
+
+  /**
+   * 某组底部的「保存」或「恢复默认」按钮。
+   * @param container - 渲染出来的页面。
+   * @param title - 分组标题文案。
+   * @param label - 按钮文案。
+   * @returns 该组里的那个按钮。
+   */
+  function groupButton(container: HTMLElement, title: string, label: string): HTMLButtonElement {
+    const button = [...groupOf(container, title).querySelectorAll('button')]
+      .find(candidate => candidate.textContent === label)
+    if (button === undefined) throw new Error(`fixture: no button labelled ${label} in group ${title}`)
     return button
   }
 
-  it('page 视图显示「摘要与隐私分别把工具正文发送给各自所选 route」与 schema 的默认值', async () => {
-    const { container } = await renderPage()
+  /** 一次点击后等异步写入结算并让重渲染落定。 */
+  const settle = (): Promise<void> => act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
+
+  it('page 视图显示数据流向与端点归属提示，控件读 schema 的默认值', async () => {
+    const { container, fixture } = await renderPage()
     expect(container.textContent).toContain('摘要与隐私分别把工具正文发送给各自所选 route')
-    // 端点与凭据不在本插件：三个 provider 行的说明把用户指到「设置 → 模型」。
+    // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，三个 provider 行同样各指一次。
+    expect(container.textContent).toContain(fixture.t('modelSourceHint'))
     expect(container.textContent).toContain('设置 → 模型')
     // 默认值来自 schema：阈值 1024 / 12500，三个角色的推理档位默认都是「不推理」。
     expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
@@ -254,236 +266,193 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     }
   })
 
-  it('三个角色各自成组：每组的 provider、model、推理档位与提示词都在同一个标题下', async () => {
+  it('三个角色各自成组：每组的 route、推理档位与该角色的其余设置都在同一个标题下，组间用长横线隔开', async () => {
     const { container } = await renderPage()
-    /** 标题所在的那一组。 */
-    const groupOf = (title: string): Element => {
-      const heading = [...container.querySelectorAll('h4')].find(node => node.textContent === title)
-      if (heading === undefined) throw new Error(`fixture: no group titled ${title}`)
-      return heading.parentElement!
-    }
     for (const [title, prefix, role] of [
       ['摘要模型', 'route', 'summary'],
       ['摘要准入判断模型', 'admission', 'admission'],
       ['隐私闸门模型', 'privacy', 'privacy'],
     ] as const) {
-      const group = groupOf(title)
+      const group = groupOf(container, title)
       expect(group.querySelector(`#plugin-config-result-clipper-${prefix}-provider`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${prefix}-model`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-effort`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-prompt`)).not.toBeNull()
     }
-    // 摘要组还带该角色的两个阈值；诊断组只放 debug 路径。
-    const summary = groupOf('摘要模型')
+    // 摘要组还带该角色的两个阈值；隐私组带确认位与失败策略；诊断组只放 debug 路径。
+    const summary = groupOf(container, '摘要模型')
     expect(summary.querySelector('#plugin-config-result-clipper-min-inline')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-max-summarize')).not.toBeNull()
-    expect(groupOf('诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
+    const privacy = groupOf(container, '隐私闸门模型')
+    expect(privacy.querySelector('#plugin-config-result-clipper-privacy-confirmed')).not.toBeNull()
+    expect(privacy.querySelector('#plugin-config-result-clipper-failure-policy')).not.toBeNull()
+    expect(groupOf(container, '诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
+    // 四个分组之间三条长横线：三个模型组各有自己的边界，诊断组同样被隔开。
+    expect([...container.querySelectorAll('hr')]).toHaveLength(3)
   })
 
-  it('编辑三个角色的 route 与两个阈值后各写回自己的字段（摘要、隐私互不串台）', async () => {
+  it('编辑只改草稿：不点该组的「保存」，一个字段都不落盘', async () => {
     const { fixture, container } = await renderPage()
-    const provider = container.querySelector('#plugin-config-result-clipper-route-provider')!
-    const model = container.querySelector('#plugin-config-result-clipper-route-model')!
-    const min = container.querySelector('#plugin-config-result-clipper-min-inline')!
-    const max = container.querySelector('#plugin-config-result-clipper-max-summarize')!
-    const privacyProvider = container.querySelector('#plugin-config-result-clipper-privacy-provider')!
-    const privacyModel = container.querySelector('#plugin-config-result-clipper-privacy-model')!
-
-    await fireEvent.change(provider, { target: { value: 'local' } })
-    await fireEvent.blur(provider)
-    await fireEvent.change(model, { target: { value: 'qwen' } })
-    await fireEvent.blur(model)
-    await fireEvent.change(min, { target: { value: '256' } })
-    await fireEvent.blur(min)
-    await fireEvent.change(max, { target: { value: '9000' } })
-    await fireEvent.blur(max)
-    await fireEvent.change(privacyProvider, { target: { value: 'local-guard' } })
-    await fireEvent.blur(privacyProvider)
-    await fireEvent.change(privacyModel, { target: { value: 'guard' } })
-    await fireEvent.blur(privacyModel)
-
-    expect(fixture.form.writes).toEqual([
-      { field: 'routeProvider', value: 'local' },
-      { field: 'routeModel', value: 'qwen' },
-      { field: 'minInlineTokens', value: 256 },
-      { field: 'maxSummarizeTokens', value: 9000 },
-      { field: 'privacyProvider', value: 'local-guard' },
-      { field: 'privacyModel', value: 'guard' },
-    ])
-    expect(fixture.form.value).toMatchObject({ routeProvider: 'local', minInlineTokens: 256, maxSummarizeTokens: 9000 })
-  })
-
-  it('三个推理档位下拉各有七个档位、默认「不推理」；改选后各写自己的字段', async () => {
-    const { fixture, container } = await renderPage()
-    const effortSelect = (role: string): HTMLSelectElement =>
-      container.querySelector(`#plugin-config-result-clipper-${role}-effort`) as HTMLSelectElement
-    expect([...effortSelect('summary').options].map(option => option.textContent))
-      .toEqual(['不推理', '极低', '低', '中', '高', '极高', '最高'])
-
-    await fireEvent.change(effortSelect('summary'), { target: { value: 'high' } })
-    expect(fixture.form.writes.at(-1)).toEqual({ field: 'summaryReasoningEffort', value: 'high' })
-    await fireEvent.change(effortSelect('admission'), { target: { value: 'low' } })
-    expect(fixture.form.writes.at(-1)).toEqual({ field: 'admissionReasoningEffort', value: 'low' })
-    await fireEvent.change(effortSelect('privacy'), { target: { value: 'xhigh' } })
-    expect(fixture.form.writes.at(-1)).toEqual({ field: 'privacyReasoningEffort', value: 'xhigh' })
-  })
-
-  /** 三份提示词的行标识与内置默认正文：显示与回落两条判据都按它逐条核对。 */
-  const promptRows = [
-    { field: 'summaryPrompt', id: 'plugin-config-result-clipper-summary-prompt', rule: DEFAULT_SUMMARY_RULE },
-    { field: 'admissionPrompt', id: 'plugin-config-result-clipper-admission-prompt', rule: DEFAULT_ADMISSION_RULE },
-    { field: 'privacyPrompt', id: 'plugin-config-result-clipper-privacy-prompt', rule: DEFAULT_PRIVACY_RULE },
-  ] as const
-
-  it('三个提示词框显示内置默认正文；没改动就失焦不写覆盖', async () => {
-    const { fixture, container } = await renderPage()
-    for (const row of promptRows) {
-      const box = container.querySelector(`#${row.id}`) as HTMLTextAreaElement
-      expect(box.value).toBe(row.rule)
-      await fireEvent.blur(box)
+    const edit = async (selector: string, value: string): Promise<void> => {
+      await fireEvent.change(container.querySelector(selector)!, { target: { value } })
     }
-    // 框里预置的就是生效正文：没动过它就不该写出一条与内置默认逐字相同的覆盖。
+    await edit('#plugin-config-result-clipper-route-provider', 'local')
+    await edit('#plugin-config-result-clipper-route-model', 'qwen')
+    await edit('#plugin-config-result-clipper-summary-effort', 'high')
+    await edit('#plugin-config-result-clipper-min-inline', '256')
+    await edit('#plugin-config-result-clipper-summary-prompt', '只看目标')
+    await edit('#plugin-config-result-clipper-debug-path', '/tmp/other.jsonl')
+
     expect(fixture.form.writes).toEqual([])
+    expect(fixture.form.mutations).toEqual([])
+    // 草稿已经改了，所以两组的「保存」都从禁用变成可用。
+    expect(groupButton(container, '摘要模型', fixture.t('saveGroup')).disabled).toBe(false)
+    expect(groupButton(container, '诊断', fixture.t('saveGroup')).disabled).toBe(false)
+    // 没改过的组仍没有可保存的东西。
+    expect(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')).disabled).toBe(true)
   })
 
-  it('有覆盖时框里显示覆盖正文；清掉覆盖后回落到内置默认正文', async () => {
-    const overrides = { summaryPrompt: '摘要口径', admissionPrompt: '准入口径', privacyPrompt: '隐私口径' }
-    const { fixture, container } = await renderPage(overrides)
-    for (const row of promptRows) {
-      expect((container.querySelector(`#${row.id}`) as HTMLTextAreaElement).value).toBe(overrides[row.field])
-    }
-    for (const row of promptRows) {
-      await fireEvent.click(promptButton(container, row.id, fixture.t('resetPrompt')))
-      // 清空是异步写：等它结算并让一次 setState 触发的重渲染把内置正文重新播种进控件。
-      await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
-      expect(fixture.form.resets).toContain(row.field)
-      expect((container.querySelector(`#${row.id}`) as HTMLTextAreaElement).value).toBe(row.rule)
-    }
-  })
-
-  it('摘要提示词的草稿失焦不写；点「保存」才写 summaryPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+  it('点某组「保存」把该组全部改动作为一次原子写入提交，其它组一个字段都不写', async () => {
     const { fixture, container } = await renderPage()
-    const id = 'plugin-config-result-clipper-summary-prompt'
-    const prompt = container.querySelector(`#${id}`)!
-    // 没改动时「保存」是禁用的：没有可写的东西。
-    expect((promptButton(container, id, fixture.t('savePrompt')) as HTMLButtonElement).disabled).toBe(true)
-    await fireEvent.change(prompt, { target: { value: '只看目标' } })
-    await fireEvent.blur(prompt)
-    // 失焦只是离开控件，不落盘；没保存就离开设置不会留下改动。
-    expect(fixture.form.writes).toEqual([])
-    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
-    expect(fixture.form.writes).toEqual([{ field: 'summaryPrompt', value: '只看目标' }])
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'local' } })
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-summary-effort')!, { target: { value: 'high' } })
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-min-inline')!, { target: { value: '256' } })
+    // 另一组也改一个字段：它不该被摘要组的保存带走。
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-privacy-provider')!, { target: { value: 'guard' } })
 
-    // 上一次写入把它自己置成 busy（按钮被禁用）直到 promise 结算，等一个宏任务让 busy 落下。
-    await new Promise((resolve) => { setTimeout(resolve, 0) })
-    await fireEvent.click(promptButton(container, id, fixture.t('resetPrompt')))
-    expect(fixture.form.resets).toEqual(['summaryPrompt'])
-    expect(fixture.form.value.summaryPrompt).toBe('')
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+
+    // 一次原子写入，op 顺序按该组字段表的顺序（provider、model、档位、下限、上限、提示词）。
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['routeProvider'], value: 'local' },
+      { op: 'set', path: ['summaryReasoningEffort'], value: 'high' },
+      { op: 'set', path: ['minInlineTokens'], value: 256 },
+    ]])
+    expect(fixture.form.value).toMatchObject({
+      routeProvider: 'local', summaryReasoningEffort: 'high', minInlineTokens: 256, privacyProvider: '',
+    })
+    // 保存后草稿与已存值一致：该组的「保存」回到禁用。
+    expect(groupButton(container, '摘要模型', fixture.t('saveGroup')).disabled).toBe(true)
+    // 隐私组的草稿仍在（它没被保存），下一次保存只写它自己。
+    expect(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')).disabled).toBe(false)
   })
 
-  it('把覆盖改回内置正文并保存：清掉覆盖，不写一条与默认逐字相同的覆盖', async () => {
+  it('Host 拒绝时该组显示 role="alert"，草稿保留、已存值不变', async () => {
+    const { fixture, container } = await renderPage()
+    fixture.form.accepted = false
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'local' } })
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+
+    expect(fixture.form.mutations).toHaveLength(1)
+    expect((groupOf(container, '摘要模型').querySelector('[role="alert"]'))?.textContent).toBe(fixture.t('failedHint'))
+    // 被拒绝时不装作已生效：已存值没变，用户打的草稿还在框里（可以改完重试）。
+    expect(fixture.form.value.routeProvider).toBe('')
+    expect((container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLInputElement).value).toBe('local')
+  })
+
+  it('「恢复默认」把推理档位、两个阈值与提示词规则正文送回内置默认（未保存前不落盘）', async () => {
+    const { fixture, container } = await renderPage({
+      summaryReasoningEffort: 'high', minInlineTokens: 256, maxSummarizeTokens: 9000, summaryPrompt: '旧口径',
+    })
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('resetGroup')))
+    await settle()
+
+    expect((container.querySelector('#plugin-config-result-clipper-summary-effort') as HTMLSelectElement).value).toBe('off')
+    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
+    expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
+    expect((container.querySelector('#plugin-config-result-clipper-summary-prompt') as HTMLTextAreaElement).value)
+      .toBe(DEFAULT_SUMMARY_RULE)
+    // 恢复默认只改草稿：没点保存就一条都不写。
+    expect(fixture.form.mutations).toEqual([])
+  })
+
+  it('「恢复默认」把 provider、model 与 debug 路径送回上一次保存的值（丢掉未保存的改动）', async () => {
+    const { fixture, container } = await renderPage({ routeProvider: 'saved', routeModel: 'saved-model', debugPath: '/tmp/saved.jsonl' })
+    const provider = container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLInputElement
+    const debugPath = container.querySelector('#plugin-config-result-clipper-debug-path') as HTMLInputElement
+    await fireEvent.change(provider, { target: { value: 'draft' } })
+    await fireEvent.change(debugPath, { target: { value: '/tmp/draft.jsonl' } })
+    expect(provider.value).toBe('draft')
+
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('resetGroup')))
+    await fireEvent.click(groupButton(container, '诊断', fixture.t('resetGroup')))
+    await settle()
+
+    expect((container.querySelector('#plugin-config-result-clipper-route-provider') as HTMLInputElement).value).toBe('saved')
+    expect((container.querySelector('#plugin-config-result-clipper-route-model') as HTMLInputElement).value).toBe('saved-model')
+    expect((container.querySelector('#plugin-config-result-clipper-debug-path') as HTMLInputElement).value).toBe('/tmp/saved.jsonl')
+    expect(fixture.form.mutations).toEqual([])
+  })
+
+  it('提示词框显示生效正文；把覆盖改回内置正文后保存，以 unset 清掉覆盖', async () => {
     const { fixture, container } = await renderPage({ summaryPrompt: '旧口径' })
     const id = 'plugin-config-result-clipper-summary-prompt'
-    await fireEvent.change(container.querySelector(`#${id}`)!, { target: { value: DEFAULT_SUMMARY_RULE } })
-    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
-    expect(fixture.form.writes).toEqual([])
-    expect(fixture.form.resets).toEqual(['summaryPrompt'])
+    const box = (): HTMLTextAreaElement => container.querySelector(`#${id}`) as HTMLTextAreaElement
+    // 有覆盖时框里是覆盖正文；改回内置正文再保存等于「没有覆盖」，走 unset 而不是写一条逐字相同的覆盖。
+    expect(box().value).toBe('旧口径')
+    await fireEvent.change(box(), { target: { value: DEFAULT_SUMMARY_RULE } })
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+
+    expect(fixture.form.mutations).toEqual([[{ op: 'unset', path: ['summaryPrompt'] }]])
     expect(fixture.form.value.summaryPrompt).toBe('')
+    expect(box().value).toBe(DEFAULT_SUMMARY_RULE)
   })
 
-  it('编辑准入 route 后写回准入那两个字段（不是摘要或隐私那一路）', async () => {
+  it('提示词没有覆盖时框里显示内置正文，且没改动就没有可保存的东西', async () => {
     const { fixture, container } = await renderPage()
-    const provider = container.querySelector('#plugin-config-result-clipper-admission-provider')!
-    const model = container.querySelector('#plugin-config-result-clipper-admission-model')!
-    await fireEvent.change(provider, { target: { value: 'local' } })
-    await fireEvent.blur(provider)
-    await fireEvent.change(model, { target: { value: 'small' } })
-    await fireEvent.blur(model)
-    expect(fixture.form.writes).toEqual([
-      { field: 'admissionProvider', value: 'local' },
-      { field: 'admissionModel', value: 'small' },
-    ])
+    for (const [id, rule] of [
+      ['plugin-config-result-clipper-summary-prompt', DEFAULT_SUMMARY_RULE],
+      ['plugin-config-result-clipper-admission-prompt', DEFAULT_ADMISSION_RULE],
+      ['plugin-config-result-clipper-privacy-prompt', DEFAULT_PRIVACY_RULE],
+    ] as const) {
+      expect((container.querySelector(`#${id}`) as HTMLTextAreaElement).value).toBe(rule)
+    }
+    expect(groupButton(container, '摘要模型', fixture.t('saveGroup')).disabled).toBe(true)
+    expect(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')).disabled).toBe(true)
+    expect(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')).disabled).toBe(true)
   })
 
-  it('准入提示词的草稿失焦不写；点「保存」才写 admissionPrompt；「恢复默认」清掉该字段的覆盖', async () => {
+  it('隐私组的确认位与失败策略也走草稿：点保存才把两个字段一次写回', async () => {
     const { fixture, container } = await renderPage()
-    const id = 'plugin-config-result-clipper-admission-prompt'
-    const prompt = container.querySelector(`#${id}`)!
-    await fireEvent.change(prompt, { target: { value: '只看体积与工具名' } })
-    await fireEvent.blur(prompt)
-    expect(fixture.form.writes).toEqual([])
-    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
-    expect(fixture.form.writes).toEqual([{ field: 'admissionPrompt', value: '只看体积与工具名' }])
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-privacy-confirmed input')!)
+    const block = [...container.querySelectorAll('#plugin-config-result-clipper-failure-policy [role="tab"]')]
+      .find(tab => tab.textContent === fixture.t('failurePolicyBlock'))!
+    await fireEvent.click(block)
+    expect(fixture.form.mutations).toEqual([])
 
-    await new Promise((resolve) => { setTimeout(resolve, 0) })
-    await fireEvent.click(promptButton(container, id, fixture.t('resetPrompt')))
-    expect(fixture.form.resets).toEqual(['admissionPrompt'])
-    expect(fixture.form.value.admissionPrompt).toBe('')
+    await fireEvent.click(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['privacyConfirmedLocal'], value: true },
+      { op: 'set', path: ['failurePolicy'], value: 'block' },
+    ]])
+    expect(fixture.form.value).toMatchObject({ privacyConfirmedLocal: true, failurePolicy: 'block' })
   })
 
-  it('page 视图渲染路径输入框，编辑后失焦写回 debugPath', async () => {
+  it('诊断组的 debug 路径同样要点「保存」才写回', async () => {
     const { fixture, container } = await renderPage()
-    const input = container.querySelector('#plugin-config-result-clipper-debug-path')!
-    await fireEvent.change(input, { target: { value: '/tmp/other.jsonl' } })
-    await fireEvent.blur(input)
-    expect(fixture.form.writes).toEqual([{ field: 'debugPath', value: '/tmp/other.jsonl' }])
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-debug-path')!, { target: { value: '/tmp/other.jsonl' } })
+    expect(fixture.form.mutations).toEqual([])
+    await fireEvent.click(groupButton(container, '诊断', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['debugPath'], value: '/tmp/other.jsonl' }]])
     expect(fixture.form.value.debugPath).toBe('/tmp/other.jsonl')
   })
 
-  it('Host 拒绝路径写入时卡片显示 role="alert"', async () => {
+  it('数字框里不是数字时该组保存被拦下：一条都不写，只报失败', async () => {
     const { fixture, container } = await renderPage()
-    fixture.form.accepted = false
-    const input = container.querySelector('#plugin-config-result-clipper-debug-path')!
-    await fireEvent.change(input, { target: { value: '/tmp/x.jsonl' } })
-    await fireEvent.blur(input)
-    await Promise.resolve()
-    expect(container.querySelector('[role="alert"]')).not.toBeNull()
-  })
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'local' } })
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-min-inline')!, { target: { value: 'abc' } })
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
 
-  it('勾选「隐私 route 已确认为本地」写 privacyConfirmedLocal=true', async () => {
-    const { fixture, container } = await renderPage()
-    const confirmed = container.querySelector('#plugin-config-result-clipper-privacy-confirmed input')!
-    expect((confirmed as HTMLInputElement).checked).toBe(false)
-    await fireEvent.click(confirmed)
-    expect(fixture.form.writes).toEqual([{ field: 'privacyConfirmedLocal', value: true }])
-    expect(fixture.form.value.privacyConfirmedLocal).toBe(true)
-  })
-
-  it('失败策略默认读 schema 的放行；点「拦截」写 failurePolicy=block', async () => {
-    const { fixture, container } = await renderPage()
-    const control = container.querySelector('#plugin-config-result-clipper-failure-policy')!
-    const tabs = (): Element[] => [...control.querySelectorAll('[role="tab"]')]
-    // 阳性对照：默认选中的是「放行原文」，说明这条控件绑在失败策略上而不是随便两个按钮。
-    expect(tabs().map(tab => tab.getAttribute('aria-selected'))).toEqual(['true', 'false'])
-
-    const block = tabs().find(tab => tab.textContent === fixture.t('failurePolicyBlock'))!
-    await fireEvent.click(block)
-    expect(fixture.form.writes).toEqual([{ field: 'failurePolicy', value: 'block' }])
-    expect(fixture.form.value.failurePolicy).toBe('block')
-  })
-
-  it('隐私推理档位下拉默认「不推理」；改选后写 privacyReasoningEffort', async () => {
-    const { fixture, container } = await renderPage()
-    const control = container.querySelector('#plugin-config-result-clipper-privacy-effort') as HTMLSelectElement
-    expect(control.value).toBe('off')
-    await fireEvent.change(control, { target: { value: 'max' } })
-    expect(fixture.form.writes).toEqual([{ field: 'privacyReasoningEffort', value: 'max' }])
-  })
-
-  it('隐私提示词的草稿失焦不写；点「保存」才写 privacyPrompt；「恢复默认」清掉该字段的覆盖', async () => {
-    const { fixture, container } = await renderPage()
-    const id = 'plugin-config-result-clipper-privacy-prompt'
-    const prompt = container.querySelector(`#${id}`)!
-    await fireEvent.change(prompt, { target: { value: '只按我定义的机密判断' } })
-    await fireEvent.blur(prompt)
-    expect(fixture.form.writes).toEqual([])
-    await fireEvent.click(promptButton(container, id, fixture.t('savePrompt')))
-    expect(fixture.form.writes).toEqual([{ field: 'privacyPrompt', value: '只按我定义的机密判断' }])
-
-    await new Promise((resolve) => { setTimeout(resolve, 0) })
-    await fireEvent.click(promptButton(container, 'plugin-config-result-clipper-privacy-prompt', fixture.t('resetPrompt')))
-    expect(fixture.form.resets).toEqual(['privacyPrompt'])
-    expect(fixture.form.value.privacyPrompt).toBe('')
+    // 一个字段不合法就整组不写：provider 那条也不该单独落盘。
+    expect(fixture.form.mutations).toEqual([])
+    expect(fixture.form.value.routeProvider).toBe('')
+    expect(groupOf(container, '摘要模型').querySelector('[role="alert"]')).not.toBeNull()
   })
 
   it('隐私开启且隐私 route 未确认为本地时显示常驻警告；确认后或关闭隐私开关后消失', async () => {
@@ -497,6 +466,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07：debug 路径�
     expect(off.container.textContent).not.toContain(off.fixture.t('routeUnconfirmedWarning'))
   })
 })
+
 
 describe('票 08 第 1 条：干跑开关与「干跑不生效」提示', () => {
   /**

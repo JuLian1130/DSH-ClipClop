@@ -9,9 +9,10 @@
  * （`dsh.bundle.patch` + `dsh.profile.bundles`），插件管理器给它的卡片是包卡片，而包详情页只渲染按包名索引
  * 的 `plugins.bundle.config`，注册到 `plugins.item` 会得到另一张「官方插件」卡片、包详情页仍是空的。
  *
- * 当前值与写回全走 `ctx.configForms`：`getSnapshot()` 读、`set(field, value)` 写；`set` 在 Host 拒绝时
- * **resolve `false`**（不是 reject、也不抛），所以失败态由各控件在 await 之后核验返回值置位。注册包在
- * `whileServed([...])` 里：宿主从未 serve 该命名空间的部署不显示这两处，否则会出现没有写入目标的死页。
+ * 当前值与写回全走 `ctx.configForms`：`getSnapshot()` 读，配置区用 `mutate(ops)` 把一组的改动作为一次原子写入
+ * 提交、页签的开关用 `set(field, value)` 立即写；两者在 Host 拒绝时都**resolve `false`**（不是 reject、也不抛），
+ * 所以失败态由控件/分组在 await 之后核验返回值置位。注册包在 `whileServed([...])` 里：宿主从未 serve 该命名
+ * 空间的部署不显示这两处，否则会出现没有写入目标的死页。
  *
  * 产物形状（CJS 闭包工厂）与打包步骤见 `scripts/build-client.mjs`；`import type` 一律只进类型图，产物里
  * 除平台模块外没有别的跨包值依赖。
@@ -30,7 +31,7 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 // 类型专用：`ctx.slots` 的 Context 合并（槽位服务由渲染器提供）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { ResultClipperCard, type ResultClipperCardField } from './card.tsx'
+import { ResultClipperCard, type ResultClipperSettingOp } from './card.tsx'
 import { en, zh, type ResultClipperLocaleKey } from './locales.ts'
 import { ResultClipperTab, type ResultClipperToggle } from './tab.tsx'
 import type { ReasoningEffort } from '../reasoning.ts'
@@ -147,10 +148,7 @@ export function apply(ctx: Context): void {
           privacyPrompt: stringField(form, 'privacyPrompt'),
           debugPath: stringField(form, 'debugPath'),
         },
-        setField: (field: ResultClipperCardField, value: string | number | boolean) => form.set(field, value),
-        resetSummaryPrompt: () => form.unset('summaryPrompt'),
-        resetAdmissionPrompt: () => form.unset('admissionPrompt'),
-        resetPrivacyPrompt: () => form.unset('privacyPrompt'),
+        saveFields: (ops: readonly ResultClipperSettingOp[]) => form.mutate(ops),
       }),
     }, ResultClipperCard),
   )), 'dsh-result-clipper: bundle config page')

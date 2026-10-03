@@ -1,22 +1,24 @@
 /**
  * `plugins.bundle.config` 的包详情页配置区：摘要、摘要准入判断、隐私闸门三个角色各自成一组，每组把该角色的
  * route（provider 与 model）、推理档位与提示词规则正文放在一起；摘要组另带两个阈值，最后是诊断组的 debug
- * 日志路径。
+ * 日志路径。三个模型组之间用一条横线隔开。
  *
- * 配置区与页签分座是设计文档「配置面与设置座位」的座位约定——开关在插件页签、参数在包自己的详情页；写入走
- * `configForms` 的立即写：这些字段在 schema 上都是 `volatile`，写入即生效、不需要整页保存。参数行的失焦即写，
- * 提示词行例外——它的文本域是草稿，点该行的「保存」才写回（没保存就离开设置不会留下改动）。失败形态与页签
- * 同源——`set` 在 Host 拒绝时 resolve `false`，所以失败态在 await 之后核验返回值才置位。
+ * **每组是「草稿 + 保存」**：控件只改本地草稿，不点该组的「保存」什么都不落盘；「保存」把该组所有改动作为
+ * **一次原子写入**提交（`configForms.mutate` 的多个 op 共用一个 revision 栅栏与一次 Host 校验），任一条被
+ * 拒绝就整组不生效并显示 `role="alert"`。「恢复默认」按字段分两种语义：推理档位、两个阈值与三份提示词规则
+ * 正文回到**内置默认**（提示词回到内置正文，保存时以 `unset` 清掉覆盖、不写一条逐字相同的覆盖）；provider、
+ * model、隐私确认位、失败策略与 debug 路径回到**上一次保存的值**（即丢掉未保存的改动）。草稿在 Host 侧取值
+ * 变化时（保存被接受，或别处写入）整体重新播种。
+ *
+ * 座位约定见设计文档「配置面与设置座位」——开关在插件页签、参数在包自己的详情页。
  *
  * **端点与凭据不在这里**：DSH 的请求形状只带 `provider` 与 `model`，endpoint、协议与 API key 归 LLM 适配器
- * 按 route 持有（`GenerateOptions` 没有 baseURL / apiKey 字段）。所以本卡片只让用户按角色选 route，并在
- * provider 行的说明里指出「设置 → 模型」是填 baseURL 与凭据的地方。
+ * 按 route 持有（`GenerateOptions` 没有 baseURL / apiKey 字段）。所以卡片顶部与三个 provider 行都把用户指到
+ * 「设置 → 模型 → 自定义提供方」：route 与它的 baseURL / API key 在那里建，这里只按角色选 route。
  *
  * 隐私闸门开启而隐私 route 未确认为本地时，卡片顶部显示常驻警告——它只反映这一静态配置状态，不反映运行期
- * 失效（运行期失效的可见面是会话提醒）；确认后或关闭隐私开关后警告消失。
- *
- * 「恢复默认」清掉提示词的用户覆盖（`unset`），保存后回落到底层默认（内置规则正文）。安全外壳与输出格式
- * 由 host 半写死，这里只能编辑规则正文。
+ * 失效（运行期失效的可见面是会话提醒）；确认后或关闭隐私开关后警告消失。安全外壳与输出格式由 host 半写死，
+ * 这里只能编辑规则正文。
  *
  * @module
  */
@@ -52,7 +54,17 @@ export type ResultClipperCardField =
   | 'privacyPrompt'
   | 'debugPath'
 
-/** 注册者自己的业务面：逐字段读数与写入，加上三份提示词的清空。 */
+/**
+ * 一次原子写入里的一个字段操作，形状与 settings 的 `SettingsPathOpView` 逐字段一致。
+ *
+ * 那份类型在 `@deepseek-ai/dsh-api-remotes/client` 里，而浏览器半的依赖面只列到平台模块（`react` 与
+ * `dsh-client-ui-primitives`），为它多挂一个包不值得；形状在此就地声明，由 `form.mutate` 的入参类型兜住。
+ */
+export type ResultClipperSettingOp =
+  | { readonly op: 'set'; readonly path: string[]; readonly value: string | number | boolean }
+  | { readonly op: 'unset'; readonly path: string[] }
+
+/** 注册者自己的业务面：逐字段读数，加一条把一组改动原子写回的路径。 */
 export interface ResultClipperCardInjected {
   hooks: {
     /** 隐私闸门开关的当前值；常驻警告按它与确认位一起显示。 */
@@ -93,27 +105,12 @@ export interface ResultClipperCardInjected {
     debugPath: ObservableSnapshot<string>
   }
   /**
-   * 写回一个字段。
-   * @param field - 要写的字段。
-   * @param value - 用户给出的新取值。
+   * 把一组改动作为**一次原子写入**提交：所有 op 共用一个 revision 栅栏与一次 Host 校验，任一条被拒就整组
+   * 不生效。
+   * @param ops - 按顺序的字段操作。
    * @returns Host 是否接受；被拒绝时 resolve `false`。
    */
-  setField(field: ResultClipperCardField, value: string | number | boolean): Promise<boolean>
-  /**
-   * 清掉摘要提示词的覆盖，让它回落到底层默认。
-   * @returns Host 是否接受；被拒绝时 resolve `false`。
-   */
-  resetSummaryPrompt(): Promise<boolean>
-  /**
-   * 清掉准入提示词的覆盖，让它回落到底层默认。
-   * @returns Host 是否接受；被拒绝时 resolve `false`。
-   */
-  resetAdmissionPrompt(): Promise<boolean>
-  /**
-   * 清掉隐私提示词的覆盖，让它回落到底层默认。
-   * @returns Host 是否接受；被拒绝时 resolve `false`。
-   */
-  resetPrivacyPrompt(): Promise<boolean>
+  saveFields(ops: readonly ResultClipperSettingOp[]): Promise<boolean>
 }
 
 /** 渲染机为本配置区合成的 props：槽位运行面（含 `view`）、本插件的文案命名空间、注入的业务面。 */
@@ -134,8 +131,14 @@ const HINT_STYLE = { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, li
 /** 角色分组的标题排版：三个角色的设置各自成组，标题把该组与其它组分开。 */
 const GROUP_STYLE = { margin: '24px 0 0', fontSize: 13, fontWeight: 600, lineHeight: '20px' } as const
 
+/** 分组之间的长横线。 */
+const DIVIDER_STYLE = { border: 0, borderTop: '1px solid var(--dsw-alias-border-l2)', margin: '12px 0 0' } as const
+
 /** 一个角色的 route 里 provider 与 model 并排的排版。 */
 const ROUTE_STYLE = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } as const
+
+/** 一组底部的「保存 / 恢复默认」按钮行排版。 */
+const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '12px 0 0' } as const
 
 /** 隐私 route 未确认为本地时的常驻警告排版。 */
 const WARNING_STYLE = {
@@ -170,76 +173,190 @@ const EFFORT_LABELS: Record<ReasoningEffort, ResultClipperLocaleKey> = {
   max: 'effortMax',
 }
 
+/** 草稿里一个字段的值：数字在草稿里是字符串，输入框才能原样编辑（含临时清空）。 */
+type DraftValue = string | boolean
+
+/** 一个字段的种类，决定草稿怎么播种、怎么比较、保存时怎么转换。 */
+type FieldKind = 'text' | 'number' | 'boolean' | 'prompt'
+
+/** 一个分组字段的规格。 */
+interface GroupFieldSpec {
+  /** settings 键。 */
+  readonly field: ResultClipperCardField
+  readonly kind: FieldKind
+  /**
+   * 「恢复默认」回到的内置默认；缺省表示回到**上一次保存的值**（丢掉未保存的改动）。
+   * 提示词字段给内置规则正文：草稿等于它时保存走 `unset`，不写一条与内置正文逐字相同的覆盖。
+   */
+  readonly fallback?: string | number | boolean
+}
+
+/** 一个分组的草稿面与它的保存 / 恢复默认动作。 */
+interface DraftedGroup {
+  /** 一个字段的草稿值。 */
+  value(field: ResultClipperCardField): DraftValue
+  /** 改一个字段的草稿；只动本地状态。 */
+  change(field: ResultClipperCardField, next: DraftValue): void
+  /** 该组是否有未保存的改动。 */
+  readonly dirty: boolean
+  /** 该组是否有写入在途。 */
+  readonly busy: boolean
+  /** 上一次保存是否被 Host 拒绝。 */
+  readonly failed: boolean
+  /** 提交该组的全部改动。 */
+  save(): void
+  /** 「恢复默认」：内置默认字段回到默认，其余回到上一次保存的值。 */
+  reset(): void
+}
+
+/** 已存值在一组里的读数：字段名到取值。 */
+type PersistedValues = Readonly<Record<string, string | number | boolean>>
+
+/** 字段值在草稿里的表示。 */
+function draftOf(spec: GroupFieldSpec, value: string | number | boolean): DraftValue {
+  return spec.kind === 'number' ? String(value) : value as DraftValue
+}
+
 /**
- * 一个角色分组：标题加该角色的控件。
- * @param props - 分组标题与内容。
+ * 草稿值转成要写回的取值。
+ * @param spec - 字段规格。
+ * @param draft - 该字段的草稿值。
+ * @returns 要写回的取值；数字字段不是数字时交回 `undefined`（该组保存失败，一条都不写）。
+ */
+function storedOf(spec: GroupFieldSpec, draft: DraftValue): string | number | boolean | undefined {
+  if (spec.kind !== 'number') return draft
+  const text = String(draft).trim()
+  const value = Number(text)
+  return text === '' || !Number.isFinite(value) ? undefined : value
+}
+
+/**
+ * 一组设置的草稿状态：从已存值播种、编辑只改草稿、保存把该组改动作为一次原子写入提交。
+ *
+ * 重新播种的时机是 **Host 侧取值变化**（保存被接受、或别处写入），不是每次渲染——否则用户刚打的字会被自己
+ * 的输入触发的那次渲染冲掉。
+ * @param specs - 该组的字段规格。
+ * @param persisted - 该组字段的已存值；提示词字段给的是**当前生效正文**（有覆盖用覆盖，否则内置正文）。
+ * @param saveFields - 一次原子写入的提交路径。
+ * @returns 该组的草稿面与动作。
+ */
+function useGroupDraft(
+  specs: readonly GroupFieldSpec[],
+  persisted: PersistedValues,
+  saveFields: (ops: readonly ResultClipperSettingOp[]) => Promise<boolean>,
+): DraftedGroup {
+  const seed = (): Record<string, DraftValue> =>
+    Object.fromEntries(specs.map(spec => [spec.field, draftOf(spec, persisted[spec.field]!)]))
+  const [draft, setDraft] = useState(seed)
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const persistedView = JSON.stringify(specs.map(spec => persisted[spec.field]))
+  useEffect(() => { setDraft(seed()) }, [persistedView])
+
+  const changed = specs.filter(spec => draft[spec.field] !== draftOf(spec, persisted[spec.field]!))
+  return {
+    value: field => draft[field]!,
+    change: (field, next) => {
+      setFailed(false)
+      setDraft(current => ({ ...current, [field]: next }))
+    },
+    dirty: changed.length > 0,
+    busy,
+    failed,
+    save: () => {
+      if (changed.length === 0) return
+      const ops: ResultClipperSettingOp[] = []
+      for (const spec of changed) {
+        const value = storedOf(spec, draft[spec.field]!)
+        // 数字框里不是数字：整组不写，避免一半字段生效。
+        if (value === undefined) {
+          setFailed(true)
+          return
+        }
+        ops.push(spec.kind === 'prompt' && draft[spec.field] === spec.fallback
+          // 写回内置正文等于「没有覆盖」：清掉覆盖，不留下逐字相同的冗余覆盖。
+          ? { op: 'unset', path: [spec.field] }
+          : { op: 'set', path: [spec.field], value })
+      }
+      setFailed(false)
+      setBusy(true)
+      void saveFields(ops)
+        .then((accepted) => { if (!accepted) setFailed(true) })
+        .catch(() => { setFailed(true) })
+        .finally(() => { setBusy(false) })
+    },
+    reset: () => {
+      setFailed(false)
+      setDraft(Object.fromEntries(specs.map(spec => [
+        spec.field,
+        draftOf(spec, spec.fallback ?? persisted[spec.field]!),
+      ])))
+    },
+  }
+}
+
+/**
+ * 一个分组：标题、该角色的控件、底部的「保存 / 恢复默认」与失败提示。
+ * @param props - 分组标题与内容、草稿状态与按钮文案。
  * @returns 一组设置。
  */
-function Group(props: { readonly title: string; readonly children: ReactNode }) {
+function Group(props: {
+  readonly title: string
+  readonly children: ReactNode
+  readonly dirty: boolean
+  readonly busy: boolean
+  readonly failed: boolean
+  readonly failedHint: string
+  readonly saveLabel: string
+  readonly resetLabel: string
+  readonly onSave: () => void
+  readonly onReset: () => void
+}) {
   return <section style={{ padding: '4px 0' }}>
     <h4 style={GROUP_STYLE}>{props.title}</h4>
     {props.children}
+    <div style={ACTIONS_STYLE}>
+      <button type="button" disabled={props.busy || !props.dirty} onClick={props.onSave}>{props.saveLabel}</button>
+      <button type="button" disabled={props.busy} onClick={props.onReset}>{props.resetLabel}</button>
+    </div>
+    {props.failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
 }
 
-/** 一行文本参数的 props：一个角色的 provider / model 与诊断组的路径都用它。 */
-interface TextRowProps {
+/**
+ * 一行文本参数；编辑只改草稿，由所在组的「保存」写回。
+ * @param props - 行文案、提示、草稿值与改动回调。
+ * @returns 一行文本控件。
+ */
+function TextRow(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
-  readonly failedHint: string
   readonly value: string
-  readonly write: (value: string) => Promise<boolean>
-}
-
-/**
- * 一行文本参数：失焦或回车即写。
- * @param props - 行文案、提示、当前值与写入动作。
- * @returns 一行文本控件。
- */
-function TextRow(props: TextRowProps) {
-  const [draft, setDraft] = useState(props.value)
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
-  // Host 侧的值变了（别处写入、或写入被接受）就重新播种草稿，使控件显示的是当前生效值。
-  useEffect(() => { setDraft(props.value) }, [props.value])
-
-  const commit = (): void => {
-    if (draft === props.value) return
-    setFailed(false)
-    setBusy(true)
-    void props.write(draft)
-      .then((accepted) => { if (!accepted) setFailed(true) })
-      .catch(() => { setFailed(true) })
-      .finally(() => { setBusy(false) })
-  }
-
+  readonly onChange: (next: string) => void
+}) {
   return <section style={ROW_STYLE}>
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
     <input
       id={props.id}
       type="text"
       style={INPUT_STYLE}
-      value={draft}
-      disabled={busy}
-      onChange={(event) => { setDraft(event.target.value) }}
-      onBlur={commit}
-      onKeyDown={(event) => { if (event.key === 'Enter') commit() }}
+      value={props.value}
+      onChange={(event) => { props.onChange(event.target.value) }}
     />
     <div style={HINT_STYLE}>{props.hint}</div>
-    {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
 }
 
 /**
  * 一个角色的 route：provider 与 model 并排，用户按角色一次配完「发给谁」。
- * @param props - 行前缀与 provider / model 两行的文案与写入动作。
+ * @param props - 行前缀与 provider / model 两行的文案、草稿值与改动回调。
  * @returns 一行两个文本控件。
  */
 function RouteFields(props: {
   readonly id: string
-  readonly provider: Omit<TextRowProps, 'id'>
-  readonly model: Omit<TextRowProps, 'id'>
+  readonly provider: Omit<Parameters<typeof TextRow>[0], 'id'>
+  readonly model: Omit<Parameters<typeof TextRow>[0], 'id'>
 }) {
   return <div style={ROUTE_STYLE}>
     <TextRow {...props.provider} id={`${props.id}-provider`} />
@@ -248,107 +365,71 @@ function RouteFields(props: {
 }
 
 /**
- * 一行数字参数：失焦或回车即写，非数字草稿交给 Host 拒绝。
- * @param props - 行文案、提示、当前值与写入动作。
+ * 一行数字参数；草稿是原始字符串，保存时才转成数字。
+ * @param props - 行文案、提示、草稿值与改动回调。
  * @returns 一行数字控件。
  */
 function NumberRow(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
-  readonly failedHint: string
-  readonly value: number
-  readonly write: (value: number) => Promise<boolean>
+  readonly value: string
+  readonly onChange: (next: string) => void
 }) {
-  const [draft, setDraft] = useState(String(props.value))
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
-  useEffect(() => { setDraft(String(props.value)) }, [props.value])
-
-  const commit = (): void => {
-    if (draft === String(props.value)) return
-    setFailed(false)
-    setBusy(true)
-    void props.write(Number(draft))
-      .then((accepted) => { if (!accepted) setFailed(true) })
-      .catch(() => { setFailed(true) })
-      .finally(() => { setBusy(false) })
-  }
-
   return <section style={ROW_STYLE}>
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
     <input
       id={props.id}
       type="number"
       style={INPUT_STYLE}
-      value={draft}
-      disabled={busy}
-      onChange={(event) => { setDraft(event.target.value) }}
-      onBlur={commit}
-      onKeyDown={(event) => { if (event.key === 'Enter') commit() }}
+      value={props.value}
+      onChange={(event) => { props.onChange(event.target.value) }}
     />
     <div style={HINT_STYLE}>{props.hint}</div>
-    {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
 }
 
 /**
- * 一行推理档位：下拉框，选中即写。选项是 pi-ai 的规范档位，能不能用由所选 route 的档位表决定。
- * @param props - 控件 id 与行文案、当前值、选项与写入动作。
+ * 一行推理档位：下拉框。选项是 pi-ai 的规范档位，能不能用由所选 route 的档位表决定。
+ * @param props - 控件 id 与行文案、草稿值、选项与改动回调。
  * @returns 一行下拉控件。
  */
 function EffortRow(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
-  readonly failedHint: string
   readonly value: ReasoningEffort
   readonly options: readonly { readonly value: ReasoningEffort; readonly label: string }[]
-  readonly write: (value: ReasoningEffort) => Promise<boolean>
+  readonly onChange: (next: ReasoningEffort) => void
 }) {
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
   return <section style={ROW_STYLE}>
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
     <select
       id={props.id}
       value={props.value}
-      disabled={busy}
       aria-label={props.label}
       style={{ ...INPUT_STYLE, width: 'auto', minWidth: 160 }}
-      onChange={(event) => {
-        const next = event.target.value as ReasoningEffort
-        setFailed(false)
-        setBusy(true)
-        void props.write(next)
-          .then((accepted) => { if (!accepted) setFailed(true) })
-          .catch(() => { setFailed(true) })
-          .finally(() => { setBusy(false) })
-      }}
+      onChange={(event) => { props.onChange(event.target.value as ReasoningEffort) }}
     >
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
     <div style={HINT_STYLE}>{props.hint}</div>
-    {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
 }
 
 /**
- * 一行二选一参数：两个分段按钮，选中即写。隐私失败策略用它。
- * @param props - 控件 id 与行文案、当前值、两个选项与写入动作。
+ * 一行二选一参数：两个分段按钮。隐私失败策略用它。
+ * @param props - 控件 id 与行文案、草稿值、两个选项与改动回调。
  * @returns 一行分段控件。
  */
 function ChoiceRow<Value extends string>(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
-  readonly failedHint: string
   readonly value: Value
   readonly options: readonly { readonly value: Value; readonly label: string }[]
-  readonly write: (value: Value) => Promise<boolean>
+  readonly onChange: (next: Value) => void
 }) {
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
   return <section id={props.id} style={ROW_STYLE}>
     <div style={TITLE_STYLE}>{props.label}</div>
     <SegmentedControl
@@ -356,114 +437,89 @@ function ChoiceRow<Value extends string>(props: {
       value={props.value}
       options={props.options}
       label={props.label}
-      disabled={busy}
-      onChange={(next) => {
-        setFailed(false)
-        setBusy(true)
-        void props.write(next)
-          .then((accepted) => { if (!accepted) setFailed(true) })
-          .catch(() => { setFailed(true) })
-          .finally(() => { setBusy(false) })
-      }}
+      onChange={props.onChange}
     />
     <div style={HINT_STYLE}>{props.hint}</div>
-    {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
-  </section>
-}
-
-/** 一行复选框参数：勾选即写（隐私 route 确认位用它）。 */
-function CheckRow(props: {
-  readonly id: string
-  readonly label: string
-  readonly hint: string
-  readonly failedHint: string
-  readonly checked: boolean
-  readonly onChange: (next: boolean) => Promise<boolean>
-}) {
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
-  return <section id={props.id} style={ROW_STYLE}>
-    <Checkbox
-      checked={props.checked}
-      disabled={busy}
-      label={props.label}
-      onChange={(next) => {
-        setFailed(false)
-        setBusy(true)
-        void props.onChange(next)
-          .then((accepted) => { if (!accepted) setFailed(true) })
-          .catch(() => { setFailed(true) })
-          .finally(() => { setBusy(false) })
-      }}
-    />
-    <div style={HINT_STYLE}>{props.hint}</div>
-    {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
 }
 
 /**
- * 提示词规则正文：框里显示**当前生效的正文**（有覆盖用覆盖，否则用内置默认）；编辑是草稿，点「保存」才写回
- * （失焦不写，所以没保存就离开设置不会留下改动）；「恢复默认」清掉覆盖、控件回落到内置默认。
- * @param props - 控件 id、行文案、提示、覆盖值、内置默认正文、按钮文案、写入与清空动作。
- * @returns 一行文本域加「保存」与「恢复默认」两个按钮。
+ * 一行复选框参数（隐私 route 确认位用它）。
+ * @param props - 控件 id 与行文案、草稿值与改动回调。
+ * @returns 一行复选框控件。
+ */
+function CheckRow(props: {
+  readonly id: string
+  readonly label: string
+  readonly hint: string
+  readonly checked: boolean
+  readonly onChange: (next: boolean) => void
+}) {
+  return <section id={props.id} style={ROW_STYLE}>
+    <Checkbox checked={props.checked} label={props.label} onChange={props.onChange} />
+    <div style={HINT_STYLE}>{props.hint}</div>
+  </section>
+}
+
+/**
+ * 提示词规则正文：框里是**当前生效正文的草稿**（有覆盖时从覆盖播种，否则从内置正文），编辑只改草稿；写回
+ * 由所在组的「保存」完成，草稿等于内置正文时保存走 `unset`（清掉覆盖）。
+ * @param props - 控件 id、行文案、提示、草稿值与改动回调。
+ * @returns 一行文本域。
  */
 function PromptRow(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
-  readonly failedHint: string
-  readonly saveLabel: string
-  readonly resetLabel: string
-  /** 用户写下的覆盖；空串表示没有覆盖。 */
   readonly value: string
-  /** 内置规则正文；没有覆盖时，框里显示的和请求实际拼装用的都是它。 */
-  readonly builtinRule: string
-  readonly write: (value: string) => Promise<boolean>
-  readonly reset: () => Promise<boolean>
+  readonly onChange: (next: string) => void
 }) {
-  const effective = props.value === '' ? props.builtinRule : props.value
-  const [draft, setDraft] = useState(effective)
-  const [busy, setBusy] = useState(false)
-  const [failed, setFailed] = useState(false)
-  useEffect(() => { setDraft(effective) }, [effective])
-
-  const settle = (action: Promise<boolean>): void => {
-    setFailed(false)
-    setBusy(true)
-    void action
-      .then((accepted) => { if (!accepted) setFailed(true) })
-      .catch(() => { setFailed(true) })
-      .finally(() => { setBusy(false) })
-  }
-
-  // 草稿与生效正文一致时没有可保存的东西；改回内置正文本身则清掉覆盖，不留下逐字相同的冗余覆盖。
-  const dirty = draft !== effective
-  const save = (): void => {
-    if (!dirty) return
-    settle(draft === props.builtinRule ? props.reset() : props.write(draft))
-  }
-
   return <section style={ROW_STYLE}>
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
     <textarea
       id={props.id}
       style={{ ...INPUT_STYLE, minHeight: 80, resize: 'vertical' }}
-      value={draft}
-      disabled={busy}
-      onChange={(event) => { setDraft(event.target.value) }}
+      value={props.value}
+      onChange={(event) => { props.onChange(event.target.value) }}
     />
     <div style={HINT_STYLE}>{props.hint}</div>
-    <div style={{ display: 'flex', gap: 8 }}>
-      <button type="button" disabled={busy || !dirty} onClick={save}>{props.saveLabel}</button>
-      <button type="button" disabled={busy} onClick={() => { settle(props.reset()) }}>{props.resetLabel}</button>
-    </div>
-    {failed && <div role="alert" style={HINT_STYLE}>{props.failedHint}</div>}
   </section>
 }
 
+/** 摘要组的字段：route、推理档位、两个阈值与提示词。 */
+const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
+  { field: 'routeProvider', kind: 'text' },
+  { field: 'routeModel', kind: 'text' },
+  { field: 'summaryReasoningEffort', kind: 'text', fallback: 'off' },
+  { field: 'minInlineTokens', kind: 'number', fallback: 1024 },
+  { field: 'maxSummarizeTokens', kind: 'number', fallback: 12500 },
+  { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
+]
+
+/** 准入组的字段：route、推理档位与提示词。 */
+const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
+  { field: 'admissionProvider', kind: 'text' },
+  { field: 'admissionModel', kind: 'text' },
+  { field: 'admissionReasoningEffort', kind: 'text', fallback: 'off' },
+  { field: 'admissionPrompt', kind: 'prompt', fallback: DEFAULT_ADMISSION_RULE },
+]
+
+/** 隐私组的字段：route、推理档位、确认位、失败策略与提示词。 */
+const PRIVACY_FIELDS: readonly GroupFieldSpec[] = [
+  { field: 'privacyProvider', kind: 'text' },
+  { field: 'privacyModel', kind: 'text' },
+  { field: 'privacyReasoningEffort', kind: 'text', fallback: 'off' },
+  { field: 'privacyConfirmedLocal', kind: 'boolean' },
+  { field: 'failurePolicy', kind: 'text' },
+  { field: 'privacyPrompt', kind: 'prompt', fallback: DEFAULT_PRIVACY_RULE },
+]
+
+/** 诊断组的字段：debug 日志路径。 */
+const DIAGNOSTIC_FIELDS: readonly GroupFieldSpec[] = [{ field: 'debugPath', kind: 'text' }]
+
 /**
  * 渲染这个配置区。
- * @param props - 注入的读数与写入路径、页面文案。
+ * @param props - 注入的读数与原子写入路径、页面文案。
  * @returns 三个角色分组加诊断组的参数控件。
  */
 export function ResultClipperCard(props: ResultClipperCardProps) {
@@ -486,95 +542,126 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyPrompt = props.usePrivacyPrompt(value => value)
   const debugPath = props.useDebugPath(value => value)
 
-  const write = (field: ResultClipperCardField) => (value: string | number | boolean) => props.setField(field, value)
+  const summary = useGroupDraft(SUMMARY_FIELDS, {
+    routeProvider, routeModel, summaryReasoningEffort, minInlineTokens, maxSummarizeTokens,
+    // 提示词的已存值是**生效正文**：草稿与它相同就没有改动，等于内置正文时保存走 `unset`。
+    summaryPrompt: summaryPrompt === '' ? DEFAULT_SUMMARY_RULE : summaryPrompt,
+  }, props.saveFields)
+  const admission = useGroupDraft(ADMISSION_FIELDS, {
+    admissionProvider, admissionModel, admissionReasoningEffort,
+    admissionPrompt: admissionPrompt === '' ? DEFAULT_ADMISSION_RULE : admissionPrompt,
+  }, props.saveFields)
+  const privacy = useGroupDraft(PRIVACY_FIELDS, {
+    privacyProvider, privacyModel, privacyReasoningEffort, privacyConfirmedLocal, failurePolicy,
+    privacyPrompt: privacyPrompt === '' ? DEFAULT_PRIVACY_RULE : privacyPrompt,
+  }, props.saveFields)
+  const diagnostics = useGroupDraft(DIAGNOSTIC_FIELDS, { debugPath }, props.saveFields)
+
   const failedHint = props.t('failedHint')
   const effortOptions = REASONING_EFFORT_IDS.map(choice => ({ value: choice, label: props.t(EFFORT_LABELS[choice]) }))
+  const saveLabel = props.t('saveGroup')
+  const resetLabel = props.t('resetGroup')
+  /** 一组底部的按钮与失败提示。 */
+  const actions = (group: DraftedGroup) => ({
+    dirty: group.dirty, busy: group.busy, failed: group.failed, failedHint,
+    saveLabel, resetLabel, onSave: group.save, onReset: group.reset,
+  })
 
   return <div>
     <p style={{ ...HINT_STYLE, padding: '4px 0' }}>{props.t('flowWarning')}</p>
+    <p style={{ ...HINT_STYLE, padding: '4px 0' }}>{props.t('modelSourceHint')}</p>
     {privacyGate && !privacyConfirmedLocal
       && <div role="alert" style={WARNING_STYLE}>{props.t('routeUnconfirmedWarning')}</div>}
 
-    <Group title={props.t('summaryGroup')}>
+    <Group title={props.t('summaryGroup')} {...actions(summary)}>
       <RouteFields id="plugin-config-result-clipper-route"
         provider={{
-          label: props.t('routeProvider'), hint: props.t('routeProviderHint'), failedHint,
-          value: routeProvider, write: write('routeProvider'),
+          label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
+          value: summary.value('routeProvider') as string,
+          onChange: next => { summary.change('routeProvider', next) },
         }}
         model={{
-          label: props.t('routeModel'), hint: props.t('routeModelHint'), failedHint,
-          value: routeModel, write: write('routeModel'),
+          label: props.t('routeModel'), hint: props.t('routeModelHint'),
+          value: summary.value('routeModel') as string,
+          onChange: next => { summary.change('routeModel', next) },
         }} />
       <EffortRow id="plugin-config-result-clipper-summary-effort" label={props.t('reasoningEffort')}
-        hint={props.t('reasoningEffortHint')} failedHint={failedHint}
-        value={summaryReasoningEffort} options={effortOptions}
-        write={write('summaryReasoningEffort') as (next: ReasoningEffort) => Promise<boolean>} />
+        hint={props.t('reasoningEffortHint')} options={effortOptions}
+        value={summary.value('summaryReasoningEffort') as ReasoningEffort}
+        onChange={next => { summary.change('summaryReasoningEffort', next) }} />
       <NumberRow id="plugin-config-result-clipper-min-inline" label={props.t('minInlineTokens')}
-        hint={props.t('minInlineTokensHint')} failedHint={failedHint}
-        value={minInlineTokens} write={write('minInlineTokens')} />
+        hint={props.t('minInlineTokensHint')} value={summary.value('minInlineTokens') as string}
+        onChange={next => { summary.change('minInlineTokens', next) }} />
       <NumberRow id="plugin-config-result-clipper-max-summarize" label={props.t('maxSummarizeTokens')}
-        hint={props.t('maxSummarizeTokensHint')} failedHint={failedHint}
-        value={maxSummarizeTokens} write={write('maxSummarizeTokens')} />
+        hint={props.t('maxSummarizeTokensHint')} value={summary.value('maxSummarizeTokens') as string}
+        onChange={next => { summary.change('maxSummarizeTokens', next) }} />
       <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
-        hint={props.t('promptHint')} failedHint={failedHint}
-        saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-        value={summaryPrompt} builtinRule={DEFAULT_SUMMARY_RULE} write={write('summaryPrompt')} reset={props.resetSummaryPrompt} />
+        hint={props.t('promptHint')} value={summary.value('summaryPrompt') as string}
+        onChange={next => { summary.change('summaryPrompt', next) }} />
     </Group>
 
-    <Group title={props.t('admissionGroup')}>
+    <hr style={DIVIDER_STYLE} />
+
+    <Group title={props.t('admissionGroup')} {...actions(admission)}>
       <RouteFields id="plugin-config-result-clipper-admission"
         provider={{
-          label: props.t('admissionProvider'), hint: props.t('admissionProviderHint'), failedHint,
-          value: admissionProvider, write: write('admissionProvider'),
+          label: props.t('admissionProvider'), hint: props.t('admissionProviderHint'),
+          value: admission.value('admissionProvider') as string,
+          onChange: next => { admission.change('admissionProvider', next) },
         }}
         model={{
-          label: props.t('admissionModel'), hint: props.t('admissionModelHint'), failedHint,
-          value: admissionModel, write: write('admissionModel'),
+          label: props.t('admissionModel'), hint: props.t('admissionModelHint'),
+          value: admission.value('admissionModel') as string,
+          onChange: next => { admission.change('admissionModel', next) },
         }} />
       <EffortRow id="plugin-config-result-clipper-admission-effort" label={props.t('reasoningEffort')}
-        hint={props.t('reasoningEffortHint')} failedHint={failedHint}
-        value={admissionReasoningEffort} options={effortOptions}
-        write={write('admissionReasoningEffort') as (next: ReasoningEffort) => Promise<boolean>} />
+        hint={props.t('reasoningEffortHint')} options={effortOptions}
+        value={admission.value('admissionReasoningEffort') as ReasoningEffort}
+        onChange={next => { admission.change('admissionReasoningEffort', next) }} />
       <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
-        hint={props.t('promptHint')} failedHint={failedHint}
-        saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-        value={admissionPrompt} builtinRule={DEFAULT_ADMISSION_RULE} write={write('admissionPrompt')} reset={props.resetAdmissionPrompt} />
+        hint={props.t('promptHint')} value={admission.value('admissionPrompt') as string}
+        onChange={next => { admission.change('admissionPrompt', next) }} />
     </Group>
 
-    <Group title={props.t('privacyGroup')}>
+    <hr style={DIVIDER_STYLE} />
+
+    <Group title={props.t('privacyGroup')} {...actions(privacy)}>
       <RouteFields id="plugin-config-result-clipper-privacy"
         provider={{
-          label: props.t('privacyProvider'), hint: props.t('privacyProviderHint'), failedHint,
-          value: privacyProvider, write: write('privacyProvider'),
+          label: props.t('privacyProvider'), hint: props.t('privacyProviderHint'),
+          value: privacy.value('privacyProvider') as string,
+          onChange: next => { privacy.change('privacyProvider', next) },
         }}
         model={{
-          label: props.t('privacyModel'), hint: props.t('privacyModelHint'), failedHint,
-          value: privacyModel, write: write('privacyModel'),
+          label: props.t('privacyModel'), hint: props.t('privacyModelHint'),
+          value: privacy.value('privacyModel') as string,
+          onChange: next => { privacy.change('privacyModel', next) },
         }} />
       <EffortRow id="plugin-config-result-clipper-privacy-effort" label={props.t('reasoningEffort')}
-        hint={props.t('reasoningEffortHint')} failedHint={failedHint}
-        value={privacyReasoningEffort} options={effortOptions}
-        write={write('privacyReasoningEffort') as (next: ReasoningEffort) => Promise<boolean>} />
+        hint={props.t('reasoningEffortHint')} options={effortOptions}
+        value={privacy.value('privacyReasoningEffort') as ReasoningEffort}
+        onChange={next => { privacy.change('privacyReasoningEffort', next) }} />
       <CheckRow id="plugin-config-result-clipper-privacy-confirmed" label={props.t('privacyConfirmedLocal')}
-        hint={props.t('privacyConfirmedLocalHint')} failedHint={failedHint}
-        checked={privacyConfirmedLocal}
-        onChange={write('privacyConfirmedLocal') as (next: boolean) => Promise<boolean>} />
+        hint={props.t('privacyConfirmedLocalHint')}
+        checked={privacy.value('privacyConfirmedLocal') as boolean}
+        onChange={next => { privacy.change('privacyConfirmedLocal', next) }} />
       <ChoiceRow id="plugin-config-result-clipper-failure-policy" label={props.t('failurePolicy')}
-        hint={props.t('failurePolicyHint')} failedHint={failedHint}
-        value={failurePolicy} options={[
+        hint={props.t('failurePolicyHint')}
+        value={privacy.value('failurePolicy') as 'passthrough' | 'block'} options={[
           { value: 'passthrough' as const, label: props.t('failurePolicyPassthrough') },
           { value: 'block' as const, label: props.t('failurePolicyBlock') },
-        ]} write={write('failurePolicy') as (next: 'passthrough' | 'block') => Promise<boolean>} />
+        ]} onChange={next => { privacy.change('failurePolicy', next) }} />
       <PromptRow id="plugin-config-result-clipper-privacy-prompt" label={props.t('privacyPrompt')}
-        hint={props.t('promptHint')} failedHint={failedHint}
-        saveLabel={props.t('savePrompt')} resetLabel={props.t('resetPrompt')}
-        value={privacyPrompt} builtinRule={DEFAULT_PRIVACY_RULE} write={write('privacyPrompt')} reset={props.resetPrivacyPrompt} />
+        hint={props.t('promptHint')} value={privacy.value('privacyPrompt') as string}
+        onChange={next => { privacy.change('privacyPrompt', next) }} />
     </Group>
 
-    <Group title={props.t('diagnosticsGroup')}>
+    <hr style={DIVIDER_STYLE} />
+
+    <Group title={props.t('diagnosticsGroup')} {...actions(diagnostics)}>
       <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
-        hint={props.t('debugPathHint')} failedHint={failedHint}
-        value={debugPath} write={write('debugPath')} />
+        hint={props.t('debugPathHint')} value={diagnostics.value('debugPath') as string}
+        onChange={next => { diagnostics.change('debugPath', next) }} />
     </Group>
   </div>
 }
