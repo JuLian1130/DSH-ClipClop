@@ -31,6 +31,7 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
 // 类型专用：`ctx.slots` 的 Context 合并（槽位服务由渲染器提供）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { createModelCatalog } from './catalog.ts'
 import { ResultClipperCard, type ResultClipperSettingOp } from './card.tsx'
 import { en, zh, type ResultClipperLocaleKey } from './locales.ts'
 import { ResultClipperTab, type ResultClipperToggle } from './tab.tsx'
@@ -87,8 +88,13 @@ interface PreferenceSection {
   privacyPrompt: string
 }
 
-/** 注册这两处所需的客户端服务（host 服务不在其中——它们在 host 半）。 */
-export const inject = ['slots', 'locale', 'configForms']
+/**
+ * 注册这两处所需的客户端服务（host 服务不在其中——它们在 host 半）。
+ *
+ * `remote` / `remote.session` 只为配置区的 provider 与 model 候选服务：候选取自 `session.modelCatalog()`，
+ * 也就是「设置 → 模型」那一页的同一个来源。目录读失败时候选为空、输入框退化成手填，不阻塞配置。
+ */
+export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
 
 /**
  * 注册页签与包详情页配置区。
@@ -99,6 +105,7 @@ export function apply(ctx: Context): void {
   // 页签名是 thunk：内置插件那一节每次投影都重读它，所以语言切换不必重新注册。
   const t = ctx.locale.bind(LOCALE_NAMESPACE)
   const form = ctx.configForms.get<PreferenceSection>(PREFERENCE_NAMESPACE)
+  const catalog = createModelCatalog(ctx)
   ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
     'settings.plugins.tab',
     () => ctx.slots.register({
@@ -147,8 +154,10 @@ export function apply(ctx: Context): void {
           admissionPrompt: stringField(form, 'admissionPrompt'),
           privacyPrompt: stringField(form, 'privacyPrompt'),
           debugPath: stringField(form, 'debugPath'),
+          modelCatalog: catalog,
         },
         saveFields: (ops: readonly ResultClipperSettingOp[]) => form.mutate(ops),
+        refreshModelCatalog: () => { catalog.refresh() },
       }),
     }, ResultClipperCard),
   )), 'dsh-result-clipper: bundle config page')

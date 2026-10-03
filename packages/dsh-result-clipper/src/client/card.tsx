@@ -32,6 +32,7 @@ import { REASONING_EFFORT_IDS } from '../reasoning.ts'
 import type { ReasoningEffort } from '../reasoning.ts'
 // 无依赖的共享模块：host 半拼装请求用的是同一份文字，所以框里显示的默认与真正发出的正文不会漂移。
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../rules.ts'
+import type { ModelCatalogProvider } from './catalog.ts'
 import type { ResultClipperLocaleKey } from './locales.ts'
 
 /** 卡片的可写字段，与 host 半 `Config` 的字段同名（也是 settings section 里的键）。 */
@@ -103,7 +104,13 @@ export interface ResultClipperCardInjected {
     privacyPrompt: ObservableSnapshot<string>
     /** debug JSONL 路径；未配置时为空串。 */
     debugPath: ObservableSnapshot<string>
+    /** DSH 当前可路由的 provider 分组与模型；provider 与 model 的候选来自它。 */
+    modelCatalog: ObservableSnapshot<readonly ModelCatalogProvider[]>
   }
+  /**
+   * 重读一次模型目录：卡片挂载时调用，把刚在「设置 → 模型」里配好的 route 带进候选。
+   */
+  refreshModelCatalog(): void
   /**
    * 把一组改动作为**一次原子写入**提交：所有 op 共用一个 revision 栅栏与一次 Host 校验，任一条被拒就整组
    * 不生效。
@@ -325,7 +332,10 @@ function Group(props: {
 
 /**
  * 一行文本参数；编辑只改草稿，由所在组的「保存」写回。
- * @param props - 行文案、提示、草稿值与改动回调。
+ *
+ * 给出 `options` 时挂一份 `datalist`：下拉里是 DSH 已配置的候选，同时保留手填——路由表之外的 model id 也能生效
+ * （DSH 的核心路由接受未列出的 model），目录读不到时候选为空、控件就是原来的纯文本。
+ * @param props - 行文案、提示、草稿值、改动回调与可选的候选。
  * @returns 一行文本控件。
  */
 function TextRow(props: {
@@ -334,6 +344,7 @@ function TextRow(props: {
   readonly hint: string
   readonly value: string
   readonly onChange: (next: string) => void
+  readonly options?: readonly { readonly value: string; readonly label: string }[]
 }) {
   return <section style={ROW_STYLE}>
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
@@ -342,8 +353,12 @@ function TextRow(props: {
       type="text"
       style={INPUT_STYLE}
       value={props.value}
+      list={props.options === undefined ? undefined : `${props.id}-options`}
       onChange={(event) => { props.onChange(event.target.value) }}
     />
+    {props.options !== undefined && <datalist id={`${props.id}-options`}>
+      {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+    </datalist>}
     <div style={HINT_STYLE}>{props.hint}</div>
   </section>
 }
@@ -541,6 +556,9 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const admissionPrompt = props.useAdmissionPrompt(value => value)
   const privacyPrompt = props.usePrivacyPrompt(value => value)
   const debugPath = props.useDebugPath(value => value)
+  const catalog = props.useModelCatalog(value => value)
+  // 卡片挂载时重读一次目录：用户往往是先去「设置 → 模型」建 route、再回来选它。
+  useEffect(() => { props.refreshModelCatalog() }, [])
 
   const summary = useGroupDraft(SUMMARY_FIELDS, {
     routeProvider, routeModel, summaryReasoningEffort, minInlineTokens, maxSummarizeTokens,
@@ -559,6 +577,10 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
   const failedHint = props.t('failedHint')
   const effortOptions = REASONING_EFFORT_IDS.map(choice => ({ value: choice, label: props.t(EFFORT_LABELS[choice]) }))
+  const providerOptions = catalog.map(group => ({ value: group.id, label: group.name }))
+  /** 某个 provider 在目录里的模型候选；provider 还不在目录里时为空（手填仍然可用）。 */
+  const modelOptions = (provider: string): readonly { readonly value: string; readonly label: string }[] =>
+    catalog.find(group => group.id === provider)?.models.map(model => ({ value: model.id, label: model.name })) ?? []
   const saveLabel = props.t('saveGroup')
   const resetLabel = props.t('resetGroup')
   /** 一组底部的按钮与失败提示。 */
@@ -578,11 +600,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         provider={{
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
           value: summary.value('routeProvider') as string,
+          options: providerOptions,
           onChange: next => { summary.change('routeProvider', next) },
         }}
         model={{
           label: props.t('routeModel'), hint: props.t('routeModelHint'),
           value: summary.value('routeModel') as string,
+          options: modelOptions(summary.value('routeProvider') as string),
           onChange: next => { summary.change('routeModel', next) },
         }} />
       <EffortRow id="plugin-config-result-clipper-summary-effort" label={props.t('reasoningEffort')}
@@ -607,11 +631,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         provider={{
           label: props.t('admissionProvider'), hint: props.t('admissionProviderHint'),
           value: admission.value('admissionProvider') as string,
+          options: providerOptions,
           onChange: next => { admission.change('admissionProvider', next) },
         }}
         model={{
           label: props.t('admissionModel'), hint: props.t('admissionModelHint'),
           value: admission.value('admissionModel') as string,
+          options: modelOptions(admission.value('admissionProvider') as string),
           onChange: next => { admission.change('admissionModel', next) },
         }} />
       <EffortRow id="plugin-config-result-clipper-admission-effort" label={props.t('reasoningEffort')}
@@ -630,11 +656,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         provider={{
           label: props.t('privacyProvider'), hint: props.t('privacyProviderHint'),
           value: privacy.value('privacyProvider') as string,
+          options: providerOptions,
           onChange: next => { privacy.change('privacyProvider', next) },
         }}
         model={{
           label: props.t('privacyModel'), hint: props.t('privacyModelHint'),
           value: privacy.value('privacyModel') as string,
+          options: modelOptions(privacy.value('privacyProvider') as string),
           onChange: next => { privacy.change('privacyModel', next) },
         }} />
       <EffortRow id="plugin-config-result-clipper-privacy-effort" label={props.t('reasoningEffort')}

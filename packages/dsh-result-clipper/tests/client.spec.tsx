@@ -59,7 +59,7 @@ function rowSwitch(container: HTMLElement, label: string): Element {
 }
 
 /** 装一份夹具并登记收场。 */
-async function mounted(): Promise<ClientFixture & { readonly form: StubForm }> {
+async function mounted(): Promise<ClientFixture & { readonly form: StubForm, readonly catalogCalls: () => number }> {
   const fixture = await mountClient()
   open.push(fixture)
   return fixture
@@ -217,6 +217,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       t: fixture.t,
       ...boundHooks(face.hooks),
       saveFields: face.saveFields,
+      refreshModelCatalog: face.refreshModelCatalog,
     } as unknown as ResultClipperCardProps
     const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
     const { container } = render(<CardComponent {...props} />)
@@ -289,6 +290,73 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(groupOf(container, '诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
     // 四个分组之间三条长横线：三个模型组各有自己的边界，诊断组同样被隔开。
     expect([...container.querySelectorAll('hr')]).toHaveLength(3)
+  })
+
+  it('provider 与 model 有候选：来自 DSH 已配置的 route，model 候选跟着该角色的 provider 走', async () => {
+    const { fixture, container } = await renderPage()
+    /** 某个输入框挂的候选值。 */
+    const optionsOf = (inputId: string): string[] => {
+      const input = container.querySelector(`#${inputId}`) as HTMLInputElement
+      const list = input.getAttribute('list')
+      if (list === null) throw new Error(`fixture: input ${inputId} has no candidate list`)
+      return [...container.querySelectorAll(`#${list} option`)].map(option => (option as HTMLOptionElement).value)
+    }
+
+    // provider 候选就是目录里的 route；摘要组此刻还没选 provider，所以 model 候选为空。
+    expect(optionsOf('plugin-config-result-clipper-route-provider')).toEqual(['local', 'remote'])
+    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual([])
+    // 准入与隐私两组同样有 provider 候选（留空 = 跟随摘要 route 仍然可行：框可以清空）。
+    expect(optionsOf('plugin-config-result-clipper-admission-provider')).toEqual(['local', 'remote'])
+    expect(optionsOf('plugin-config-result-clipper-privacy-provider')).toEqual(['local', 'remote'])
+
+    // 选了 provider 之后，model 候选换成那条 route 的模型；换 provider 就换一批。
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'local' } })
+    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual(['qwen3', 'llama3'])
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'remote' } })
+    expect(optionsOf('plugin-config-result-clipper-route-model')).toEqual(['big-model'])
+    // 换候选只是改草稿，不写任何字段。
+    expect(fixture.form.writes).toEqual([])
+    expect(fixture.form.mutations).toEqual([])
+  })
+
+  it('卡片挂载时重读一次目录：刚在「设置 → 模型」里配好的 route 能进候选', async () => {
+    const fixture = await mounted()
+    // 装载时读一次。
+    expect(fixture.catalogCalls()).toBe(1)
+    fixture.form.value = { ...fixture.form.value }
+    const entry = only(fixture, 'plugins.bundle.config')
+    const face = entry.options.inject!() as ResultClipperCardInjected
+    const props = {
+      view: 'page', t: fixture.t, ...boundHooks(face.hooks), saveFields: face.saveFields,
+      refreshModelCatalog: face.refreshModelCatalog,
+    } as unknown as ResultClipperCardProps
+    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
+    render(<CardComponent {...props} />)
+    // 挂载后再读一次。
+    expect(fixture.catalogCalls()).toBe(2)
+  })
+
+  it('目录读不到时候选为空，provider 与 model 仍可手填并保存', async () => {
+    const fixture = await mountClient([])
+    open.push(fixture)
+    const entry = only(fixture, 'plugins.bundle.config')
+    const face = entry.options.inject!() as ResultClipperCardInjected
+    const props = {
+      view: 'page', t: fixture.t, ...boundHooks(face.hooks), saveFields: face.saveFields,
+      refreshModelCatalog: face.refreshModelCatalog,
+    } as unknown as ResultClipperCardProps
+    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
+    const { container } = render(<CardComponent {...props} />)
+
+    expect([...container.querySelectorAll('datalist option')]).toHaveLength(0)
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-provider')!, { target: { value: 'hand-typed' } })
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-route-model')!, { target: { value: 'unlisted-model' } })
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['routeProvider'], value: 'hand-typed' },
+      { op: 'set', path: ['routeModel'], value: 'unlisted-model' },
+    ]])
   })
 
   it('编辑只改草稿：不点该组的「保存」，一个字段都不落盘', async () => {

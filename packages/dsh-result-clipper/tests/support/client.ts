@@ -172,14 +172,31 @@ export interface ClientFixture {
   dispose(): Promise<void>
 }
 
+/** 目录夹具里一个 provider 分组：与 `session.modelCatalog()` 返回的 `groups` 同形。 */
+export interface StubCatalogProvider {
+  readonly id: string
+  readonly name: string
+  readonly models: readonly { readonly id: string; readonly name: string }[]
+}
+
+/** 默认目录：一条 route 两个模型——用例要看「候选来自 DSH 目录」时用得上，也可以整份换掉。 */
+export const CATALOG_DEFAULT: readonly StubCatalogProvider[] = [
+  { id: 'local', name: '本地 route', models: [{ id: 'qwen3', name: 'Qwen3' }, { id: 'llama3', name: 'Llama3' }] },
+  { id: 'remote', name: '远端 route', models: [{ id: 'big-model', name: 'Big Model' }] },
+]
+
 /**
  * 装出一份浏览器半。
+ * @param catalog - 模型目录替身给出的 provider 分组；默认 {@link CATALOG_DEFAULT}。
  * @returns 夹具、settings 表单替身与注册表。
  */
-export async function mountClient(): Promise<ClientFixture & { readonly form: StubForm }> {
+export async function mountClient(
+  catalog: readonly StubCatalogProvider[] = CATALOG_DEFAULT,
+): Promise<ClientFixture & { readonly form: StubForm, readonly catalogCalls: () => number }> {
   const configFormsEntry = new StubForm()
   const entries = new Map<string, CapturedEntry[]>()
   let active: 'zh' | 'en' = 'zh'
+  let catalogCalls = 0
   const slots = {
     inject: (slot: string, register: () => () => void) => register(),
     register: (options: CapturedEntry['options'], component: unknown) => {
@@ -198,10 +215,21 @@ export async function mountClient(): Promise<ClientFixture & { readonly form: St
     whileServed: (namespaces: readonly string[], register: (served: ReadonlySet<string>) => () => void) =>
       register(new Set(namespaces)),
   }
+  // `ctx.remote.<ns>` 读的是 remote 服务值上的属性，而 inject 的 `'remote.<ns>'` 走 cordis 的扁平服务名——
+  // 两条路都要给（与 `dsh-reasoning-pruner` 的浏览器半夹具同一写法）。
+  const session = {
+    modelCatalog: async () => {
+      catalogCalls += 1
+      return { ok: true, value: { groups: catalog } }
+    },
+  }
+  const remote = { session }
   const ctx = new Context()
   ctx.reflect.provide('slots', slots)
   ctx.reflect.provide('locale', locale)
   ctx.reflect.provide('configForms', configForms)
+  ctx.reflect.provide('remote', remote)
+  ctx.reflect.provide('remote.session', session)
   await ctx.plugin({ inject: [...client.inject], apply: client.apply as (ctx: Context) => void })
   return {
     ctx,
@@ -209,6 +237,7 @@ export async function mountClient(): Promise<ClientFixture & { readonly form: St
     t: (key) => (active === 'zh' ? zh : en)[key],
     entries: (slot) => entries.get(slot) ?? [],
     setLocale: (next) => { active = next },
+    catalogCalls: () => catalogCalls,
     dispose: async () => { await ctx.fiber.dispose() },
   }
 }
