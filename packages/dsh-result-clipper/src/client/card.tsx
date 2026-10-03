@@ -599,6 +599,20 @@ const PRIVACY_FIELDS: readonly GroupFieldSpec[] = [
 /** 诊断组的字段：debug 日志路径。 */
 const DIAGNOSTIC_FIELDS: readonly GroupFieldSpec[] = [{ field: 'debugPath', kind: 'text' }]
 
+/** 一条 route 的两个字段名；`confirm` 只有隐私组有——「已确认为本地」是对这条 route 的声明。 */
+interface RouteFields {
+  readonly provider: ResultClipperCardField
+  readonly model: ResultClipperCardField
+  readonly confirm?: ResultClipperCardField
+}
+
+/** 三条 route 的字段名：`changeRoute` 与三个角色的 route 行共用一份。 */
+const SUMMARY_ROUTE: RouteFields = { provider: 'routeProvider', model: 'routeModel' }
+const ADMISSION_ROUTE: RouteFields = { provider: 'admissionProvider', model: 'admissionModel' }
+const PRIVACY_ROUTE: RouteFields = {
+  provider: 'privacyProvider', model: 'privacyModel', confirm: 'privacyConfirmedLocal',
+}
+
 /**
  * 渲染这个配置区。
  * @param props - 注入的读数与原子写入路径、页面文案。
@@ -663,21 +677,26 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     saveLabel, resetLabel, onSave: group.save, onReset: group.reset,
   })
   /**
-   * 改一个角色的 provider：model 跟着走——当前 model 不是新 provider 的候选就清空，不留跨 provider 的残缺配对；
-   * provider 被清空时同样清掉 model（摘要组＝不摘要，另两组＝跟随摘要模型）。目录读不到时不猜，保留手填值。
+   * 改一条 route 的 provider 或 model。两件事跟着走：
+   *
+   * - **确认作废**：隐私组的「已确认为本地」是对**具体 route** 的声明（`src/index.ts` 只读那个布尔、不校验它对应
+   *   哪条 route），所以 route 任一半变了就清掉草稿里的确认位——否则换一条没确认过的 route 会沿用旧确认继续放行，
+   *   把敏感正文发往外部网络。只有隐私组传 `confirm`。
+   * - **model 跟着 provider**：换 provider 后当前 model 不是它的候选就清空，不留跨 provider 的残缺配对；provider
+   *   被清空时同样清空（摘要组＝不摘要，另两组＝跟随摘要模型）。目录读不到（候选为空）时不猜，保留手填值，
+   *   免得手填 provider + model 的部署变成不可配置。
    */
-  const changeProvider = (
-    group: DraftedGroup,
-    providerField: ResultClipperCardField,
-    modelField: ResultClipperCardField,
-    next: string,
-  ): void => {
-    group.change(providerField, next)
-    const current = group.value(modelField)
+  const changeRoute = (group: DraftedGroup, route: RouteFields, field: 'provider' | 'model', next: string): void => {
+    const target = field === 'provider' ? route.provider : route.model
+    group.change(target, next)
+    // 只有真的换了取值才会走到这里：React 对受控控件的同值事件不再派发 onChange（value tracker）。
+    if (route.confirm !== undefined) group.change(route.confirm, false)
+    if (field === 'model') return
+    const current = group.value(route.model)
     if (typeof current !== 'string' || current === '') return
     const known = modelOptions(next)
     if (next === '' || (known.length > 0 && !known.some(option => option.value === current))) {
-      group.change(modelField, '')
+      group.change(route.model, '')
     }
   }
 
@@ -694,7 +713,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
           value: summary.value('routeProvider') as string, options: providerOptions,
           emptyLabel: props.t('routeUnset'),
-          onChange: next => { changeProvider(summary, 'routeProvider', 'routeModel', next) },
+          onChange: next => { changeRoute(summary, SUMMARY_ROUTE, 'provider', next) },
         }}
         model={{
           ...routeText, id: 'plugin-config-result-clipper-route-model',
@@ -702,7 +721,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           value: summary.value('routeModel') as string,
           options: modelOptions(summary.value('routeProvider') as string),
           emptyLabel: props.t('routeUnset'),
-          onChange: next => { summary.change('routeModel', next) },
+          onChange: next => { changeRoute(summary, SUMMARY_ROUTE, 'model', next) },
         }}
         effort={{
           id: 'plugin-config-result-clipper-summary-effort', label: props.t('reasoningEffort'),
@@ -738,7 +757,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
           value: admission.value('admissionProvider') as string, options: providerOptions,
           emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { changeProvider(admission, 'admissionProvider', 'admissionModel', next) },
+          onChange: next => { changeRoute(admission, ADMISSION_ROUTE, 'provider', next) },
         }}
         model={{
           ...routeText, id: 'plugin-config-result-clipper-admission-model',
@@ -746,7 +765,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           value: admission.value('admissionModel') as string,
           options: modelOptions(admission.value('admissionProvider') as string),
           emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { admission.change('admissionModel', next) },
+          onChange: next => { changeRoute(admission, ADMISSION_ROUTE, 'model', next) },
         }}
         effort={{
           id: 'plugin-config-result-clipper-admission-effort', label: props.t('reasoningEffort'),
@@ -769,7 +788,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
           value: privacy.value('privacyProvider') as string, options: providerOptions,
           emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { changeProvider(privacy, 'privacyProvider', 'privacyModel', next) },
+          onChange: next => { changeRoute(privacy, PRIVACY_ROUTE, 'provider', next) },
         }}
         model={{
           ...routeText, id: 'plugin-config-result-clipper-privacy-model',
@@ -777,7 +796,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           value: privacy.value('privacyModel') as string,
           options: modelOptions(privacy.value('privacyProvider') as string),
           emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { privacy.change('privacyModel', next) },
+          onChange: next => { changeRoute(privacy, PRIVACY_ROUTE, 'model', next) },
         }}
         effort={{
           id: 'plugin-config-result-clipper-privacy-effort', label: props.t('reasoningEffort'),

@@ -386,6 +386,42 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(model().value).toBe('')
   })
 
+  it('隐私 route 换一半就作废「已确认为本地」：确认是对具体 route 的声明，不跟着 route 走', async () => {
+    const { fixture, container } = await renderPage({
+      privacyProvider: 'local', privacyModel: 'qwen3', privacyConfirmedLocal: true,
+    })
+    const confirmed = (): HTMLInputElement =>
+      container.querySelector('#plugin-config-result-clipper-privacy-confirmed input') as HTMLInputElement
+    expect(confirmed().checked).toBe(true)
+
+    // 换成另一条 route：确认位在草稿里被清掉（host 侧只读这个布尔、不校验它对应哪条 route，
+    // 沿用旧确认就会把敏感正文发往没确认过的 route）。
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-privacy-provider')!, { target: { value: 'remote' } })
+    expect(confirmed().checked).toBe(false)
+    await fireEvent.click(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['privacyProvider'], value: 'remote' },
+      { op: 'set', path: ['privacyModel'], value: '' },
+      { op: 'set', path: ['privacyConfirmedLocal'], value: false },
+    ]])
+    expect(fixture.form.value).toMatchObject({ privacyProvider: 'remote', privacyModel: '', privacyConfirmedLocal: false })
+  })
+
+  it('只换 model 也作废确认：同一条 provider 换模型同样是一次 route 变更', async () => {
+    const { fixture, container } = await renderPage({
+      privacyProvider: 'local', privacyModel: 'qwen3', privacyConfirmedLocal: true,
+    })
+    await fireEvent.change(container.querySelector('#plugin-config-result-clipper-privacy-model')!, { target: { value: 'llama3' } })
+    expect((container.querySelector('#plugin-config-result-clipper-privacy-confirmed input') as HTMLInputElement).checked).toBe(false)
+    await fireEvent.click(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['privacyModel'], value: 'llama3' },
+      { op: 'set', path: ['privacyConfirmedLocal'], value: false },
+    ]])
+  })
+
   it('三个角色的下拉都能把取值清空：第一项就是清空，选中并保存后字段变空串', async () => {
     const { fixture, container } = await renderPage({ admissionJudge: true, routeProvider: 'local', routeModel: 'qwen3' })
     /** 某个下拉第一项（置空项）的文案与取值。 */
@@ -442,6 +478,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 两个阈值都注明单位是 token。
     expect(fixture.t('minInlineTokens')).toContain('token')
     expect(fixture.t('maxSummarizeTokens')).toContain('token')
+    // 隐私确认位是对具体 route 的声明：文案要说清「换了 route 就作废」。
+    expect(fixture.t('privacyConfirmedLocalHint')).toContain('作废')
 
     // 英文侧同样按这些要求钉住（它不经 `fixture.t` 渲染，所以要单独断言，避免单独漂移）。
     expect(en.routeUnset).toContain('clear')
@@ -463,6 +501,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     }
     expect(en.minInlineTokens).toContain('tokens')
     expect(en.maxSummarizeTokens).toContain('tokens')
+    expect(en.privacyConfirmedLocalHint).toContain('invalidates the confirmation')
 
     // 页面上渲染的就是这些文案（简介与阈值标题都进了 DOM）。
     expect(groupOf(container, '摘要模型').textContent).toContain(fixture.t('summaryGroupHint'))
