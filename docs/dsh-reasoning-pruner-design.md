@@ -308,7 +308,7 @@ interface ReasoningPrunePayload {
 
 | # | 类型 | 为何安全 | 残余风险 |
 |---|---|---|---|
-| 1 | `web/deepseek-search-llm-request` | 全仓**没有任何** payload 读取者；有生产者（`packages/web/web-search-deepseek/src/index.ts:118-121` 的 `recordRequest`），所以真实事件与我们的事件共存是既有事实；`packages/web` 下**不存在** invariant 文件 | 将来可能有人读 `endpoint`/`apiVersion`/`body`；且 `session-log-deepseek` 会把 `data` 原样上传。**注意**：v0→v1 迁移边**有**该类型的 payload 语义校验（要求三个字段），但它**不在**当前 v4 读路径上——已核实，见下 |
+| 1 | `web/deepseek-search-llm-request` | 全仓**没有任何** payload 读取者；有生产者（`recordRequest` 处理器在 `packages/web/web-search-deepseek/src/index.ts:130-135`，它 `session.append('web/deepseek-search-llm-request', request)`；发射点在 `src/provider.ts:230-234`），所以真实事件与我们的事件共存是既有事实；`packages/web` 下**不存在** invariant 文件 | 将来可能有人读 `endpoint`/`apiVersion`/`body`；且 `session-log-deepseek` 会把 `data` 原样上传。**注意**：v0→v1 迁移边**有**该类型的 payload 语义校验（要求三个字段），但它**不在**当前 v4 读路径上——已核实，见下 |
 | 2 | `deliverables/presented` | 唯一消费者带守卫（`client/ui-deliverables/.../turn-deliverables.ts:170` 的 `isPresentedData`，不匹配返回 null） | 避开 `turn`/`callId`/`files` 这些键（它的真实 payload **就带** `turn`） |
 | 3 | `workspace/changes` | 同上，带守卫 `isChangesEvent` | 真实 payload **是** `{turn}`，我们的必须省略；带 `turn >= 1` 的整数会触发一次无对应摘要的 changelog 拉取 |
 | 4 | `schedule/change` | **全仓无生产者**，所有 bundle 里 `disabled: true`，唯一读取者 warn 兜底 | 开发面的 `schedule/invariant.ts` 会在启动时折叠全日志并 `fail()` |
@@ -326,7 +326,7 @@ interface ReasoningPrunePayload {
 
 ### **两条必须在实现前处理的约束**（普查发现，我已独立复核）
 
-1. **`session-log-deepseek` 默认开启且原样上传 `data`**（`enabled` 默认 `true`，`packages/session/session-log-deepseek/src/index.ts:52`；base bundle 挂载于 `packages/bundle/base/cordis.patch.yml:43`）。⇒ 借用的 payload **不得含会话内容**，否则会随日志上传离开本机。我们的 payload 只放 `seq` 数组，天然满足；但这条要写成硬约束，因为它会随「顺手多记一点上下文」而破。
+1. **`session-log-deepseek` 默认开启且原样上传 `data`**（`enabled` 默认 `true`，`packages/session/session-log-deepseek/src/index.ts:52`；base bundle 挂载于 `packages/bundle/base/cordis.patch.yml:43`）。⇒ 借用的 payload **不得含会话内容**，否则会随日志上传离开本机。我们的 payload 只放 `seq` 数组，天然满足；但这条要写成硬约束，因为它会随「顺手多记一点上下文」而破。**唯一的例外**是激活点 ⑤ 的还原/停用载荷：它额外带 provider、model、错误码、措辞类别（枚举值）与被还原的 seq 列表，仍不含任何来自会话的文本（见规格「激活点 ⑤ · 事后可查」）。
 2. **脱离折叠看不到插件注册的投影**：`session-query`（`documents.ts:60`、`index.ts:191`、`tracing.ts:187`）与迁移代际校验（`generation.ts:543`）用的是**硬编码的首方投影表** `currentSessionMessageProjections`（`session-format-catalog/src/message-projections.ts:7`，当前只有 `image-offload`）。
    - **模型可见路径是对的**：正常重载走 `SessionStore.prepare` → `Session.fromRestore(..., this.projections)`（`index.ts:1032-1038`），用的是插件注册的投影。
    - **受影响的是辅助读者**：会话检索/文档/传播与迁移校验会得到**未裁剪**的历史。这不是「日志读不出来」，而是「辅助读者降级」。
