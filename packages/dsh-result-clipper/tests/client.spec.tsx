@@ -369,8 +369,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 隐私：不说「要求确认的角色」这类内部口径，说清设成本地模型就不会外流。
     expect(fixture.t('privacyGroupHint')).toContain('本地模型')
     expect(fixture.t('privacyGroupHint')).toContain('不会发往外部网络')
-    // 三份简介都不出现「角色」这类内部说法（用户在反馈里点名的就是这个口吻）。
-    for (const hint of ['summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
+    // 卡片上的说明都不出现「角色」这类内部说法（用户在反馈里点名的就是这个口吻）。
+    for (const hint of ['modelSourceHint', 'summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
       expect(fixture.t(hint)).not.toContain('角色')
     }
     // 两个阈值都注明单位是 token。
