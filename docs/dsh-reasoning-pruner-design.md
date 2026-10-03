@@ -140,7 +140,7 @@ interface ReasoningPrunePayload {
 - DSH 侧的块类型是 `{ type: 'reasoning', text }`（`packages/llm/llm/src/types.ts:67-71`）。
 - pi-ai 组装历史 assistant 消息时先过滤：`thinkingBlocks.filter(block => block.thinking.trim().length > 0)`（pi-ai 的 `dist/api/openai-completions.js:979`），再由**存活的**块的 `thinkingSignature` 决定写哪个线上字段（`:998-1005`）。
 - 因此**把文本置空**仍有签名存活，会走 `preservedReasoningDetails` 分支把 `reasoning_details` 原 blob 照送（`:1041-1042`）——线上零节省，而本地计量会报出节省。空格更差：`trim()` 让它与空串完全等价。
-- 结论：裁剪 = **移除块**。移除后字段由 pi-ai 的 compat 补丁补 `""`（`:1044-1047`，`requiresReasoningContentOnAssistantMessages: isDeepSeek` 在 `:1286`）；不满足该条件时字段干脆缺席，即规格闸门 A 的 C 变体。
+- 结论：裁剪 = **移除块**。移除后字段由 pi-ai 的 compat 补丁补 `""`（`:1044-1047`，`requiresReasoningContentOnAssistantMessages: isDeepSeek` 在 `:1268`）；不满足该条件时字段干脆缺席，即规格闸门 A 的 C 变体。
 
 ### **必须与 replay 信封同步**（本设计最容易踩的坑）
 
@@ -204,11 +204,11 @@ interface ReasoningPrunePayload {
 **为什么需要它**：裁剪后线上发的是「字段在、内容为空」（或某些网关上是字段缺席）的形状。有外部报告表明 DeepSeek V4 Pro 类端点在思考模式 + 携带 `tools` 时**拒收空串**（见「验证状态 · 裁剪拒收的外部证据」）。一旦发生，该会话此后每个请求都带着同一个形状，会**持续 400**，而现有实现只在 `failure.code === CONTEXT_WINDOW_EXCEEDED` 上动作（`packages/dsh-reasoning-pruner/src/index.ts:87-90`）——也就是说会话会卡死，且裁掉的步骤无法自行恢复。
 
 - **触发判据**（三把锁）：`failure.code` 命中「请求被拒」这一支、`failure.message` 命中推理回传措辞、且本会话已存在裁剪事件。第一把锁的依据：pi-ai 把 400 与 `invalid request` 归一成 `INVALID_REQUEST`（`packages/llm/llm-pi-ai/src/stream.ts:49`，字面量、非导出常量），其余码已被 `classifyPiAiError` 分流到 AUTH / QUOTA / RATE_LIMIT / SERVER / TIMEOUT / TRANSPORT；**该路径上 `failure.status` 是空的**（failure 对象只带 `message`/`code`，`stream.ts:125`），所以判据只能建在 `code` + 文本上。放宽到 `PI_AI_ERROR` 是因为网关正文不含 `400`/`invalid request` 字样时会被归到那一档。
-- **还原的表达 = 追加一条新事件类型**，其投影把原文放回：`deriveEventMessage(event)` **不传**第二个参数时跳过投影、直接返回事件自带的 `event.data.message`（`packages/core/session/src/surface.ts:120-127`），而 fold 用普通 `Map.set` 写入 `projectedMessages`（`surface.ts:580`），**后来者覆盖先前的**。⇒ 不需要外部状态、不需要前瞻、增量折叠与全量折叠天然一致。两条纪律：
+- **还原的表达 = 复用已知承载类型、追加一条判别载荷**（`web/deepseek-search-llm-request` 上的 `{clipclop: {restore: [… ]}}` 形状；**不是**新事件类型），其投影把原文放回：`deriveEventMessage(event)` **不传**第二个参数时跳过投影、直接返回事件自带的 `event.data.message`（`packages/core/session/src/surface.ts:120-127`），而 fold 用普通 `Map.set` 写入 `projectedMessages`（`surface.ts:580`），**后来者覆盖先前的**。⇒ 不需要外部状态、不需要前瞻、增量折叠与全量折叠天然一致。**为什么不能自建新类型**：见上文「为什么不走 `ignorable`」——仓外插件类型按构造不在生成集合 `KNOWN_SESSION_EVENT_TYPES` 里（`known-event-types.ts:2-19`），运行期 `Session.append` 的信封又没有 `ignorable`（`packages/core/session/src/index.ts:722-746`），于是冷读会被 `validateStoredEvents` 整段拒收（`packages/session/session-persistence/src/storage-contract.ts:75-79`）；复用已知类型 + 自有投影是该节 `:127` 已给出的唯一可行结论。两条纪律：
   - 投影**不得**读 `context.events` 里候选及其之后的事件——这只是文档契约（`surface.ts:25-26`），结构上 `events` 就是整个日志数组（`surface.ts:606-607`、`:645-650`），靠纪律而不是靠长度保证。
   - fold **不校验**投影返回的键是否仍是当前表面节点（`surface.ts:573-591` 只做 `Map.set`），任意 seq 都会被静默写入。
 - **还原范围**：只还原**仍是当前表面节点**的目标。被 surface replace（compaction）遮蔽过的 seq 不会从 `projectedMessages` 里被删除（`surface.ts:576-578` 只改 `nodes`，`:614` 只做整体拷贝，全文无 `.delete(`），但它已不在 `nodes` 里、不再进入请求，所以既不是肇因、写回也无效——不动它即可。
-- **停用**：`persist.ts` 的选区与去重本来就全部从日志重建，读到还原/停用事件后不再推进边界即可覆盖 ①②④ 三个入口。三个入口产生的是同一种事件与同一种线上形状，只停其一没有意义。
+- **停用**：`packages/dsh-reasoning-pruner/src/persist.ts` 的选区与去重本来就全部从日志重建，读到还原/停用事件后不再推进边界即可覆盖 ①②④ 三个入口。三个入口产生的是同一种事件与同一种线上形状，只停其一没有意义。
 - **重试**：返回 `{kind: 'retry'}`（`RequestErrorAction = { kind: 'retry' } | undefined`，`packages/core/agent/src/runtime-types.ts:122`）。waterfall 取**最外层**监听器的返回值（`vendor/cordis/src/events.ts:234-243`），本插件 `{ prepend: true }` 即最外层，因此可以在 `await next()` 之后改写决议。**同一步的重试能看到还原结果**：`buildRequest` 每次都重新 `session.deriveMessages()` 取表面（`packages/core/agent-loop/src/agent.ts:671`），而「钩子里 append、随后请求即携带」这条不变量已由 ② 证明（pre-step 落盘后本步请求就是裁剪版）。上界必须是**每 `(turn, step)` 一次**，否则一个另有成因的 400 会变成死循环。
 - **中止也落盘**：「端点拒收这个形状」是与「这次要不要立刻重试」无关的观测；不落盘会在下一次请求里再撞一次。
 - **同时收紧裁剪资格**（本激活点的前置修正）：要求移除推理块后**至少还剩一个内容块**。pi-ai 会整条丢弃「既无 content 也无 tool_calls」的 assistant 消息（`@earendil-works/pi-ai/dist/api/openai-completions.js:1048-1058`），否则裁剪会把一条只有推理块的消息**整条从请求里删掉**——那是「移除推理块」这个承诺之外的行为。
@@ -244,7 +244,7 @@ interface ReasoningPrunePayload {
 
 - pi-ai 的官方 DeepSeek 目录把该要求写成硬约束，填充值是**空串**：`deepseek.json` 的三个 `deepseek-v4-*` 条目**全部**带 `compat: { requiresReasoningContentOnAssistantMessages: true, thinkingFormat: "deepseek", … }`（`node_modules/.pnpm/@earendil-works+pi-ai@0.85.1*/…/dist/providers/data/deepseek.json`）。
 - 字段的文档注释直接写明语义：**「Whether replayed assistant messages need an empty `reasoning_content` while reasoning is on」**（`packages/llm/llm-pi-ai/src/catalog.ts:385-386`）；DSH 自己的测试为这条继承关系背书（`packages/llm/llm-pi-ai/tests/catalog.spec.ts:823-825`）。
-- 实现按此填充，条件是「该 compat 位 + `model.reasoning` + 字段仍缺席」：`assistantMsg.reasoning_content = ""`（pi-ai `dist/api/openai-completions.js:1044-1047`）；自动检测条件是 `provider === "deepseek" || baseUrl.toLowerCase().includes("deepseek.com")`（同文件 `:1249`，赋给该位在 `:1286`）。
+- 实现按此填充，条件是「该 compat 位 + `model.reasoning` + 字段仍缺席」：`assistantMsg.reasoning_content = ""`（pi-ai `dist/api/openai-completions.js:1046`）；自动检测条件是 `provider === "deepseek" || baseUrl.toLowerCase().includes("deepseek.com")`（同文件 `:1232`，赋给该位在 `:1268`）。**版本坐标**：checkout 里同时存在 `@earendil-works+pi-ai@0.85.1` 与 `0.87.1` 两份副本，`llm-pi-ai` 实际解析的是 **0.87.1**（`:1232`/`:1268`）；0.85.1 副本的对应行是 `:1249`/`:1286`。本文一律按**解析到的那一份**写，遇到旧行号按此换算。
 - ⇒ 只要一条历史 assistant 消息**没有非空 thinking 块**（模型切换、跨 provider 历史、降级重建都会产生），生产代码就会发 `reasoning_content: ""`，即规格闸门 A 的 **B 变体**。**若端点拒收空串，这个 compat 位就是自毁的**——它存在的唯一目的就是满足这条要求。
 
 因此准确的验证状态是：
@@ -263,9 +263,10 @@ interface ReasoningPrunePayload {
 **未验证、明确不断言**（与上一节并列，均属激活点 ⑤ 的前置）
 
 - `retain()` 之后 host 侧是否为每个引用建立订阅（`retainedBy` 计数暗示按 `referenceCount > 0` 建，未证实）；机制 A 只 retain 当前会话，所以不依赖这条。
-- 客户端半的类型图能否看到宿主半对 `SessionEventMap` 的增强（新事件类型的合并声明先例：`packages/session/session-title/src/index.ts:72`）。看不到就得在客户端半本地再合并一次；这是实现细节，不影响设计。
+- 客户端半的判别方式：复用已知承载类型后，客户端**不需要** `SessionEventMap` 的合并声明（事件类型是既有的），但必须靠**载荷形状**把本插件事件与宿主自己的同类型事件区分开（该类型的真实生产者是 `web-search-deepseek` 的 `recordRequest`）。判别规则要在宿主半与客户端半之间保持一致；这是实现细节，不影响设计。
 - 会话事件窗口带 `hasMore` 分页（`SessionEventWindow`，`packages/extensions/cordis-client-runner/src/client/api-catalog.ts:859-862`）：极端长会话 + 重载后，停用事件可能落在已加载窗口之外，机制 A 会漏提示。**不影响裁剪功能本身**，只影响那一次提示。
 - 本仓**没有**任何断言「被投影消息对象身份」的测试（只有深比较、源事件不被改动、以及未投影路径的 `toBe`：`packages/core/session/tests/message-projections.spec.ts:52,59,115`）。「还原拿到的是原文对象」是插件侧新引入的契约，必须由本插件自己的测试钉住。
+- **三词措辞锁在真实拒收端点上的命中率**：网关可以改写或翻译错误正文，不命中时 ⑤ 永不触发、会话继续卡死（夹具构造覆盖不到这一点）。验证方法＝对一个已知会拒收裁剪版请求的端点发一次该形状的请求，读 `failure.code` 与 `failure.message`；通过条件＝`message` 同时含 `reasoning[_ ]content`、`thinking mode`、`passed back`（或据实测收窄匹配集）；失败分支＝正文不含该措辞则第二把锁在那一类网关上失效，须回到「按端点声明不可裁剪」或改用更宽的结构判据——**不得**在没有实测的情况下声称三把锁在真实端点上成立。
 
 **基准：最新版本是一个下限**
 
