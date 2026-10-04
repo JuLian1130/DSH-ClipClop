@@ -81,22 +81,22 @@ Desktop profile 由 Electron 管理时，应在该 profile 目录中使用其安
 - **关闭就是真关闭**：摘要关着时，模型即使自己写了 `extract` 也不认（不跳过准入、不换规则正文）——否则"关闭"只是不宣传，而不是不生效。
 - **带目标的调用不查也不写摘要 memo**：memo 的键只有（工具名 + 正文 hash），不含目标；复用会把另一种问法的摘要当答案返回。
 - **隐私闸门开着时**，同一份隐私规则正文之外再固定追加一段：目标只决定"要拿回什么"，不降低隐私门槛；模型要按目标**只交回不牵涉隐私的那部分**（涉隐私的值用占位或省略），目标必须依赖隐私内容、脱敏后满足不了时就照旧返回 `sensitive`/`uncertain`，走既有的拦截或失败策略。这一段的文字由插件固定、不另设第二份可编辑提示词；用户的隐私政策仍写在同一份隐私规则正文里，两种模式共用。
-- **安装方式按工具分开**（实测见 `.scratch/dsh-result-clipper/exp2/RESULTS.md`）：`read` 只用 agent 作用域遮蔽（它与 `write`/`edit`/`read_image` 同一条目，禁用会连坐）；`bash` / `pwsh` / `web_fetch` 各自独占一个条目，所以部署可以先用 profile patch 关掉原生条目，插件再把它挂回来并**就地**补参数（注册表没有替换 API）；原生还在时自动回落到遮蔽。
-- **想让插件成为唯一注册者（"真单关"）**：在保存 preset 的地方，把三种 shell / 取回条目一起禁用，插件会按平台决定挂哪一个 shell——`bash` 只在非 Windows、`pwsh` 只在 Windows（判据与 base bundle 的 `!!js process.platform` 同一套）：
+- **安装方式按工具分开**（实测见 `.scratch/dsh-result-clipper/exp2/RESULTS.md`）：`read` 与 `pwsh` 只用 agent 作用域遮蔽（`read` 与 `write`/`edit`/`read_image` 同一条目，禁用会连坐；`pwsh` 的工具包不是本包的依赖，运行期 `import` 解析不到，见 `.scratch/dsh-result-clipper/design-draft-local-task-context.md` §22）；`bash` / `web_fetch` 各自独占一个条目，所以部署可以先用 profile patch 关掉原生条目，插件再把它挂回来并**就地**补参数（注册表没有替换 API）；原生还在时自动回落到遮蔽。
+- **想让插件成为唯一注册者（"真单关"）**：在保存 preset 的地方关掉 `tool-bash` 的条目、并把 `tool-web` 的取回关掉；插件按平台决定挂哪一个 shell——`bash` 只在非 Windows（判据与 base bundle 的 `!!js process.platform` 同一套），`pwsh` 不接管、由遮蔽补参数：
   ```yaml
         - id: tool-bash
           name: '@deepseek-ai/dsh-tool-bash'
           disabled: true
         - id: tool-pwsh
           name: '@deepseek-ai/dsh-tool-pwsh'
-          disabled: true
+          disabled: !!js process.platform !== 'win32'   # 保持 base bundle 的平台条件：Windows 上留给遮蔽
         - id: tool-web
           name: '@deepseek-ai/dsh-tool-web'
           config:
             fetch: false     # 只关取回；web_search 仍由这一条提供
             search: true
   ```
-  这一档的好处是运行期只有一份定义（模型侧 schema 与执行体同源），代价是插件若挂不回来那个工具就缺失；插件在 `agent/created` 上尝试挂载，失败只记一条 warn、不会把 agent 创建弄失败，下一次创建还会再试。`read` 没有这一档。
+  这一档的好处是运行期只有一份定义（模型侧 schema 与执行体同源），代价是插件若挂不回来那个工具就缺失；插件在 `agent/created` 上尝试挂载，失败只记一条 warn、不会把 agent 创建弄失败，下一次创建还会再试。`read` 没有这一档，`pwsh` 也不能有——那个包在本包的解析基点上不存在，接管失败在 Windows 上会连唯一的 shell 一起失去。每次装载会往 debug 文件写一行 `kind: "mount"` 的记录（工具名 → `takeover`/`shadow`/`absent`），这就是"真单关到底有没有生效"的观测点：接管成功与"原生还在、只是遮蔽"交出的工具完全一样，只能靠它区分。
 - **遮蔽只在"该 agent 本来就看得见这个工具"时才安装**：作用域自有注册不过 `allow`/`deny` 过滤，若是无条件遮蔽，等于把某 agent 的禁用名单悄悄解除。
 - 影子工具把 `extract` 摘掉后才委托原生执行；替换仍只作用于**模型可见内容**，规范值不变（`run_code` 里的程序拿到完整值）。
 - debug 记录里有一个 `extract` 布尔，表示这次调用有没有声明目标（只记布尔、不记目标正文），用来观察"主模型判断该不该传参数"准不准。
@@ -119,7 +119,7 @@ Desktop profile 由 Electron 管理时，应在该 profile 目录中使用其安
 
 ## Debug 日志与干跑
 
-debug 默认关闭。开启后必须填写日志路径；插件自动创建父目录，并以追加方式向该路径写入 metadata JSONL，例如工具名、结果大小、准入结论、结果取值（动作是「已替换 / 已拦截 / 未改动」之一；未改动时附原因：未进入候选、准入判 no、模型要求保留全文、按入口读回、摘要没变短、隐私判定不确定、摘要关闭、失败、窗口不足）、调用耗时、缓存观测、判断器输入 token 数，以及这次调用有没有声明提取目标（`extract` 布尔）。不会自动改用临时目录，也不会覆盖已有文件。干跑记录写进同一条日志，因此同样不含原文与摘要文本。
+debug 默认关闭。开启后必须填写日志路径；插件自动创建父目录，并以追加方式向该路径写入 metadata JSONL，例如工具名、结果大小、准入结论、结果取值（动作是「已替换 / 已拦截 / 未改动」之一；未改动时附原因：未进入候选、准入判 no、模型要求保留全文、按入口读回、摘要没变短、隐私判定不确定、摘要关闭、失败、窗口不足）、调用耗时、缓存观测、判断器输入 token 数，以及这次调用有没有声明提取目标（`extract` 布尔）。每次装载还会先写一行 `kind: "mount"` 的记录：平台，以及 `bash`/`web_fetch`/`read`/`pwsh` 各自走的是 `takeover`（全局接管）、`shadow`（遮蔽原生）还是 `absent`（这个 agent 看不到它）。不会自动改用临时目录，也不会覆盖已有文件。干跑记录写进同一条日志，因此同样不含原文与摘要文本。
 
 干跑走完整条流水线，但绝不替换任何内容、不写会话事件、也不调用存储保存原文，只在 debug 日志里记录“本应发生什么”（本应替换 / 本应拦截 / 本应跳过及原因）。它要求 debug 开关已开启且日志路径已配置：两者缺一时干跑不生效，页面会提示（所以干跑不会绕过“debug 关闭时不写文件”这条）。
 

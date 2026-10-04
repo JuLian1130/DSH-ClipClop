@@ -17,6 +17,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
+import type { MountRecord } from '../src/index.ts'
 import {
   EXTRACT_DESCRIPTION,
   extractGoalOf,
@@ -273,7 +274,8 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     ctx.provide('shell', { sandboxMode: undefined } as never)
     ctx.provide('shellEnv', {} as never)
     // 两个原生工具此时都不在表里（=部署用 patch 关掉了条目），install 才会走接管。
-    installExtractArg(ctx as never, () => true)
+    const reports: MountRecord[] = []
+    installExtractArg(ctx as never, () => true, (record) => { reports.push(record) })
     const harness = await mountAgentLoopTestHarness(ctx)
     await harness.create(SessionId('takeover-probe'), { provider: 'mock', model: 'mock' })
 
@@ -284,17 +286,29 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     }
     // 只挂取回那一个：搜索仍由原生条目提供，我们不复刻。
     expect(ctx.tools.get('web_search')).toBeUndefined()
+    // 挂载决策记录：这四个工具各走哪条路，是"真单关有没有生效"唯一的观测点。
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toMatchObject({
+      kind: 'mount',
+      platform: process.platform,
+      tools: { bash: 'takeover', web_fetch: 'takeover', pwsh: 'absent' },
+    })
+    expect(Object.keys(reports[0]!.tools).sort()).toEqual(['bash', 'pwsh', 'read', 'web_fetch'])
+    // 第二个 agent 不再写一次：这条记录是"本次装载"的，不是"每个 agent"的。
+    await harness.create(SessionId('takeover-probe-2'), { provider: 'mock', model: 'mock' })
+    expect(reports).toHaveLength(1)
     await ctx.fiber.dispose()
   })
 
-  it('Windows 上的 shell（注册名 pwsh）只走遮蔽：不依赖只有 Windows 才有的那个工具包', async () => {
+  it('Windows 上的 shell（注册名 pwsh）只走遮蔽：从不 import 那个包', async () => {
     // 本机（macOS/Linux）没有 `pwsh`，所以这里装一条同名的假工具代表那个平台；遮蔽按 agent 作用域装，
     // 平台条件由 `ctx.tools.get('pwsh', agent)` 判定，插件不需要 import `dsh-tool-pwsh`。
     const ctx = new Context()
     await mountAgentLoopTestDependencies(ctx)
     await ctx.plugin(TokenMeter)
     ctx.tools.register(textTool('pwsh', LONG_BODY))
-    installExtractArg(ctx as never, () => true)
+    const reports: MountRecord[] = []
+    installExtractArg(ctx as never, () => true, (record) => { reports.push(record) })
     const harness = await mountAgentLoopTestHarness(ctx)
     const agent = await harness.create(SessionId('pwsh-probe'), { provider: 'mock', model: 'mock' })
 
@@ -305,15 +319,34 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     // 全局那条不动，且没有因为 `pwsh` 而凭空造出 `bash`。
     expect(Object.keys(ctx.tools.get('pwsh')!.parameters?.properties ?? {})).not.toContain('extract')
     expect(ctx.tools.get('bash')).toBeUndefined()
+    expect(reports[0]!.tools).toMatchObject({ pwsh: 'shadow' })
     await ctx.fiber.dispose()
   })
 
   it.each([
     ['darwin', ['bash', 'web_fetch']],
     ['linux', ['bash', 'web_fetch']],
-    ['win32', ['pwsh', 'web_fetch']],
-  ] as const)('接管只挑这个平台的 shell：%s → %j', (platform, expected) => {
-    // 与 base bundle preset 行的 `!!js process.platform` 条件同源；Windows 上不会去挂 `bash`（那里没有它）。
+    ['win32', ['web_fetch']],
+  ] as const)('接管只挑这个平台上挂得回来的工具：%s → %j', (platform, expected) => {
+    // 与 base bundle preset 行的 `!!js process.platform` 条件同源：Windows 上不去挂 `bash`（那里没有它）。
+    // 两边都不挂 `pwsh`：那个包在本包的解析基点上不存在，接管失败在这里等于"Windows 上一个 shell 都不剩"。
     expect(takeoverPlan(platform)).toEqual(expected)
+  })
+
+  it('首个 agent 创建时往 debug 文件写一行挂载决策记录', async () => {
+    const path = join(tempRoot(), 'debug.jsonl')
+    const fixture = await runLoop(
+      { summarize: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock' } as Schemastery.TypeS<typeof Config>,
+      LONG_BODY,
+      SHORT_SUMMARY,
+    )
+    loops.push(fixture)
+
+    const records = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+    const mountRecord = records.find(record => record.kind === 'mount')
+    expect(mountRecord, '装载时应当留下一行挂载决策记录').toBeDefined()
+    expect(mountRecord).toMatchObject({ platform: process.platform })
+    // 这条夹具里的 `bash` 由测试先注册（=原生还在），所以插件走遮蔽而不是接管。
+    expect(mountRecord!.tools).toMatchObject({ bash: 'shadow' })
   })
 })

@@ -7,6 +7,9 @@
  * `failed-window` 与 `rejected` 自 07。本票（08）补齐规格列出的另两个字段——`缓存观测`（前缀缓存命中）与
  * `判断器输入 token 数`（准入判断那次请求的输入规模）——并给干跑记录加一个 `dryRun` 标记。
  *
+ * 同一个文件里还有一条**挂载决策记录**（`kind: 'mount'`，见 {@link MountRecord}）：每次装载写在最前面，
+ * 记下目标工具各自走的是接管还是遮蔽。它是"真单关是否生效"的唯一观测点。
+ *
  * @module
  */
 
@@ -86,9 +89,27 @@ export function measureContent(content: readonly ContentBlock[]): number {
 /**
  * 以追加方式写一行记录，父目录不存在时先创建。
  * @param path - 用户配置的日志路径。
- * @param record - 要写入的记录。
+ * @param record - 要写入的记录：一条工具结果，或一条挂载决策。
  */
-export async function appendDebugRecord(path: string, record: DebugRecord): Promise<void> {
+export async function appendDebugRecord(path: string, record: DebugRecord | MountRecord): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   await appendFile(path, `${JSON.stringify(record)}\n`, 'utf8')
+}
+
+/** 一个目标工具在本次装载里走的路：全局接管 / agent 作用域遮蔽 / 这个 agent 看不到它。 */
+export type MountMode = 'takeover' | 'shadow' | 'absent'
+
+/**
+ * 一行挂载决策记录（`kind: 'mount'`），每次装载只写一行（首个 agent 创建时）。
+ *
+ * 为什么单独要这一行：部署用 patch 关掉原生条目后由插件挂回（真单关），与"原生还在、插件只是遮蔽了它"交出的
+ * 工具完全一样——模型侧 schema、工具行为、debug 里的结果记录都分不出来。要确认真单关真的生效，只能把当时
+ * `ctx.tools.get(name)` 的判定结果记下来。
+ */
+export type MountRecord = {
+  readonly kind: 'mount'
+  /** `process.platform`：接管计划按平台不同，看诊断时先看这个。 */
+  readonly platform: string
+  /** 工具名 → 走的路。缺键表示那个工具不在本次接管计划里，也没有被遮蔽。 */
+  readonly tools: Readonly<Record<string, MountMode>>
 }

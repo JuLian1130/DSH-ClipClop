@@ -64,6 +64,7 @@ import {
   type AdmissionVerdict,
   type DebugOutcome,
   type DebugRecord,
+  type MountRecord,
   type UnmodifiedReason,
 } from './debug.ts'
 import { ENTRY_RESERVE, isReadBack, noteReadback, writeEntry, type ReadbackLedger } from './entry.ts'
@@ -111,7 +112,7 @@ export function apply(ctx: Context, config: Required<Config>): void {
   const reminders: ReminderLedger = new Map()
   // 可选参数 extract：主模型在调用时声明提取目标。启用判据按每次 agent 创建读一次（就是摘要总开关），所以关掉
   // 摘要时，之后创建的 agent 看不到这个参数，也不再覆盖工具。
-  installExtractArg(ctx, () => extractEnabled(config))
+  installExtractArg(ctx, () => extractEnabled(config), modes => recordMount(config, modes))
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     if (exec.parent !== undefined) return next()
     const startedAt = performance.now()
@@ -443,6 +444,23 @@ function projectionText(visible: readonly ContentBlock[], contexts: readonly Use
  */
 function textOf(content: readonly ContentBlock[]): string {
   return content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')
+}
+
+/**
+ * 追加一行挂载决策记录（`kind: 'mount'`）：首个 agent 创建时，每个目标工具走的是接管、遮蔽，还是它看不到。
+ *
+ * 与结果记录共用开关与路径，所以 debug 关闭或路径为空时同样不写盘。它从 `agent/created` 的监听器里调用，
+ * 因此不 await、也不抛：诊断失败不得影响 agent 创建。
+ * @param config - 解析后的配置。
+ * @param record - 要写入的那一行（内容由 `extract.ts` 按当时的判定拼好）。
+ */
+function recordMount(config: Required<Config>, record: MountRecord): void {
+  if (!config.debug.get()) return
+  const path = config.debugPath.get()
+  if (path === '') return
+  void appendDebugRecord(path, record).catch(() => {
+    // 与结果记录同一条契约：诊断写入失败不得把工具调用或 agent 创建变成错误结果。
+  })
 }
 
 /**

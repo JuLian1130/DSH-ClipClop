@@ -6,8 +6,11 @@
  *   所以只走 agent 作用域遮蔽（`{...原生定义}` + 一个 `extract` 参数）。
  * - `bash` / `web_fetch`：各自独占一个插件条目，且能用自己的插件定义重新挂载（`ctx.plugin`，见 `TAKEOVER`），
  *   所以优先"全局接管"（条目被 patch 关掉后就地改写原生定义）；原生还在时回落到 agent 作用域遮蔽。
- * - `pwsh`（Windows 上的 shell）：**只走遮蔽**。它的插件包只在 Windows 部署里存在，静态 import 会让本插件在
- *   macOS/Linux 上因解析不到而整条装载失败；遮蔽不需要那个包，平台条件交给 `ctx.tools.get('pwsh', agent)` 判定。
+ * - `pwsh`（Windows 上的 shell）：**只走遮蔽，测试里也不例外地永不接管**。接管要 `import`
+ *   `@deepseek-ai/dsh-tool-pwsh`，而那个包不是本包的依赖：以本包为解析基点实测为 `ERR_MODULE_NOT_FOUND`
+ *   （2026-10-05，设计稿 §22）。接管的失败形态又恰好是"这个平台一个 shell 都不剩"（真单关的部署已经把原生条目
+ *   关掉了），代价不对称——所以 Windows 部署保留原生 `tool-pwsh` 行，由遮蔽补上 `extract`。遮蔽不需要那个包，
+ *   平台条件交给 `ctx.tools.get('pwsh', agent)` 判定。
  *
  * 无论哪条策略，模型参数里的 `extract` 都留在 `exec.arguments` 上（遮蔽只是把字段摘掉后委托执行），
  * 所以调用点统一用 {@link extractGoalOf} 取目标——但取之前要看 {@link extractEnabled}：摘要总开关关着就不认，
@@ -22,6 +25,8 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 // 用命名空间导入而不是它们的 `apply`：挂回来要走 `ctx.plugin`，见 `TAKEOVER`。
 import * as bashTool from '@deepseek-ai/dsh-tool-bash'
 import * as webTool from '@deepseek-ai/dsh-tool-web'
+// 挂载决策的取值与 debug 记录同源：这里交出去的记录直接就是写进日志的那一行。
+import type { MountMode, MountRecord } from './debug.ts'
 
 /** 标在已被本模块扩展过的定义上，避免同一次装载里重复补参数或重复包 execute。 */
 const EXTENDED = Symbol('dsh-result-clipper:extract')
@@ -208,28 +213,17 @@ function logger(ctx: Context): { warn(message: string): void } | undefined {
 }
 
 /**
- * 这个平台上该由插件"全局接管"哪几个工具。
+ * 这个平台上该由插件"全局接管"哪个工具。
  *
  * 平台条件与 base bundle 的 preset 行**同一套判据**（`disabled: !!js process.platform === 'win32'` / `!== 'win32'`）：
  * Windows 上的 shell 是 `pwsh`，在别处是 `bash`。少了这层判断，Windows 上会因为"`bash` 不在表里"而把 `bash`
- * 挂回来——那是一个那个平台根本没有的 shell。
+ * 挂回来——那是一个那个平台根本没有的 shell。`pwsh` 不在这里：它的插件包解析不到（见模块头），Windows 上由
+ * 遮蔽接手。
  * @param platform - 平台标识（调用点传 `process.platform`）。
  * @returns 要依次尝试接管的工具名。
  */
 export function takeoverPlan(platform: string): readonly string[] {
-  return platform === 'win32' ? ['pwsh', 'web_fetch'] : ['bash', 'web_fetch']
-}
-
-/**
- * 挂回 Windows 上的 shell。用**变量说明符的动态 import**：`@deepseek-ai/dsh-tool-pwsh` 是 web-app bundle 的依赖
- * （每个 DSH 安装里都有），但不在本包的依赖里、本机开发时也装不到，静态 import 会让插件在 macOS/Linux 上因解析
- * 不到而整条装载失败。平台条件保证这段只在 Windows 上求值。
- * @param ctx - 插件 context。
- * @returns `ctx.plugin` 交回的可 await fiber。
- */
-function mountPwsh(ctx: Context): unknown {
-  const name: string = '@deepseek-ai/dsh-tool-pwsh'
-  return import(name).then(module => ctx.plugin(module as never, {} as never))
+  return platform === 'win32' ? ['web_fetch'] : ['bash', 'web_fetch']
 }
 
 /**
@@ -243,12 +237,14 @@ function mountPwsh(ctx: Context): unknown {
  */
 const TAKEOVER: Record<string, (ctx: Context) => unknown> = {
   bash: (ctx) => ctx.plugin(bashTool, {}),
-  pwsh: mountPwsh,
   web_fetch: (ctx) => ctx.plugin(webTool, { fetch: true, search: false }),
 }
 
+/** 走 agent 作用域遮蔽的工具；接管成功的那些由 `taken` 排除。 */
+const SHADOW_TOOLS = ['read', 'bash', 'web_fetch', 'pwsh'] as const
+
 /**
- * 装载 `extract` 参数：`read` 走 agent 作用域遮蔽；`bash` / `web_fetch` 先试全局接管，接管不到再回落遮蔽。
+ * 装载 `extract` 参数：`read` / `pwsh` 走 agent 作用域遮蔽；`bash` / `web_fetch` 先试全局接管，接管不到再回落遮蔽。
  *
  * `read` 不尝试接管：原生 `read` 与 `write`/`edit`/`read_image` 同一条目，禁用它会一并失去写与编辑能力。
  *
@@ -259,13 +255,20 @@ const TAKEOVER: Record<string, (ctx: Context) => unknown> = {
  * schema 才是扩过的。
  * @param ctx - 插件 context；`tools` 已就绪。
  * @param enabled - 这套机制当前是否启用；每次 agent 创建时调用一次。
+ * @param report - 收到首个 agent 实际走的路（每个目标工具一名，连平台一起）；调用方据此写诊断记录。真单关的
+ * "接管成功"与"原生还在、只是遮蔽"交出的工具一模一样，这一条是会话里唯一的区分依据。
  */
-export function installExtractArg(ctx: Context, enabled: () => boolean): void {
+export function installExtractArg(
+  ctx: Context,
+  enabled: () => boolean,
+  report?: (record: MountRecord) => void,
+): void {
   const taken = new Set<string>()
   let decided = false
   ctx.on('agent/created', async ({ agent }) => {
     if (!enabled()) return
-    if (!decided) {
+    const first = !decided
+    if (first) {
       decided = true
       for (const name of takeoverPlan(process.platform)) {
         // 原生已经不在了 = 部署用 patch 关掉了那个条目，可以自己挂回来并就地改写。
@@ -284,13 +287,22 @@ export function installExtractArg(ctx: Context, enabled: () => boolean): void {
         taken.add(name)
       }
     }
-    for (const name of ['read', 'bash', 'web_fetch', 'pwsh']) {
-      if (taken.has(name)) continue
+    const modes: Record<string, MountMode> = {}
+    for (const name of SHADOW_TOOLS) {
+      if (taken.has(name)) {
+        modes[name] = 'takeover'
+        continue
+      }
       // 该 agent 本来就看不到这个工具（被限制或没装载）时不动它：作用域自有注册不过 allow/deny 过滤，
       // 遮蔽一个不可见的工具等于把限制悄悄解除。
       const native = ctx.tools.get(name, agent)
-      if (native === undefined) continue
+      if (native === undefined) {
+        modes[name] = 'absent'
+        continue
+      }
       agent.ctx.tools.register(extendedDefinition(native, name))
+      modes[name] = 'shadow'
     }
+    if (first) report?.({ kind: 'mount', platform: process.platform, tools: modes })
   })
 }
