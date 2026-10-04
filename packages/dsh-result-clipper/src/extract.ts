@@ -4,7 +4,7 @@
  * 三类目标工具的安装策略来自实测（见 `.scratch/dsh-result-clipper/exp2/RESULTS.md` 与设计稿 §14.5/§14.6）：
  * - `read`：原生 `read` 与 `write`/`edit`/`read_image` 同在一个插件条目里，禁用它会一并失去写与编辑能力，
  *   所以只走 agent 作用域遮蔽（`{...原生定义}` + 一个 `extract` 参数）。
- * - `bash` / `web_fetch`：各自独占一个插件条目，且能用公开入口重新挂载（`apply(ctx, {})` / `applyWebFetchTool`），
+ * - `bash` / `web_fetch`：各自独占一个插件条目，且能用自己的插件定义重新挂载（`ctx.plugin`，见 `TAKEOVER`），
  *   所以优先"全局接管"（条目被 patch 关掉后就地改写原生定义）；原生还在时回落到 agent 作用域遮蔽。
  *
  * 无论哪条策略，模型参数里的 `extract` 都留在 `exec.arguments` 上（遮蔽只是把字段摘掉后委托执行），
@@ -16,8 +16,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 // 这两个原生包只用于"接管后把工具挂回来"：它们注册的是原生实现，本模块只在原地补参数与包一层 execute。
-import { apply as applyBashTool } from '@deepseek-ai/dsh-tool-bash'
-import { applyWebFetchTool } from '@deepseek-ai/dsh-tool-web'
+// 用命名空间导入而不是它们的 `apply`：挂回来要走 `ctx.plugin`，见 `TAKEOVER`。
+import * as bashTool from '@deepseek-ai/dsh-tool-bash'
+import * as webTool from '@deepseek-ai/dsh-tool-web'
 
 /** 标在已被本模块扩展过的定义上，避免同一次装载里重复补参数或重复包 execute。 */
 const EXTENDED = Symbol('dsh-result-clipper:extract')
@@ -176,10 +177,18 @@ function markExtended(definition: ToolDefinition): void {
   Object.defineProperty(definition, EXTENDED, { value: true, enumerable: false })
 }
 
-/** 独占一个插件条目、且能用公开入口重新挂载的工具：优先"全局接管"。 */
-const TAKEOVER: Record<string, (ctx: Context) => void> = {
-  bash: (ctx) => { applyBashTool(ctx, {}) },
-  web_fetch: (ctx) => { applyWebFetchTool(ctx, 30_000, 200_000) },
+/**
+ * 独占一个插件条目、且能重新挂载的工具：优先"全局接管"。
+ *
+ * 用 `ctx.plugin` 挂回来，不直接调它们的 `apply`：服务解析按**访问方 fiber 的 inject** 走，本插件的 inject 只有
+ * `tools`，直接 `applyBashTool(ctx, {})` 会在原生实现内部读 `ctx.systemPrompt` / `ctx.shell` / `ctx.web` 时抛
+ * `cannot get property "…" without inject`——这一抛发生在 `agent/created` 的串行监听器里，会把 agent 创建一起弄
+ * 失败。`ctx.plugin` 用原生插件自己的 inject 建子 fiber，解析照原生来；它交回可 await 的 fiber，等它落地再取
+ * 定义，模型侧 schema 才是扩过的。`web_fetch` 只挂取回这一个：`web_search` 照旧由原生条目提供。
+ */
+const TAKEOVER: Record<string, (ctx: Context) => unknown> = {
+  bash: (ctx) => ctx.plugin(bashTool, {}),
+  web_fetch: (ctx) => ctx.plugin(webTool, { fetch: true, search: false }),
 }
 
 /**
@@ -188,19 +197,20 @@ const TAKEOVER: Record<string, (ctx: Context) => void> = {
  * `read` 不尝试接管：原生 `read` 与 `write`/`edit`/`read_image` 同一条目，禁用它会一并失去写与编辑能力。
  *
  * 接管判定放在**第一个 agent 创建时**而不是 `apply()` 里：装载顺序会让早执行的那一次看到空表，从而误判
- * "原生不在"并对仍在装载的原生条目重复注册（同层重名会抛错，整条插件装载失败）。
+ * "原生不在"并对仍在装载的原生条目重复注册（同层重名会抛错，整条插件装载失败）。挂回来是异步的（`ctx.plugin`
+ * 交回的 fiber），所以监听器改成 async 并 await 它，模型侧 schema 才是扩过的。
  * @param ctx - 插件 context；`tools` 已就绪。
  */
 export function installExtractArg(ctx: Context): void {
   const taken = new Set<string>()
   let decided = false
-  ctx.on('agent/created', ({ agent }) => {
+  ctx.on('agent/created', async ({ agent }) => {
     if (!decided) {
       decided = true
       for (const name of ['bash', 'web_fetch']) {
         // 原生已经不在了 = 部署用 patch 关掉了那个条目，可以自己挂回来并就地改写。
         if (ctx.tools.get(name) !== undefined) continue
-        TAKEOVER[name]?.(ctx)
+        await TAKEOVER[name]?.(ctx)
         const registered = ctx.tools.get(name)
         if (registered === undefined) continue
         extendInPlace(registered, name)
