@@ -6,6 +6,8 @@
  *   所以只走 agent 作用域遮蔽（`{...原生定义}` + 一个 `extract` 参数）。
  * - `bash` / `web_fetch`：各自独占一个插件条目，且能用自己的插件定义重新挂载（`ctx.plugin`，见 `TAKEOVER`），
  *   所以优先"全局接管"（条目被 patch 关掉后就地改写原生定义）；原生还在时回落到 agent 作用域遮蔽。
+ * - `pwsh`（Windows 上的 shell）：**只走遮蔽**。它的插件包只在 Windows 部署里存在，静态 import 会让本插件在
+ *   macOS/Linux 上因解析不到而整条装载失败；遮蔽不需要那个包，平台条件交给 `ctx.tools.get('pwsh', agent)` 判定。
  *
  * 无论哪条策略，模型参数里的 `extract` 都留在 `exec.arguments` 上（遮蔽只是把字段摘掉后委托执行），
  * 所以调用点统一用 {@link extractGoalOf} 取目标——但取之前要看 {@link extractEnabled}：摘要总开关关着就不认，
@@ -42,8 +44,8 @@ export const READ_GUIDANCE = [
   'need in extract — never restate or change the task there.',
 ].join(' ')
 
-/** `bash` 的工具说明追加段。 */
-export const BASH_GUIDANCE = [
+/** shell 类工具的说明追加段；`bash` 与 Windows 上的 `pwsh` 共用。 */
+export const SHELL_GUIDANCE = [
   'When you need a conclusion, a filter, or an aggregation from a large command output, pass extract with',
   'exactly the information you need back. When you need the complete output verbatim, do not pass extract.',
   'extract is optional and costs you nothing when it does not apply: a small output is returned unchanged, and',
@@ -61,10 +63,11 @@ export const WEB_FETCH_GUIDANCE = [
   'need in extract — never restate or change the task there.',
 ].join(' ')
 
-/** 三类工具各自的说明追加段。 */
+/** 各目标工具自己的说明追加段。两个 shell 名字共用同一段：它们只是同一件事在不同平台上的注册名。 */
 const GUIDANCE: Record<string, string> = {
   read: READ_GUIDANCE,
-  bash: BASH_GUIDANCE,
+  bash: SHELL_GUIDANCE,
+  pwsh: SHELL_GUIDANCE,
   web_fetch: WEB_FETCH_GUIDANCE,
 }
 
@@ -235,7 +238,7 @@ export function installExtractArg(ctx: Context, enabled: () => boolean): void {
         taken.add(name)
       }
     }
-    for (const name of ['read', 'bash', 'web_fetch']) {
+    for (const name of ['read', 'bash', 'web_fetch', 'pwsh']) {
       if (taken.has(name)) continue
       // 该 agent 本来就看不到这个工具（被限制或没装载）时不动它：作用域自有注册不过 allow/deny 过滤，
       // 遮蔽一个不可见的工具等于把限制悄悄解除。

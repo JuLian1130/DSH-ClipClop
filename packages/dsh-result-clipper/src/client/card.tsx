@@ -690,9 +690,22 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const admissionPrompt = props.useAdmissionPrompt(value => value)
   const privacyPrompt = props.usePrivacyPrompt(value => value)
   const debugPath = props.useDebugPath(value => value)
+  const [masterFailed, setMasterFailed] = useState(false)
   const catalog = props.useModelCatalog(value => value)
   // 卡片挂载时重读一次目录：用户往往是先去「设置 → 模型」建 route、再回来选它。
   useEffect(() => { props.refreshModelCatalog() }, [])
+
+  /**
+   * 写回总开关。它是**保存即生效**的一行（与页签里那一个开关同一个键），不走分组草稿——因为两组会在它关闭时
+   * 一起收起，草稿的「保存」按钮那时也不在页面上。
+   * @param next - 新的开关取值。
+   */
+  const applySummarize = (next: boolean): void => {
+    setMasterFailed(false)
+    void props.saveFields([{ op: 'set', path: ['summarize'], value: next }])
+      .then((accepted) => { if (!accepted) setMasterFailed(true) })
+      .catch(() => { setMasterFailed(true) })
+  }
 
   const summary = useGroupDraft(SUMMARY_FIELDS, {
     summarize, routeProvider, routeModel, summaryReasoningEffort, minInlineTokens, maxSummarizeTokens,
@@ -759,14 +772,19 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     {privacyGate && !privacyConfirmedLocal
       && <div role="alert" style={WARNING_STYLE}>{props.t('routeUnconfirmedWarning')}</div>}
 
+    {/* 总开关在两组之上：与页签里第一个开关是同一个键、保存即生效（不走分组草稿）；它关掉时下面「摘要模型」与
+        「摘要准入判断模型」两组连同各自的保存 / 恢复默认一起收起——准入判断只在摘要开着时才有意义。 */}
+    <CheckRow id="plugin-config-result-clipper-summarize" label={props.t('summarize')}
+      hint={props.t('summarizeHint')}
+      checked={summarize}
+      onChange={next => { applySummarize(next) }} />
+    {masterFailed && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
+    {summarize === false && <div style={HINT_STYLE}>{props.t('summarizeOffHint')}</div>}
+
+    <hr style={DIVIDER_STYLE} />
+
+    {summarize === true && <>
     <Group title={props.t('summaryGroup')} description={props.t('summaryGroupHint')} {...actions(summary)}>
-      {/* 总开关（与页签里那一个是同一个键）：折起来＝不启用，这一组与准入组的内容都收起。 */}
-      <CheckRow id="plugin-config-result-clipper-summarize" label={props.t('summarize')}
-        hint={props.t('summarizeHint')}
-        checked={summary.value('summarize') as boolean}
-        onChange={next => { summary.change('summarize', next) }} />
-      {summary.value('summarize') !== true && <div style={HINT_STYLE}>{props.t('summarizeOffHint')}</div>}
-      {summary.value('summarize') === true && <>
       <RouteLine
         provider={{
           ...routeText, id: 'plugin-config-result-clipper-route-provider',
@@ -800,16 +818,11 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
         hint={props.t('promptHint')} value={summary.value('summaryPrompt') as string}
         onChange={next => { summary.change('summaryPrompt', next) }} />
-      </>}
     </Group>
 
     <hr style={DIVIDER_STYLE} />
 
     <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
-      {/* 准入判断只在摘要开着时才有意义：摘要关着时整组收起，与摘要组显示同一句说明。 */}
-      {summary.value('summarize') !== true
-        ? <div style={HINT_STYLE}>{props.t('summarizeOffHint')}</div>
-        : <>
       {/* 折起来就等于不启用：开关（草稿）决定这一组是否有内容，勾上才出现下面这整组设置。 */}
       <CheckRow id="plugin-config-result-clipper-admission-enabled" label={props.t('admissionJudge')}
         hint={props.t('admissionJudgeHint')}
@@ -842,8 +855,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         hint={props.t('promptHint')} value={admission.value('admissionPrompt') as string}
         onChange={next => { admission.change('admissionPrompt', next) }} />
       </>}
-      </>}
     </Group>
+    </>}
 
     <hr style={DIVIDER_STYLE} />
 

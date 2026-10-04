@@ -94,8 +94,9 @@ function replacedText(fixture: HostFixture, toolName = 'bash'): string {
   return SHORT_SUMMARY + composeEntry(fixture.spill.refs[0]!, toolName)
 }
 
-describe('票 03：三类工具的长文本结果被改写成短说明、只替换 content', () => {
-  it.each(['bash', 'web_fetch', 'read'])('%s 的长文本结果被替换为短说明，且假 route 收到过一次请求', async (toolName) => {
+describe('票 03：目标工具的长文本结果被改写成短说明、只替换 content', () => {
+  // `pwsh` 是 Windows 上的 shell（base bundle 在那里禁用 tool-bash、改挂 tool-pwsh），插件不是只给本机用的。
+  it.each(['bash', 'web_fetch', 'read', 'pwsh'])('%s 的长文本结果被替换为短说明，且假 route 收到过一次请求', async (toolName) => {
     const { fixture, route, path } = await mounted()
     fixture.ctx.tools.register(textTool(toolName, LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec(toolName))
@@ -159,9 +160,9 @@ describe('票 03：候选之外的结果与原样透传', () => {
     expect(records(path)).toEqual([expect.objectContaining({ reason: 'not-candidate' })])
   })
 
-  // 两条会被 spill 接管的工具各跑一次：上界判定对两者是同一条分支（`read` 除外），
-  // 只驱动 `bash` 会让 `web_fetch` 的收窄改动无红字（票 03 第 3 条点名了它）。
-  it.each(['bash', 'web_fetch'] as const)('%s 超过上限的结果交给 spill（不摘要、不发请求）', async (toolName) => {
+  // 会被 spill 接管的三个工具各跑一次：上界判定对它们（`read` 除外）是同一条分支，
+  // 只驱动 `bash` 会让另外两条的收窄改动无红字（票 03 第 3 条点名了 `web_fetch`）。
+  it.each(['bash', 'web_fetch', 'pwsh'] as const)('%s 超过上限的结果交给 spill（不摘要、不发请求）', async (toolName) => {
     const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool(toolName, HUGE_BODY))
     const huge = await fixture.ctx.tools.execute(exec(toolName))

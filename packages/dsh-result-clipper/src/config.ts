@@ -61,7 +61,7 @@ export interface Config {
   privacyModel?: Volatile<string>
   /** 摘要候选的下限（估算器单位）；低于它的结果原样透传。`0` 表示不设下限。 */
   minInlineTokens?: Volatile<number>
-  /** `bash` / `web_fetch` 的上限；达到或超过它的结果原样交给 spill。`read` 不受它约束。 */
+  /** `bash` / `pwsh` / `web_fetch` 的上限；达到或超过它的结果原样交给 spill。`read` 不受它约束。 */
   maxSummarizeTokens?: Volatile<number>
   /** 摘要请求的推理档位；默认 `off`（不推理），让本地模型更快响应（用户故事 47）。 */
   summaryReasoningEffort?: Volatile<ReasoningEffort>

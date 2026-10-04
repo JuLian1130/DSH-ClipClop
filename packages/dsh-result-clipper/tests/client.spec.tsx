@@ -280,9 +280,9 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-effort`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-prompt`)).not.toBeNull()
     }
-    // 摘要组还带总开关与两个阈值；隐私组带确认位与失败策略；诊断组只放 debug 路径。
+    // 摘要总开关在两组之上（不在任何组里）；摘要组还带两个阈值；隐私组带确认位与失败策略；诊断组只放 debug 路径。
+    expect(container.querySelector('#plugin-config-result-clipper-summarize')).not.toBeNull()
     const summary = groupOf(container, '摘要模型')
-    expect(summary.querySelector('#plugin-config-result-clipper-summarize')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-min-inline')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-max-summarize')).not.toBeNull()
     const privacy = groupOf(container, '隐私闸门模型')
@@ -290,8 +290,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(privacy.querySelector('#plugin-config-result-clipper-webfetch-gate')).not.toBeNull()
     expect(privacy.querySelector('#plugin-config-result-clipper-failure-policy')).not.toBeNull()
     expect(groupOf(container, '诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
-    // 四个分组之间三条长横线：三个模型组各有自己的边界，诊断组同样被隔开。
-    expect([...container.querySelectorAll('hr')]).toHaveLength(3)
+    // 总开关那一行之上是一条横线，加上三组分隔线：一共四条。
+    expect([...container.querySelectorAll('hr')]).toHaveLength(4)
     // 每个分组都有一行「这是做什么的」。
     for (const [title, hint] of [
       ['摘要模型', 'summaryGroupHint'],
@@ -805,22 +805,41 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ privacyConfirmedLocal: true, failurePolicy: 'block' })
   })
 
-  it('摘要总开关默认关着：摘要组只留开关与说明，准入组整组收起；打开后两组内容都回来', async () => {
+  it('摘要总开关默认关着：两个摘要组（含各自的保存 / 恢复默认）整组不出现，只留开关与说明；打开后两组回来', async () => {
     const off = await renderPage({ summarize: false })
-    const offSummary = groupOf(off.container, '摘要模型')
-    expect((offSummary.querySelector('#plugin-config-result-clipper-summarize input') as HTMLInputElement).checked).toBe(false)
-    expect(offSummary.querySelector('#plugin-config-result-clipper-route-provider')).toBeNull()
-    expect(offSummary.querySelector('#plugin-config-result-clipper-summary-prompt')).toBeNull()
-    expect(groupOf(off.container, '摘要准入判断模型').querySelector('#plugin-config-result-clipper-admission-enabled')).toBeNull()
-    expect(offSummary.textContent).toContain(off.fixture.t('summarizeOffHint'))
+    expect((off.container.querySelector('#plugin-config-result-clipper-summarize input') as HTMLInputElement).checked).toBe(false)
+    expect(off.container.querySelector('#plugin-config-result-clipper-route-provider')).toBeNull()
+    expect(off.container.querySelector('#plugin-config-result-clipper-summary-prompt')).toBeNull()
+    expect(off.container.querySelector('#plugin-config-result-clipper-admission-enabled')).toBeNull()
+    // 「摘要模型」「摘要准入判断模型」两个标题与它们底部的保存按钮都不在页面上。
+    const titles = [...off.container.querySelectorAll('h4')].map(node => node.textContent)
+    expect(titles).not.toContain(off.fixture.t('summaryGroup'))
+    expect(titles).not.toContain(off.fixture.t('admissionGroup'))
+    expect(off.container.textContent).toContain(off.fixture.t('summarizeOffHint'))
+    // 隐私组与诊断组不受总开关影响。
+    expect(off.container.querySelector('#plugin-config-result-clipper-privacy-confirmed')).not.toBeNull()
+    expect(off.container.querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
+
+    await fireEvent.click(off.container.querySelector('#plugin-config-result-clipper-summarize input')!)
+    await settle()
+    expect(groupOf(off.container, '摘要模型')).toBeDefined()
+    expect(groupOf(off.container, '摘要准入判断模型')).toBeDefined()
   })
 
-  it('摘要总开关勾上后随摘要组一次写回（与页签里那一个是同一个键）', async () => {
+  it('摘要总开关保存即生效（不走分组草稿）：点一下当场写回，不需要按任何「保存」', async () => {
     const { fixture, container } = await renderPage({ summarize: false })
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summarize input')!)
-    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
     expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['summarize'], value: true }]])
+  })
+
+  it('摘要总开关被 Host 拒绝时当场给出提示，不装作已生效', async () => {
+    const { fixture, container } = await renderPage({ summarize: false })
+    fixture.form.accepted = false
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summarize input')!)
+    await settle()
+    expect(container.querySelector('[role="alert"]')).not.toBeNull()
+    expect(fixture.form.value.summarize).toBe(false)
   })
 
   it('web_fetch 的隐私开关默认不勾，勾上后随隐私组一次写回', async () => {

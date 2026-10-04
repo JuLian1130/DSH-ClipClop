@@ -285,4 +285,25 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     expect(ctx.tools.get('web_search')).toBeUndefined()
     await ctx.fiber.dispose()
   })
+
+  it('Windows 上的 shell（注册名 pwsh）只走遮蔽：不依赖只有 Windows 才有的那个工具包', async () => {
+    // 本机（macOS/Linux）没有 `pwsh`，所以这里装一条同名的假工具代表那个平台；遮蔽按 agent 作用域装，
+    // 平台条件由 `ctx.tools.get('pwsh', agent)` 判定，插件不需要 import `dsh-tool-pwsh`。
+    const ctx = new Context()
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(TokenMeter)
+    ctx.tools.register(textTool('pwsh', LONG_BODY))
+    installExtractArg(ctx as never, () => true)
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const agent = await harness.create(SessionId('pwsh-probe'), { provider: 'mock', model: 'mock' })
+
+    const agentView = ctx.tools.get('pwsh', agent)!
+    expect(Object.keys(agentView.parameters?.properties ?? {})).toContain('extract')
+    // 说明用的是 shell 那一段（`bash` 与 `pwsh` 共用），不是 read 或 web_fetch 的。
+    expect(agentView.description).toContain('large command output')
+    // 全局那条不动，且没有因为 `pwsh` 而凭空造出 `bash`。
+    expect(Object.keys(ctx.tools.get('pwsh')!.parameters?.properties ?? {})).not.toContain('extract')
+    expect(ctx.tools.get('bash')).toBeUndefined()
+    await ctx.fiber.dispose()
+  })
 })
