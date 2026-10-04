@@ -215,6 +215,7 @@ const TEXTAREA_STYLE = {
 /** 下拉框的七个档位与它们的文案键；候选集与 host 半 schema 的取值同一份（`reasoning.ts`）。 */
 const EFFORT_LABELS: Record<ReasoningEffort, ResultClipperLocaleKey> = {
   off: 'effortOff',
+  none: 'effortNone',
   minimal: 'effortMinimal',
   low: 'effortLow',
   medium: 'effortMedium',

@@ -84,13 +84,14 @@ function records(path: string): Array<Record<string, unknown>> {
 }
 
 /**
- * 替换后的模型可见文本：入口说明（04 起写盘产出）在最前，其后是摘要正文。
+ * 替换后的模型可见文本：摘要正文在前，其后是入口说明（04 起写盘产出）这段兜底。
  * @param fixture - 夹具。
+ * @param toolName - 产生这条结果的工具名（入口说明里会写出它）。
  * @returns 期望的替换文本。
  */
-function replacedText(fixture: HostFixture): string {
+function replacedText(fixture: HostFixture, toolName = 'bash'): string {
   if (fixture.spill === undefined) throw new Error('fixture: no spill backend')
-  return composeEntry(fixture.spill.refs[0]!) + SHORT_SUMMARY
+  return SHORT_SUMMARY + composeEntry(fixture.spill.refs[0]!, toolName)
 }
 
 describe('票 03：三类工具的长文本结果被改写成短说明、只替换 content', () => {
@@ -100,7 +101,7 @@ describe('票 03：三类工具的长文本结果被改写成短说明、只替�
     const result = await fixture.ctx.tools.execute(exec(toolName))
 
     expect(result.isError).toBe(false)
-    expect(result.content).toEqual([{ type: 'text', text: replacedText(fixture) }])
+    expect(result.content).toEqual([{ type: 'text', text: replacedText(fixture, toolName) }])
     expect(route.requests).toHaveLength(1)
     expect(records(path)).toEqual([
       expect.objectContaining({ toolName, action: 'summarized' }),
@@ -172,7 +173,7 @@ describe('票 03：候选之外的结果与原样透传', () => {
     const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('read', HUGE_BODY))
     const read = await fixture.ctx.tools.execute(exec('read'))
-    expect(textOf(read.content)).toBe(composeEntry(fixture.spill!.refs[0]!) + SHORT_SUMMARY)
+    expect(textOf(read.content)).toBe(SHORT_SUMMARY + composeEntry(fixture.spill!.refs[0]!, 'read'))
     expect(route.requests).toHaveLength(1)
   })
 })

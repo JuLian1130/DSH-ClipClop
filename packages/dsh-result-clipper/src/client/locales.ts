@@ -43,6 +43,7 @@ export type ResultClipperLocaleKey =
   | 'reasoningEffort'
   | 'reasoningEffortHint'
   | 'effortOff'
+  | 'effortNone'
   | 'effortMinimal'
   | 'effortLow'
   | 'effortMedium'
@@ -111,6 +112,7 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   reasoningEffort: '推理档位',
   reasoningEffortHint: '默认「不推理」以降低延迟；档位由该 route 声明，不声明时去掉该字段重发一次。',
   effortOff: '不推理',
+  effortNone: '不推理（网关）',
   effortMinimal: '极低',
   effortLow: '低',
   effortMedium: '中',
@@ -179,6 +181,7 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   reasoningEffort: 'Reasoning effort',
   reasoningEffortHint: '"Off" is the default because it lowers latency; the levels are declared by the route, and the plugin drops the field and retries once when the route rejects it.',
   effortOff: 'Off',
+  effortNone: 'None (gateway)',
   effortMinimal: 'Minimal',
   effortLow: 'Low',
   effortMedium: 'Medium',

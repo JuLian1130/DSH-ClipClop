@@ -63,12 +63,18 @@ export interface WrittenEntry {
 export type ReadbackLedger = Map<string, Set<string>>
 
 /**
- * 拼出入口说明。
+ * 拼出入口说明：接在**摘要正文之后**的兜底段。
+ *
+ * 位置与文案的由来：模型必须先读到摘要。原来的顺序是「入口说明在最前、摘要跟在后面」，而整条消息里没有任何
+ * 一句说明这是摘要、也没有一句说够用就别读——实测（246 条带入口的真实结果）取回动作有 67% 落在紧接着的
+ * 下一次调用、43% 是整文件一把读回。旧约束「必须在正文最前」的依据是旧结果裁剪器只保头 4096 / 尾 1024
+ * （阈值 8192 字符）：本替换结果只有几百字符，远低于阈值，且裁剪器头尾都留，放末尾同样不会被裁掉。
  * @param ref - 存储后端返回的入口。
- * @returns 入口说明正文；调用方把它放在摘要正文最前。
+ * @param toolName - 产生这条结果的工具名。
+ * @returns 入口说明正文；调用方把它接在摘要正文之后。
  */
-export function composeEntry(ref: EntryRef): string {
-  return `原结果入口：${ref.locator}\n${ref.retrievalHint}\n\n`
+export function composeEntry(ref: EntryRef, toolName: string): string {
+  return `\n\n（以上为本次 ${toolName} 结果的摘要，够用就不必再读；需要逐字核对时原文在此：${ref.locator}。${ref.retrievalHint}）`
 }
 
 /**
@@ -93,7 +99,7 @@ function readPathOf(exec: EntryExec): string | undefined {
 }
 
 /**
- * 把完整正文写进存储并拼出入口说明。失败由调用方按「透传」处理（存储后端不可用时本函数不写、也不摘要）。
+ * 把完整正文写进存储并拼出入口说明（接在摘要之后）。失败由调用方按「透传」处理（存储后端不可用时本函数不写、也不摘要）。
  * @param store - spill 存储服务。
  * @param exec - 工具执行（决定会话归属、工具来源与调用 id）。
  * @param toolName - 工具名。
@@ -114,7 +120,7 @@ export async function writeEntry(
     suggestedName: `${toolName}.txt`,
     content,
   })
-  return { entry: composeEntry(ref), locator: ref.locator, sessionId }
+  return { entry: composeEntry(ref, toolName), locator: ref.locator, sessionId }
 }
 
 /**

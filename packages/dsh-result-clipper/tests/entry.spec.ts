@@ -3,7 +3,7 @@
  *
  * 观察面：**工具执行的结果**（模型最终看到什么）、**假 route 的请求数**（跳过摘要路径要能被看见，不能只断言
  * 正文没变）、**假 spill 后端收到的 `saveText` 入参**（完整正文、会话归属、工具来源）与 **debug JSONL 的
- * 结果取值**。替换后的文本断言用 `composeEntry(后端返回值) + 摘要`，入口说明的**位置**另有独立用例逐条核。
+ * 结果取值**。替换后的文本断言用 `摘要 + composeEntry(后端返回值, 工具名)`——入口说明是**摘要之后的兜底段**。
  *
  * 每条判据都配阳性对照：凡「没写盘 / 没发请求 / 没摘要」的断言，同文件里都有一条证明同一路径在条件改变后
  * 会写盘、会发请求。
@@ -95,7 +95,7 @@ describe('票 04 第 1 条：替换前把完整正文写入存储', () => {
       suggestedName: 'bash.txt',
       content: LONG_BODY,
     }])
-    expect(textOf(result.content)).toBe(composeEntry(fixture.spill!.refs[0]!) + SHORT_SUMMARY)
+    expect(textOf(result.content)).toBe(SHORT_SUMMARY + composeEntry(fixture.spill!.refs[0]!, 'bash'))
   })
 })
 
@@ -125,7 +125,7 @@ describe('票 04 第 2 条：存储不可用或写入失败时透传且不留入
 })
 
 describe('票 04 第 3、4 条：入口说明的形状与位置', () => {
-  it('入口说明由 locator 与取回方法构成，位于摘要正文最前', async () => {
+  it('摘要正文在最前、入口说明是它之后的兜底段（含 locator、取回方法与「够用就不必再读」）', async () => {
     const { fixture } = await mounted()
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
@@ -135,10 +135,14 @@ describe('票 04 第 3、4 条：入口说明的形状与位置', () => {
     const content = textOf(result.content)
     expect(content).toContain(ref.locator)
     expect(content).toContain(ref.retrievalHint)
-    expect(content.endsWith(SHORT_SUMMARY)).toBe(true)
-    // 「最前」= locator 与取回方法都在摘要正文之前；旧结果裁剪器只留头 4096 / 尾 1024，写中间会被删掉。
-    expect(content.indexOf(ref.locator)).toBeLessThan(content.indexOf(SHORT_SUMMARY))
-    expect(content.indexOf(ref.retrievalHint)).toBeLessThan(content.indexOf(SHORT_SUMMARY))
+    // 模型读到的第一段必须是摘要本身，不再是一条可读路径加一句祈使句。
+    expect(content.startsWith(SHORT_SUMMARY)).toBe(true)
+    expect(content.indexOf(SHORT_SUMMARY)).toBeLessThan(content.indexOf(ref.locator))
+    expect(content.indexOf(ref.locator)).toBeLessThan(content.indexOf(ref.retrievalHint))
+    // 兜底段自报身份与用途：说是本次结果的摘要、够用就不必再读、需要逐字核对时才取。
+    expect(content).toContain('以上为本次 bash 结果的摘要')
+    expect(content).toContain('够用就不必再读')
+    expect(content.endsWith('）')).toBe(true)
   })
 
   it('摘要输出受固定的 512 token 上限约束（总长留在 8192 字符阈值内）', async () => {
@@ -167,7 +171,7 @@ describe('票 04 第 5 条：含入口说明的长度比较发生在写盘之前
     shorter.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const replaced = await shorter.fixture.ctx.tools.execute(exec('bash'))
     expect(shorter.fixture.spill!.saves).toHaveLength(1)
-    expect(textOf(replaced.content)).toBe(composeEntry(shorter.fixture.spill!.refs[0]!) + SHORT_SUMMARY)
+    expect(textOf(replaced.content)).toBe(SHORT_SUMMARY + composeEntry(shorter.fixture.spill!.refs[0]!, 'bash'))
   })
 })
 
@@ -204,7 +208,7 @@ describe('票 04 第 7、8 条：按入口读回跳过整个摘要路径', () =>
     // 阳性对照：同一条 read 换成别的路径就照常摘要——证明上一条不是「read 从不进摘要路径」。
     const other = await fixture.ctx.tools.execute(exec('read', undefined, { file_path: '/tmp/other.txt' }))
     expect(route.requests).toHaveLength(2)
-    expect(textOf(other.content)).toBe(composeEntry(fixture.spill!.refs[1]!) + SHORT_SUMMARY)
+    expect(textOf(other.content)).toBe(SHORT_SUMMARY + composeEntry(fixture.spill!.refs[1]!, 'read'))
   })
 })
 
@@ -222,13 +226,13 @@ describe('票 04 第 9 条：会话失效后同一路径按普通 read 处理', 
     // fork：新会话 id 的台账是空的，同一入口不再被认成读回。
     const forked = await fixture.ctx.tools.execute(exec('read', undefined, { file_path: locator }, 's2'))
     expect(route.requests).toHaveLength(2)
-    expect(textOf(forked.content)).toBe(composeEntry(fixture.spill!.refs[1]!) + SHORT_SUMMARY)
+    expect(textOf(forked.content)).toBe(SHORT_SUMMARY + composeEntry(fixture.spill!.refs[1]!, 'read'))
 
     // 重启：新装一份插件（进程重启的等价物），同一路径同样按普通 read 处理。
     const restarted = await mounted()
     restarted.fixture.ctx.tools.register(textTool('read', LONG_BODY))
     const again = await restarted.fixture.ctx.tools.execute(exec('read', undefined, { file_path: locator }))
     expect(restarted.route.requests).toHaveLength(1)
-    expect(textOf(again.content)).toBe(composeEntry(restarted.fixture.spill!.refs[0]!) + SHORT_SUMMARY)
+    expect(textOf(again.content)).toBe(SHORT_SUMMARY + composeEntry(restarted.fixture.spill!.refs[0]!, 'read'))
   })
 })

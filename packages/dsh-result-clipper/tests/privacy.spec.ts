@@ -242,7 +242,7 @@ describe('票 07 第 2 条：每个标准工具结果的隐私判断', () => {
     expect(route.requests).toHaveLength(1)
     expect(fixture.spill!.saves).toHaveLength(1)
     expect(fixture.spill!.saves[0]!.content).toBe(LONG_BODY)
-    expect(textOf(result.content)).toBe(composeEntry(fixture.spill!.refs[0]!) + SAFE_SUMMARY)
+    expect(textOf(result.content)).toBe(SAFE_SUMMARY + composeEntry(fixture.spill!.refs[0]!, 'bash'))
   })
 
   it('判 safe 且动作为 keep 时正文逐字不变、不写存储、记 kept', async () => {

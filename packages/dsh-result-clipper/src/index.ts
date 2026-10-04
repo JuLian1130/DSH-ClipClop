@@ -8,7 +8,8 @@
  * 才发摘要请求；候选之外的、`bash`/`web_fetch` 超上限的、失败的、模型要求 `keep` 的、摘要没变短的、按入口
  * 读回的，一律原样透传。替换只改 `content`，`additionalContexts` 原样保留（ADR 0003）。
  *
- * 被替换的正文先写进 spill 存储，把 `locator` 与取回方法作为入口说明放在摘要正文最前；长度比较计入入口
+ * 被替换的正文先写进 spill 存储，把 `locator` 与取回方法作为入口说明接在摘要正文之后（兜底段：先让模型读到
+ * 摘要，并能看出这是摘要、够用就不必再读）；长度比较计入入口
  * 说明的预留上界、发生在写盘之前（设计文档裁决 A），所以 `not-shorter` 与 `keep` 都不留无人引用的副本。
  *
  * 本票（05）接入**摘要 memo**：隐私关闭时按（工具名, 正文 hash）在当前会话内复用同一条摘要（查找在准入判断
@@ -346,7 +347,7 @@ function blockedDecision(toolName: string): PostToolDecision {
 }
 
 /**
- * 用一条摘要替换模型可见投影：先按入口说明的预留上界比长度，严格更短才写盘并拼入口说明。
+ * 用一条摘要替换模型可见投影：先按入口说明的预留上界比长度，严格更短才写盘并接上入口说明。
  *
  * 干跑只走到「本应替换」为止：不写盘、不记入口，交回的仍是下游决策。
  * @param ctx - 插件的 context。
@@ -387,7 +388,7 @@ async function replace(
   return {
     decision: {
       kind: 'accept',
-      content: [{ type: 'text', text: written.entry + summary }],
+      content: [{ type: 'text', text: summary + written.entry }],
       ...decision.additionalContexts === undefined ? {} : { additionalContexts: decision.additionalContexts },
     },
     outcome: { action: 'summarized' },

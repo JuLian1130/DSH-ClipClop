@@ -252,12 +252,12 @@ describe('票 04 第 10 条：read 之后的 edit 不出现 FS_NOT_OBSERVED', ()
     expect(result.isError).toBe(false)
   })
 
-  it('read 被摘要后再 edit：模型看到的是入口说明 + 摘要，edit 仍不被判失败', async () => {
+  it('read 被摘要后再 edit：模型看到的是摘要 + 入口说明，edit 仍不被判失败', async () => {
     const { ctx, spill, probe } = await setup()
     const observed = await read(ctx)
     expect(spill.saves).toHaveLength(1)
     expect(observed).toContain(spill.refs[0]!.locator)
-    expect(observed.endsWith(SHORT_SUMMARY)).toBe(true)
+    expect(observed.startsWith(SHORT_SUMMARY)).toBe(true)
 
     // 观察面写死：真实 version 已经发出（`fs-observation-policy` 记录的正是这一条）。
     expect(probe.versions.get(`s1|${READ_PATH}`)).toBe('v1')

@@ -68,11 +68,11 @@ function assistantContent(fixture: LoopFixture): readonly (readonly ContentBlock
 }
 
 describe('票 03 第 10 条：替换后的落盘内容被 token 计量器读到', () => {
-  it('会话里落盘的是入口说明 + 摘要，且计量器的表面读数按它计价（阴性对照：关闭摘要时按原文计价）', async () => {
+  it('会话里落盘的是摘要 + 入口说明，且计量器的表面读数按它计价（阴性对照：关闭摘要时按原文计价）', async () => {
     const on = await tracked({ summarize: true, routeProvider: 'mock', routeModel: 'mock' })
     const off = await tracked({ summarize: false })
 
-    expect(toolResultText(on)).toBe(composeEntry(on.spill.refs[0]!) + SUMMARY)
+    expect(toolResultText(on)).toBe(SUMMARY + composeEntry(on.spill.refs[0]!, 'bash'))
     expect(toolResultText(off)).toBe(BODY)
 
     // 两臂除这条结果外同形；差值必须恰好等于「原文 vs 摘要」在计量器眼里的差价——不是「小了一点」。
