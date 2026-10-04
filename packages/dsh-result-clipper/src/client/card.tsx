@@ -43,6 +43,7 @@ export type ResultClipperCardField =
   | 'privacyProvider'
   | 'privacyModel'
   | 'privacyConfirmedLocal'
+  | 'webFetchPrivacyGate'
   | 'failurePolicy'
   | 'admissionProvider'
   | 'admissionModel'
@@ -73,6 +74,8 @@ export interface ResultClipperCardInjected {
     privacyGate: ObservableSnapshot<boolean>
     /** 「隐私 route 已确认为本地」确认位的当前值。 */
     privacyConfirmedLocal: ObservableSnapshot<boolean>
+    /** `web_fetch` 的结果是否也过隐私闸门；默认不过。 */
+    webFetchPrivacyGate: ObservableSnapshot<boolean>
     /** 隐私失效的处理策略：`passthrough` 放行原文，`block` 给出拒绝结果。 */
     failurePolicy: ObservableSnapshot<'passthrough' | 'block'>
     /** 摘要 route 的 provider。 */
@@ -628,8 +631,9 @@ const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'admissionPrompt', kind: 'prompt', fallback: DEFAULT_ADMISSION_RULE },
 ]
 
-/** 隐私组的字段：route、推理档位、确认位、失败策略与提示词。 */
+/** 隐私组的字段：web_fetch 是否也判、route、推理档位、确认位、失败策略与提示词。 */
 const PRIVACY_FIELDS: readonly GroupFieldSpec[] = [
+  { field: 'webFetchPrivacyGate', kind: 'boolean' },
   { field: 'privacyProvider', kind: 'text' },
   { field: 'privacyModel', kind: 'text' },
   { field: 'privacyReasoningEffort', kind: 'text', fallback: 'off' },
@@ -663,6 +667,7 @@ const PRIVACY_ROUTE: RouteFields = {
 export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyGate = props.usePrivacyGate(value => value)
   const privacyConfirmedLocal = props.usePrivacyConfirmedLocal(value => value)
+  const webFetchPrivacyGate = props.useWebFetchPrivacyGate(value => value)
   const failurePolicy = props.useFailurePolicy(value => value)
   const routeProvider = props.useRouteProvider(value => value)
   const routeModel = props.useRouteModel(value => value)
@@ -694,7 +699,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     admissionPrompt: admissionPrompt === '' ? DEFAULT_ADMISSION_RULE : admissionPrompt,
   }, props.saveFields)
   const privacy = useGroupDraft(PRIVACY_FIELDS, {
-    privacyProvider, privacyModel, privacyReasoningEffort, privacyConfirmedLocal, failurePolicy,
+    webFetchPrivacyGate, privacyProvider, privacyModel, privacyReasoningEffort, privacyConfirmedLocal,
+    failurePolicy,
     privacyPrompt: privacyPrompt === '' ? DEFAULT_PRIVACY_RULE : privacyPrompt,
   }, props.saveFields)
   const diagnostics = useGroupDraft(DIAGNOSTIC_FIELDS, { debugPath }, props.saveFields)
@@ -850,6 +856,10 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         hint={props.t('privacyConfirmedLocalHint')}
         checked={privacy.value('privacyConfirmedLocal') as boolean}
         onChange={next => { privacy.change('privacyConfirmedLocal', next) }} />
+      <CheckRow id="plugin-config-result-clipper-webfetch-gate" label={props.t('webFetchPrivacyGate')}
+        hint={props.t('webFetchPrivacyGateHint')}
+        checked={privacy.value('webFetchPrivacyGate') as boolean}
+        onChange={next => { privacy.change('webFetchPrivacyGate', next) }} />
       <ChoiceRow id="plugin-config-result-clipper-failure-policy" label={props.t('failurePolicy')}
         hint={props.t('failurePolicyHint')}
         value={privacy.value('failurePolicy') as 'passthrough' | 'block'} options={[

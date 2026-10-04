@@ -7,6 +7,8 @@
         # 两项能力都默认关闭；这里是 schema 的默认值，写出来只是让这份示例自足。
         summarize: false
         privacyGate: false
+        # web_fetch 取的多是外网公开信息，默认不送隐私判断；取内网地址的部署可以打开它。
+        webFetchPrivacyGate: false
         # 可选参数 extract：主模型在调用时声明要拿回什么。开启后 read 走 agent 作用域遮蔽，
         # bash / web_fetch 优先全局接管（需先用 patch 关掉原生条目），接管不到回落遮蔽。
         extractArg: false

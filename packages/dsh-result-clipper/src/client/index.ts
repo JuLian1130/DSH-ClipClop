@@ -66,6 +66,7 @@ const LOCALE_NAMESPACE = 'resultClipper'
 interface PreferenceSection {
   summarize: boolean
   privacyGate: boolean
+  webFetchPrivacyGate: boolean
   admissionJudge: boolean
   debug: boolean
   dryRun: boolean
@@ -136,6 +137,7 @@ export function apply(ctx: Context): void {
       inject: () => ({
         hooks: {
           privacyGate: booleanField(form, 'privacyGate'),
+          webFetchPrivacyGate: booleanField(form, 'webFetchPrivacyGate'),
           privacyConfirmedLocal: booleanField(form, 'privacyConfirmedLocal'),
           failurePolicy: policyField(form),
           routeProvider: stringField(form, 'routeProvider'),
@@ -173,7 +175,7 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
+  field: 'summarize' | 'privacyGate' | 'webFetchPrivacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
   fallback = false,
 ): ObservableSnapshot<boolean> {
   return {

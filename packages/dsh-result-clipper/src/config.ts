@@ -3,7 +3,7 @@
  *
  * 全部字段都 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
- * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、摘要准入判断关闭、摘要 route 与准入 route 未配置、
+ * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、`web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
  * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」、提示词留空（用内置规则正文）、debug 关闭且不
  * 自动改用临时路径、干跑关闭。
  *
@@ -32,6 +32,13 @@ export interface Config {
   summarize?: Volatile<boolean>
   /** 隐私闸门开关，默认关闭（用户故事 2）。 */
   privacyGate?: Volatile<boolean>
+  /**
+   * 是否把 `web_fetch` 的结果也交给隐私闸门，默认关闭。
+   *
+   * `web_fetch` 取的多是外网公开信息，默认不必过闸门（少数取内网地址的部署可以打开它）；其余工具的结果不受这个
+   * 开关影响，只要 `privacyGate` 开着就仍然逐条判断。
+   */
+  webFetchPrivacyGate?: Volatile<boolean>
   /** 摘要准入判断开关，默认关闭（用户故事 17）。 */
   admissionJudge?: Volatile<boolean>
   /**
@@ -95,6 +102,7 @@ const effort = () =>
 export const Config = z.object({
   summarize: z.boolean().default(false).volatile(),
   privacyGate: z.boolean().default(false).volatile(),
+  webFetchPrivacyGate: z.boolean().default(false).volatile(),
   admissionJudge: z.boolean().default(false).volatile(),
   extractArg: z.boolean().default(false).volatile(),
   debug: z.boolean().default(false).volatile(),

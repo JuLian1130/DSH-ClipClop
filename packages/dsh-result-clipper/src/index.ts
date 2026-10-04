@@ -23,7 +23,8 @@
  * 候选内。判定敏感一律返回原生 `block`（固定文案，含工具名、不含参数与正文）；`uncertain` 与技术失败按失败
  * 策略放行原文或拦截；`safe` 且动作为 `summarize` 时照常走摘要路径、正文被摘要替换，`safe` + `keep` 保留
  * 原文。隐私模式只发这一次请求（准入不发），同一工具同一正文连续两次也各判一次（memo 不参与）。隐私 route
- * 未确认为本地、没有 `llm` 服务或 route 没配出来都是配置失败，按失败策略处理，不另发会话提醒。
+ * 未确认为本地、没有 `llm` 服务或 route 没配出来都是配置失败，按失败策略处理，不另发会话提醒。`web_fetch` 的
+ * 结果默认不判（`webFetchPrivacyGate` 打开才判）：它取的多是外网公开信息，被跳过的结果与隐私关闭时同路。
  *
  * 失效必须可见：按 `passthrough` 放行时同一会话内每类原因（未判定 / 判断失败 / 本地窗口不足）各追加一条
  * 不含正文的插件提醒；`block` 策略下拦截本身在对话里可见，不发提醒。窗口不足与普通失败在 debug 记录里取值
@@ -191,7 +192,9 @@ async function process(
   // 要替换掉的那段**模型即将看到的投影**是下游决策的正文；附加上下文与图片块只影响隐私判断的文本投影。
   const visible = decision.content ?? result.content
 
-  if (config.privacyGate.get()) {
+  // 隐私闸门默认不判 `web_fetch`：它取的多是外网公开信息（`webFetchPrivacyGate` 可以把内网部署的它纳入）。被跳过
+  // 的结果与「隐私关闭」同路（候选 → memo → 准入 → 摘要），不是既不判也不加工。
+  if (config.privacyGate.get() && (config.webFetchPrivacyGate.get() || exec.name !== 'web_fetch')) {
     const projection = projectionText(
       visible,
       [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],

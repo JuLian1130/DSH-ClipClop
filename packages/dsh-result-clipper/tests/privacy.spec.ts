@@ -295,6 +295,45 @@ describe('票 07 第 3 条：判定敏感返回固定 block 文案', () => {
   })
 })
 
+describe('隐私闸门默认不覆盖 web_fetch', () => {
+  it('默认不判：web_fetch 不发隐私请求，照常走摘要路径被替换；勾上开关后同一条结果被拦下', async () => {
+    // 隐私关闭时 web_fetch 是摘要候选，所以这里第一发就是摘要请求；用 SAFE 当答复是因为它的字段形状同时满足
+    // 摘要解析（action/summary），从而能证明这条结果确实走了摘要路径。
+    const off = await mounted()
+    off.fixture.ctx.tools.register(textTool('web_fetch', LONG_BODY))
+    const rewritten = await off.fixture.ctx.tools.execute(exec('web_fetch'))
+
+    expect(off.route.requests).toHaveLength(1)
+    expect(requestText(off.route.requests[0]!)).not.toContain('privacyVerdict')
+    expect(textOf(rewritten.content)).toBe(SAFE_SUMMARY + composeEntry(off.fixture.spill!.refs[0]!, 'web_fetch'))
+    expect(records(off.path)).toEqual([expect.objectContaining({ action: 'summarized' })])
+
+    // 阳性对照：同一个工具、只把开关勾上，就发隐私请求、判定敏感就拦截。
+    const on = await mounted({ webFetchPrivacyGate: true }, [{ text: SENSITIVE }])
+    on.fixture.ctx.tools.register(textTool('web_fetch', LONG_BODY))
+    const blocked = await on.fixture.ctx.tools.execute(exec('web_fetch'))
+
+    expect(on.route.requests).toHaveLength(1)
+    expect(requestText(on.route.requests[0]!)).toContain('privacyVerdict')
+    expect(blocked.isError).toBe(true)
+    expect(textOf(blocked.content)).toContain('web_fetch')
+    expect(records(on.path)).toEqual([expect.objectContaining({ action: 'rejected' })])
+  })
+
+  it('只挪 web_fetch：同一份夹具里 bash 仍逐条判断', async () => {
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('web_fetch', LONG_BODY))
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+
+    await fixture.ctx.tools.execute(exec('web_fetch'))
+    await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(2)
+    expect(requestText(route.requests[0]!)).not.toContain('privacyVerdict')
+    expect(requestText(route.requests[1]!)).toContain('privacyVerdict')
+  })
+})
+
 describe('票 07 第 4 条：uncertain 与技术失败按失败策略处理', () => {
   it('passthrough：uncertain 与技术失败都放行原文，取值分别是 uncertain / failed', async () => {
     const uncertain = await mounted({}, [{ text: UNCERTAIN }])

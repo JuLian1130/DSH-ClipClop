@@ -285,6 +285,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(summary.querySelector('#plugin-config-result-clipper-max-summarize')).not.toBeNull()
     const privacy = groupOf(container, '隐私闸门模型')
     expect(privacy.querySelector('#plugin-config-result-clipper-privacy-confirmed')).not.toBeNull()
+    expect(privacy.querySelector('#plugin-config-result-clipper-webfetch-gate')).not.toBeNull()
     expect(privacy.querySelector('#plugin-config-result-clipper-failure-policy')).not.toBeNull()
     expect(groupOf(container, '诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
     // 四个分组之间三条长横线：三个模型组各有自己的边界，诊断组同样被隔开。
@@ -798,6 +799,16 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       { op: 'set', path: ['failurePolicy'], value: 'block' },
     ]])
     expect(fixture.form.value).toMatchObject({ privacyConfirmedLocal: true, failurePolicy: 'block' })
+  })
+
+  it('web_fetch 的隐私开关默认不勾，勾上后随隐私组一次写回', async () => {
+    const { fixture, container } = await renderPage()
+    const box = container.querySelector('#plugin-config-result-clipper-webfetch-gate input') as HTMLInputElement
+    expect(box.checked).toBe(false)
+    await fireEvent.click(box)
+    await fireEvent.click(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['webFetchPrivacyGate'], value: true }]])
   })
 
   it('诊断组的 debug 路径同样要点「保存」才写回', async () => {
