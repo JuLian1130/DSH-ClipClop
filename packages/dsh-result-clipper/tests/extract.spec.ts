@@ -25,6 +25,7 @@ import {
   extendInPlace,
   installExtractArg,
   READ_GUIDANCE,
+  takeoverPlan,
 } from '../src/extract.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
@@ -305,5 +306,14 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     expect(Object.keys(ctx.tools.get('pwsh')!.parameters?.properties ?? {})).not.toContain('extract')
     expect(ctx.tools.get('bash')).toBeUndefined()
     await ctx.fiber.dispose()
+  })
+
+  it.each([
+    ['darwin', ['bash', 'web_fetch']],
+    ['linux', ['bash', 'web_fetch']],
+    ['win32', ['pwsh', 'web_fetch']],
+  ] as const)('接管只挑这个平台的 shell：%s → %j', (platform, expected) => {
+    // 与 base bundle preset 行的 `!!js process.platform` 条件同源；Windows 上不会去挂 `bash`（那里没有它）。
+    expect(takeoverPlan(platform)).toEqual(expected)
   })
 })

@@ -195,6 +195,44 @@ export function extractEnabled(config: { readonly summarize: { get(): boolean } 
 }
 
 /**
+ * 取 cordis 的核心 logger；拿不到就交回 `undefined`。接管失败的告警是尽力而为，不能反过来把装载弄坏。
+ * @param ctx - 插件 context。
+ * @returns 可用的 logger。
+ */
+function logger(ctx: Context): { warn(message: string): void } | undefined {
+  try {
+    return ctx.logger
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 这个平台上该由插件"全局接管"哪几个工具。
+ *
+ * 平台条件与 base bundle 的 preset 行**同一套判据**（`disabled: !!js process.platform === 'win32'` / `!== 'win32'`）：
+ * Windows 上的 shell 是 `pwsh`，在别处是 `bash`。少了这层判断，Windows 上会因为"`bash` 不在表里"而把 `bash`
+ * 挂回来——那是一个那个平台根本没有的 shell。
+ * @param platform - 平台标识（调用点传 `process.platform`）。
+ * @returns 要依次尝试接管的工具名。
+ */
+export function takeoverPlan(platform: string): readonly string[] {
+  return platform === 'win32' ? ['pwsh', 'web_fetch'] : ['bash', 'web_fetch']
+}
+
+/**
+ * 挂回 Windows 上的 shell。用**变量说明符的动态 import**：`@deepseek-ai/dsh-tool-pwsh` 是 web-app bundle 的依赖
+ * （每个 DSH 安装里都有），但不在本包的依赖里、本机开发时也装不到，静态 import 会让插件在 macOS/Linux 上因解析
+ * 不到而整条装载失败。平台条件保证这段只在 Windows 上求值。
+ * @param ctx - 插件 context。
+ * @returns `ctx.plugin` 交回的可 await fiber。
+ */
+function mountPwsh(ctx: Context): unknown {
+  const name: string = '@deepseek-ai/dsh-tool-pwsh'
+  return import(name).then(module => ctx.plugin(module as never, {} as never))
+}
+
+/**
  * 独占一个插件条目、且能重新挂载的工具：优先"全局接管"。
  *
  * 用 `ctx.plugin` 挂回来，不直接调它们的 `apply`：服务解析按**访问方 fiber 的 inject** 走，本插件的 inject 只有
@@ -205,6 +243,7 @@ export function extractEnabled(config: { readonly summarize: { get(): boolean } 
  */
 const TAKEOVER: Record<string, (ctx: Context) => unknown> = {
   bash: (ctx) => ctx.plugin(bashTool, {}),
+  pwsh: mountPwsh,
   web_fetch: (ctx) => ctx.plugin(webTool, { fetch: true, search: false }),
 }
 
@@ -228,10 +267,17 @@ export function installExtractArg(ctx: Context, enabled: () => boolean): void {
     if (!enabled()) return
     if (!decided) {
       decided = true
-      for (const name of ['bash', 'web_fetch']) {
+      for (const name of takeoverPlan(process.platform)) {
         // 原生已经不在了 = 部署用 patch 关掉了那个条目，可以自己挂回来并就地改写。
         if (ctx.tools.get(name) !== undefined) continue
-        await TAKEOVER[name]?.(ctx)
+        try {
+          await TAKEOVER[name]?.(ctx)
+        } catch (error: unknown) {
+          // 接管失败不得把 agent 创建一起弄失败（历史上正是这样炸过一次）；这一轮里这个工具就缺失，
+          // 下一次创建 agent 时还会再试。
+          logger(ctx)?.warn(`dsh-result-clipper: mounting ${name} failed: ${String(error)}`)
+          continue
+        }
         const registered = ctx.tools.get(name)
         if (registered === undefined) continue
         extendInPlace(registered, name)

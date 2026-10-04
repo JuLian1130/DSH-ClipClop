@@ -81,7 +81,22 @@ Desktop profile 由 Electron 管理时，应在该 profile 目录中使用其安
 - **关闭就是真关闭**：摘要关着时，模型即使自己写了 `extract` 也不认（不跳过准入、不换规则正文）——否则"关闭"只是不宣传，而不是不生效。
 - **带目标的调用不查也不写摘要 memo**：memo 的键只有（工具名 + 正文 hash），不含目标；复用会把另一种问法的摘要当答案返回。
 - **隐私闸门开着时**，同一份隐私规则正文之外再固定追加一段：目标只决定"要拿回什么"，不降低隐私门槛；模型要按目标**只交回不牵涉隐私的那部分**（涉隐私的值用占位或省略），目标必须依赖隐私内容、脱敏后满足不了时就照旧返回 `sensitive`/`uncertain`，走既有的拦截或失败策略。这一段的文字由插件固定、不另设第二份可编辑提示词；用户的隐私政策仍写在同一份隐私规则正文里，两种模式共用。
-- **安装方式按工具分开**（实测见 `.scratch/dsh-result-clipper/exp2/RESULTS.md`）：`read` 只用 agent 作用域遮蔽（它与 `write`/`edit`/`read_image` 同一条目，禁用会连坐）；`bash`、`web_fetch` 各自独占一个条目，所以部署可以先用 profile patch 关掉原生条目，插件再把它挂回来并**就地**补参数（注册表没有替换 API）；原生还在时自动回落到遮蔽。
+- **安装方式按工具分开**（实测见 `.scratch/dsh-result-clipper/exp2/RESULTS.md`）：`read` 只用 agent 作用域遮蔽（它与 `write`/`edit`/`read_image` 同一条目，禁用会连坐）；`bash` / `pwsh` / `web_fetch` 各自独占一个条目，所以部署可以先用 profile patch 关掉原生条目，插件再把它挂回来并**就地**补参数（注册表没有替换 API）；原生还在时自动回落到遮蔽。
+- **想让插件成为唯一注册者（"真单关"）**：在保存 preset 的地方，把三种 shell / 取回条目一起禁用，插件会按平台决定挂哪一个 shell——`bash` 只在非 Windows、`pwsh` 只在 Windows（判据与 base bundle 的 `!!js process.platform` 同一套）：
+  ```yaml
+        - id: tool-bash
+          name: '@deepseek-ai/dsh-tool-bash'
+          disabled: true
+        - id: tool-pwsh
+          name: '@deepseek-ai/dsh-tool-pwsh'
+          disabled: true
+        - id: tool-web
+          name: '@deepseek-ai/dsh-tool-web'
+          config:
+            fetch: false     # 只关取回；web_search 仍由这一条提供
+            search: true
+  ```
+  这一档的好处是运行期只有一份定义（模型侧 schema 与执行体同源），代价是插件若挂不回来那个工具就缺失；插件在 `agent/created` 上尝试挂载，失败只记一条 warn、不会把 agent 创建弄失败，下一次创建还会再试。`read` 没有这一档。
 - **遮蔽只在"该 agent 本来就看得见这个工具"时才安装**：作用域自有注册不过 `allow`/`deny` 过滤，若是无条件遮蔽，等于把某 agent 的禁用名单悄悄解除。
 - 影子工具把 `extract` 摘掉后才委托原生执行；替换仍只作用于**模型可见内容**，规范值不变（`run_code` 里的程序拿到完整值）。
 - debug 记录里有一个 `extract` 布尔，表示这次调用有没有声明目标（只记布尔、不记目标正文），用来观察"主模型判断该不该传参数"准不准。
