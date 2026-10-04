@@ -58,6 +58,13 @@ export type DebugRecord = DebugOutcome & {
    */
   judgeInputTokens: number | null
   /**
+   * 这次调用有没有声明提取目标（`arguments.extract` 上的非空字符串，且摘要与可选参数两个开关都开着才算）。
+   *
+   * 只记这个布尔、不记目标正文（记录不含原文与提示词）。它的用途是回答「主模型判断该不该传参数准不准」——那是
+   * 「观察一段时间后删掉准入判断」这条退出条件的前提。
+   */
+  extract: boolean
+  /**
    * 干跑记录：动作与原因记的是「本应发生什么」的预报，不是真实结果。真实记录没有这个键。
    */
   dryRun?: true

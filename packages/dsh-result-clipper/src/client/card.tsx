@@ -44,6 +44,7 @@ export type ResultClipperCardField =
   | 'privacyModel'
   | 'privacyConfirmedLocal'
   | 'webFetchPrivacyGate'
+  | 'extractArg'
   | 'failurePolicy'
   | 'admissionProvider'
   | 'admissionModel'
@@ -104,6 +105,8 @@ export interface ResultClipperCardInjected {
     privacyReasoningEffort: ObservableSnapshot<ReasoningEffort>
     /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
     summaryPrompt: ObservableSnapshot<string>
+    /** 可选参数 `extract` 的开关：与摘要一起决定三类目标工具是否带上它。 */
+    extractArg: ObservableSnapshot<boolean>
     /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
     admissionPrompt: ObservableSnapshot<string>
     /** 隐私提示词的规则正文覆盖；空串表示用内置默认。 */
@@ -612,13 +615,14 @@ function PromptRow(props: {
   </section>
 }
 
-/** 摘要组的字段：route、推理档位、两个阈值与提示词。 */
+/** 摘要组的字段：route、推理档位、两个阈值、可选参数开关与提示词。 */
 const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'routeProvider', kind: 'text' },
   { field: 'routeModel', kind: 'text' },
   { field: 'summaryReasoningEffort', kind: 'text', fallback: 'off' },
   { field: 'minInlineTokens', kind: 'number', fallback: 1024 },
   { field: 'maxSummarizeTokens', kind: 'number', fallback: 12500 },
+  { field: 'extractArg', kind: 'boolean' },
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
 ]
 
@@ -668,6 +672,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyGate = props.usePrivacyGate(value => value)
   const privacyConfirmedLocal = props.usePrivacyConfirmedLocal(value => value)
   const webFetchPrivacyGate = props.useWebFetchPrivacyGate(value => value)
+  const extractArg = props.useExtractArg(value => value)
   const failurePolicy = props.useFailurePolicy(value => value)
   const routeProvider = props.useRouteProvider(value => value)
   const routeModel = props.useRouteModel(value => value)
@@ -690,7 +695,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   useEffect(() => { props.refreshModelCatalog() }, [])
 
   const summary = useGroupDraft(SUMMARY_FIELDS, {
-    routeProvider, routeModel, summaryReasoningEffort, minInlineTokens, maxSummarizeTokens,
+    routeProvider, routeModel, summaryReasoningEffort, minInlineTokens, maxSummarizeTokens, extractArg,
     // 提示词的已存值是**生效正文**：草稿与它相同就没有改动，等于内置正文时保存走 `unset`。
     summaryPrompt: summaryPrompt === '' ? DEFAULT_SUMMARY_RULE : summaryPrompt,
   }, props.saveFields)
@@ -785,6 +790,10 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           hint={props.t('maxSummarizeTokensHint')} value={summary.value('maxSummarizeTokens') as string}
           onChange={next => { summary.change('maxSummarizeTokens', next) }} />
       </div>
+      <CheckRow id="plugin-config-result-clipper-extract" label={props.t('extractArg')}
+        hint={props.t('extractArgHint')}
+        checked={summary.value('extractArg') as boolean}
+        onChange={next => { summary.change('extractArg', next) }} />
       <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
         hint={props.t('promptHint')} value={summary.value('summaryPrompt') as string}
         onChange={next => { summary.change('summaryPrompt', next) }} />

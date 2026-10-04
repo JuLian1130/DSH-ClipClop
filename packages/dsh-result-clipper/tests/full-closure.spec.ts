@@ -316,7 +316,7 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
 
     const [record] = readRecords(path)
     expect(Object.keys(record!).sort()).toEqual([
-      'action', 'admission', 'cacheObservation', 'durationMs', 'judgeInputTokens', 'resultBytes', 'toolName',
+      'action', 'admission', 'cacheObservation', 'durationMs', 'extract', 'judgeInputTokens', 'resultBytes', 'toolName',
     ])
     expect(record).toEqual({
       toolName: 'bash',
@@ -327,6 +327,8 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
       cacheObservation: 240,
       // 判断器输入 token 数＝准入那次请求的输入规模（未缓存 + 缓存读 + 缓存写）。
       judgeInputTokens: 147,
+      // 这次调用没声明提取目标。
+      extract: false,
       action: 'summarized',
     })
   })

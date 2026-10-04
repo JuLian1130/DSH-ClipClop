@@ -6,6 +6,11 @@
  * 判断非 `safe` 时程序忽略 `action` 与 `summary`——`uncertain` 因此连带不摘要，也不在未判断成功的前提下继续
  * 加工内容。请求同样不设长度门槛（超窗由底层按 `failed-window` 报回）。
  *
+ * 主模型这次声明了提取目标时，规则正文之外再**固定追加一段**（{@link composeGoalSection}）：目标只决定要拿回
+ * 什么、不降低隐私门槛，模型要按目标只交回不牵涉隐私的部分，脱敏后满足不了目标就照旧返回
+ * `sensitive`/`uncertain`。这一段是机制，不给第二份可编辑提示词——用户的隐私政策写在同一份规则正文里，两种
+ * 模式共用。
+ *
  * **拒绝形状**：判定敏感（以及失败策略 `block` 下的失效）用原生 `{kind:'block', feedback:[固定文案]}`。文案
  * 三段：陈述被本地隐私判断拦下并带上工具名、明确不要重试也不要换工具或改参数再取、给出用 `ask_user_question`
  * 请用户决定的下一步；不含参数与正文（设计文档「隐私闸门」的拒绝文案三段）。
@@ -55,14 +60,34 @@ export type PrivacyResult =
   | { readonly ok: false; readonly failure: ModelRequestFailure }
 
 /**
- * 把可编辑的规则正文、固定外壳与完整文本投影拼成一次隐私请求的用户输入。
+ * 带提取目标时的固定追加段：目标只决定"要从结果里拿回什么"，**不改变隐私门槛**。
+ *
+ * 为什么固定、而不是第二份可编辑提示词：这一段是机制（脱敏不了就回到 `sensitive`/`uncertain`），与输出 schema
+ * 同类；用户的隐私政策仍写在同一份可编辑规则正文里、两种模式共用。所以不需要两套提示词规则。
+ * @param goal - 主模型声明的提取目标。
+ * @returns 接在固定外壳之后、工具正文之前的一段。
+ */
+function composeGoalSection(goal: string): string {
+  return [
+    '本次调用带了提取目标（它只决定要从结果里拿回什么，不降低这里的隐私门槛）：',
+    goal,
+    '按这个目标改写正文，但只交回不牵涉隐私或机密的部分：涉及隐私的值用占位或省略，只给与目标相关的最小正文。',
+    '目标必须依赖隐私内容、脱敏后就满足不了它时，照上面的形状返回 "sensitive"（明确涉密）或 "uncertain"'
+    + '（拿不准），不要为了完成目标把隐私内容交出去。',
+  ].join('\n')
+}
+
+/**
+ * 把可编辑的规则正文、固定外壳（带目标时再加一段固定说明）与完整文本投影拼成一次隐私请求的用户输入。
  * @param rule - 可编辑的规则正文；空串时用 {@link DEFAULT_PRIVACY_RULE}。
  * @param projection - 模型即将看到的完整文本投影（下游处理后的正文与附加上下文）。
+ * @param goal - 主模型这次声明的提取目标；没声明时为 `undefined`，此时提示词与关闭该参数之前逐字相同。
  * @returns 请求用的提示词文本。
  */
-export function composePrivacyPrompt(rule: string, projection: string): string {
+export function composePrivacyPrompt(rule: string, projection: string, goal?: string): string {
   const edited = rule === '' ? DEFAULT_PRIVACY_RULE : rule
-  return `${edited}\n\n${FIXED_SHELL}\n\n${BODY_OPEN}\n${projection}\n${BODY_CLOSE}\n`
+  const section = goal === undefined ? '' : `\n\n${composeGoalSection(goal)}`
+  return `${edited}\n\n${FIXED_SHELL}${section}\n\n${BODY_OPEN}\n${projection}\n${BODY_CLOSE}\n`
 }
 
 /**

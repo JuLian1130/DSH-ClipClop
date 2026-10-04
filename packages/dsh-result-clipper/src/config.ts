@@ -44,9 +44,10 @@ export interface Config {
   /**
    * 可选参数 `extract` 的装载开关，默认关闭。
    *
-   * 开启后三类目标工具的 schema 多一个 `extract`：主模型自己声明要拿回什么，声明了就按它提取、不再问准入模型；
-   * 没声明时行为与关闭时一致（走规则与准入）。`read` 走 agent 作用域遮蔽；`bash` / `web_fetch` 先试全局接管，
-   * 原生还在时回落遮蔽，见 `extract.ts`。
+   * **与 `summarize` 一起决定是否启用**（`extractEnabled`）：两个都开着，三类目标工具的 schema 才多一个
+   * `extract`——主模型自己声明要拿回什么，声明了就按它提取、不再问准入模型；没声明时行为与关闭时一致（走规则
+   * 与准入）。关闭时即使模型自己写了 `extract` 也不认。`read` 走 agent 作用域遮蔽；`bash` / `web_fetch` 先试
+   * 全局接管，原生还在时回落遮蔽，见 `extract.ts`。
    */
   extractArg?: Volatile<boolean>
   /** debug 记录开关，默认关闭；关闭时零写盘。 */

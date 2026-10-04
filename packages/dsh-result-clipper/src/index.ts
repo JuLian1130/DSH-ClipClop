@@ -39,6 +39,11 @@
  * memo；debug 记录加一个 `dryRun` 标记，字段取值记的是「本应替换 / 本应拦截 / 本应跳过及原因」。两项字段
  * （`缓存观测`、`判断器输入 token 数`）与本票一起补齐。
  *
+ * 可选参数 `extract`（`extractArg`，见 `extract.ts`）在**摘要与它都开着**时才启用：声明了目标的调用跳过准入、
+ * 规则正文换成目标、**既不查也不写 memo**（键里没有目标，复用会把另一种问法的摘要当答案）；隐私模式不再另设
+ * 提示词，而是在同一份隐私规则正文之后固定追加一段，要求按目标只交回不牵涉隐私的部分、脱敏满足不了目标时
+ * 照旧返回 `sensitive`/`uncertain`。debug 记录里的 `extract` 布尔记「这次有没有声明目标」。
+ *
  * 任何路径都不得抛出——`tools/post-execute` 抛错会把整个工具调用变成错误结果；调用点的兜底 catch 只负责
  * 收住意外，正常失败各自以「透传 / 拦截」结算。
  *
@@ -71,7 +76,7 @@ import {
   type ReminderLedger,
 } from './privacy.ts'
 import { composeSummaryPrompt, requestSummary, type ModelCallUsage, type SummaryAction } from './summary.ts'
-import { extractGoalOf, extractRule, installExtractArg } from './extract.ts'
+import { extractEnabled, extractGoalOf, extractRule, installExtractArg } from './extract.ts'
 
 export * from './config.ts'
 export * from './debug.ts'
@@ -104,8 +109,9 @@ export function apply(ctx: Context, config: Required<Config>): void {
   const memo: SummaryMemo = new Map()
   /** 本会话已提醒过的失效原因，按会话 id 分开（同一类原因至多一条）。 */
   const reminders: ReminderLedger = new Map()
-  // 可选参数 extract：主模型在调用时声明提取目标。默认关闭；开启后 read 遮蔽、bash/web_fetch 优先接管。
-  if (config.extractArg.get()) installExtractArg(ctx)
+  // 可选参数 extract：主模型在调用时声明提取目标。启用判据按每次 agent 创建读一次（摘要 + extractArg 都开着
+  // 才算），所以关掉任一个开关时，之后创建的 agent 看不到这个参数，也不再覆盖工具。
+  installExtractArg(ctx, () => extractEnabled(config))
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     if (exec.parent !== undefined) return next()
     const startedAt = performance.now()
@@ -117,6 +123,7 @@ export function apply(ctx: Context, config: Required<Config>): void {
         outcome: { action: 'unmodified', reason: 'failed' },
         admission: 'not-applicable',
         observation: { cacheReadTokens: 0, judgeInputTokens: null },
+        extract: false,
       }))
     await record(config, exec.name, result, startedAt, applied)
     return applied.decision
@@ -130,9 +137,11 @@ interface Applied {
   readonly admission: AdmissionVerdict
 }
 
-/** 一次处理的结果：判定部分，加上这条结果的模型请求观测。 */
+/** 一次处理的结果：判定部分，加上这条结果的模型请求观测与「有没有声明提取目标」。 */
 interface Processed extends Applied {
   readonly observation: Observation
+  /** 这次调用有没有声明提取目标；debug 记录只记这个布尔，不记目标正文。 */
+  readonly extract: boolean
 }
 
 /** 这条结果发出的模型请求的观测累计，即 debug 的「缓存观测」与「判断器输入 token 数」两个字段。 */
@@ -182,8 +191,11 @@ async function process(
   decision: PostToolDecision,
 ): Promise<Processed> {
   const dryRun = dryRunInEffect(config)
+  // 主模型这次调用有没有声明提取目标：它由两个开关共同决定（`extractEnabled`），关闭时传了也不认——否则
+  // 「关闭」只是不宣传而不是不生效。取法只认 `arguments.extract` 上的非空字符串。
+  const goal = extractEnabled(config) ? extractGoalOf(exec) : undefined
   const observation: Observation = { cacheReadTokens: 0, judgeInputTokens: null }
-  const settle = (applied: Applied): Processed => ({ ...applied, observation })
+  const settle = (applied: Applied): Processed => ({ ...applied, observation, extract: goal !== undefined })
   const unchanged = (reason: UnmodifiedReason, admission: AdmissionVerdict = 'not-applicable'): Processed =>
     settle({ decision, outcome: { action: 'unmodified', reason }, admission })
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文；它也不是本次要判断的工具内容。
@@ -199,7 +211,7 @@ async function process(
       visible,
       [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],
     )
-    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation)
+    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation, goal)
     // 干跑只预报「本应拦截」，交回的仍是下游决策——模型可见内容一个字都不变。
     if (judgement.kind === 'block') {
       return settle({
@@ -231,14 +243,14 @@ async function process(
 
   // memo 只在隐私关闭时参与判重（裁决 B），并且必须在准入判断之前查找——命中即整条摘要请求路径短路。干跑
   // 既不写也不查：查找会刷新最近使用次序，同样改变随后真实运行的行为，而命中与否不改变记录里的取值。
-  const reused = dryRun ? undefined : lookupMemo(memo, exec, verdict.text)
+  // 声明了目标的调用既不查也不写：memo 的键只有（工具名, 正文），不含目标，复用会把另一种问法的摘要当答案。
+  const reused = dryRun || goal !== undefined ? undefined : lookupMemo(memo, exec, verdict.text)
   if (reused !== undefined) {
     return settle(await replace(ctx, readback, exec, decision, visible, reused, 'not-applicable', dryRun))
   }
 
   const llm = ctx.get('llm')
-  // 主模型这次调用自己声明了提取目标时，它就是最强的那份局部意图：不再问准入模型，规则正文也用目标改写。
-  const goal = extractGoalOf(exec)
+  // 声明了目标的调用不再问准入模型：目标本身就是最强的那份局部意图，规则正文也用目标改写。
   let admission: AdmissionVerdict = 'not-applicable'
   if (config.admissionJudge.get() && goal === undefined) {
     const provider = config.admissionProvider.get() || config.routeProvider.get()
@@ -270,7 +282,8 @@ async function process(
   noteUsage(observation, outcome.usage)
   if (outcome.action === undefined) return unchanged('failed', admission)
   if (outcome.action.action === 'keep') return unchanged('kept', admission)
-  if (!dryRun) noteMemo(memo, exec, verdict.text, outcome.action.summary)
+  // 带目标的摘要不进 memo：见上面查找处的注释（键里没有目标）。
+  if (!dryRun && goal === undefined) noteMemo(memo, exec, verdict.text, outcome.action.summary)
   return settle(await replace(ctx, readback, exec, decision, visible, outcome.action.summary, admission, dryRun))
 }
 
@@ -309,6 +322,7 @@ type PrivacyJudgement =
  * @param projection - 模型即将看到的完整文本投影。
  * @param dryRun - 干跑：请求照发，但不 append 会话事件。
  * @param observation - 这条结果的模型请求观测累计。
+ * @param goal - 主模型这次声明的提取目标；没声明时为 `undefined`（此时请求与关闭该参数之前逐字相同）。
  * @returns 这次判断的结论。
  */
 async function judgePrivacy(
@@ -319,6 +333,7 @@ async function judgePrivacy(
   projection: string,
   dryRun: boolean,
   observation: Observation,
+  goal: string | undefined,
 ): Promise<PrivacyJudgement> {
   const blocked = config.failurePolicy.get() === 'block'
   const llm = ctx.get('llm')
@@ -329,7 +344,7 @@ async function judgePrivacy(
   }
   const called = await requestPrivacy(
     llm, provider, model, config.privacyReasoningEffort.get(),
-    composePrivacyPrompt(config.privacyPrompt.get(), projection),
+    composePrivacyPrompt(config.privacyPrompt.get(), projection, goal),
   )
   noteUsage(observation, called.usage)
   const answer = called.result
@@ -456,6 +471,7 @@ async function record(
     durationMs: Math.round(performance.now() - startedAt),
     cacheObservation: applied.observation.cacheReadTokens,
     judgeInputTokens: applied.observation.judgeInputTokens,
+    extract: applied.extract,
     ...applied.outcome,
     ...(dryRunInEffect(config) ? { dryRun: true } : {}),
   }

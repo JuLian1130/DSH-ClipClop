@@ -54,6 +54,8 @@ export type ResultClipperLocaleKey =
   | 'privacyConfirmedLocalHint'
   | 'webFetchPrivacyGate'
   | 'webFetchPrivacyGateHint'
+  | 'extractArg'
+  | 'extractArgHint'
   | 'routeUnconfirmedWarning'
   | 'failurePolicy'
   | 'failurePolicyHint'
@@ -125,6 +127,8 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   privacyConfirmedLocalHint: '隐私闸门要求你确认这条 route 不会把内容发往外部网络；插件无法自行证明，也不通过 baseURL 猜测。改了这一组的 provider 或 model，这个确认就作废，要重新勾选。',
   webFetchPrivacyGate: 'web_fetch 也过隐私闸门',
   webFetchPrivacyGateHint: '默认不勾：web_fetch 取的多是外网公开信息，不送本地模型判断（它照常走摘要）。取内网地址或含机密页面的部署可以勾上，勾上后它和别的工具一样逐条判断。',
+  extractArg: '让工具带上可选参数 extract',
+  extractArgHint: '勾上后 read / bash / web_fetch 的工具说明与参数表里多一个可选的 extract：主模型自己声明这次要拿回什么（例如「只列出含 ERROR 的行，带时间戳」），声明了就直接按它提取、不再问准入模型。它还要摘要能力开着才生效；改动对之后新建的会话生效，已在跑的会话保持创建时的形态。',
   routeUnconfirmedWarning: '隐私闸门已开启，但隐私 route 尚未确认为本地：每个工具结果都会按失败策略处理。确认它是本地 route，或关闭隐私闸门。',
   failurePolicy: '隐私失效的处理策略',
   failurePolicyHint: '判定敏感始终拦截；判断不确定或失败时按这条策略处理。',
@@ -196,6 +200,8 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   privacyConfirmedLocalHint: 'The privacy gate needs you to confirm this route never sends content to an external network; the plugin cannot prove it, and does not guess from a baseURL. Changing this group\'s provider or model invalidates the confirmation, so tick it again.',
   webFetchPrivacyGate: 'Send web_fetch results through the privacy gate too',
   webFetchPrivacyGateHint: 'Unticked by default: web_fetch mostly returns public pages, so they skip the local judge (they are still summarized). Tick it when the deployment fetches intranet addresses or confidential pages; web_fetch is then judged like every other tool.',
+  extractArg: 'Offer the optional extract parameter on tools',
+  extractArgHint: 'When ticked, read / bash / web_fetch get an optional extract argument in their schema and description: the model declares what it wants back this time (for example "every line containing ERROR, with its timestamp"), and a declared goal replaces the admission judge. It needs summarization on as well; the change applies to sessions created afterwards, sessions already running keep the shape they were created with.',
   routeUnconfirmedWarning: 'The privacy gate is on, but the privacy route is not confirmed local: every tool result is handled by the failure policy. Confirm it is a local route, or turn the privacy gate off.',
   failurePolicy: 'Privacy failure policy',
   failurePolicyHint: 'A sensitive verdict is always blocked; an uncertain verdict or a failure follows this policy.',
