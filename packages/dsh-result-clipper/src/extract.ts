@@ -8,8 +8,8 @@
  *   所以优先"全局接管"（条目被 patch 关掉后就地改写原生定义）；原生还在时回落到 agent 作用域遮蔽。
  *
  * 无论哪条策略，模型参数里的 `extract` 都留在 `exec.arguments` 上（遮蔽只是把字段摘掉后委托执行），
- * 所以调用点统一用 {@link extractGoalOf} 取目标——但取之前要看 {@link extractEnabled}：摘要与 `extractArg`
- * 两个开关都开着才认，否则"关闭"只是不宣传而不是不生效。
+ * 所以调用点统一用 {@link extractGoalOf} 取目标——但取之前要看 {@link extractEnabled}：摘要总开关关着就不认，
+ * 否则"关闭"只是不宣传而不是不生效。
  *
  * @module
  */
@@ -179,19 +179,16 @@ function markExtended(definition: ToolDefinition): void {
 }
 
 /**
- * `extract` 这套机制现在是否启用：**摘要能力与可选参数两个开关都打开**才算。
+ * `extract` 这套机制现在是否启用：**它没有自己的开关，就是摘要能力的总开关**（`summarize`）。
  *
- * 摘要是主能力（它决定工具结果会不会被改写），`extractArg` 只是"把可选参数写进工具 schema"这一层。两者缺一都
- * 不覆盖工具：装载插件本身不该等于默认启用摘要。同一个判据同时决定"要不要认主模型传来的目标"——关闭时传了
- * 也不认，否则"关闭"只是不宣传而不是不生效。
- * @param config - 解析后的配置；两个字段都是 volatile 引用，读的是当前值。
- * @returns 两个开关都开着时为真。
+ * 摘要开着，三类目标工具才被覆盖、schema 才多一个 `extract`；关着则工具保持原生形态，模型自己写了 `extract`
+ * 也不认（否则"关闭"只是不宣传，而不是不生效）。没有单独的 `extractArg`：只有"要／不要"两种有意义的取值，
+ * 拆成两个开关只会造出"摘要开着但工具不带参数"这种没人需要的中间态。
+ * @param config - 解析后的配置；字段是 volatile 引用，读的是当前值。
+ * @returns 摘要能力开着时为真。
  */
-export function extractEnabled(config: {
-  readonly summarize: { get(): boolean }
-  readonly extractArg: { get(): boolean }
-}): boolean {
-  return config.summarize.get() && config.extractArg.get()
+export function extractEnabled(config: { readonly summarize: { get(): boolean } }): boolean {
+  return config.summarize.get()
 }
 
 /**
@@ -213,8 +210,8 @@ const TAKEOVER: Record<string, (ctx: Context) => unknown> = {
  *
  * `read` 不尝试接管：原生 `read` 与 `write`/`edit`/`read_image` 同一条目，禁用它会一并失去写与编辑能力。
  *
- * 两处时机都不是随意的：**启用判据按每个 agent 创建时读一次**（`enabled()`），所以关掉摘要或 `extractArg` 时，
- * 之后创建的 agent 完全看不到这个参数；**接管判定放在第一个"启用时"创建的 agent**而不是 `apply()` 里，因为
+ * 两处时机都不是随意的：**启用判据按每个 agent 创建时读一次**（`enabled()`），所以关掉摘要时之后创建的 agent
+ * 完全看不到这个参数；**接管判定放在第一个"启用时"创建的 agent**而不是 `apply()` 里，因为
  * 装载顺序会让早执行的那一次看到空表，从而误判"原生不在"并对仍在装载的原生条目重复注册（同层重名会抛错，
  * 整条插件装载失败）。挂回来是异步的（`ctx.plugin` 交回的 fiber），所以监听器是 async 并 await 它，模型侧
  * schema 才是扩过的。

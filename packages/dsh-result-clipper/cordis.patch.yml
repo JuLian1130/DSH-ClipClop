@@ -9,9 +9,6 @@
         privacyGate: false
         # web_fetch 取的多是外网公开信息，默认不送隐私判断；取内网地址的部署可以打开它。
         webFetchPrivacyGate: false
-        # 可选参数 extract：主模型在调用时声明要拿回什么。与 summarize 两个都开着才启用：read 走
-        # agent 作用域遮蔽，bash / web_fetch 优先全局接管（需先用 patch 关掉原生条目），接管不到回落遮蔽。
-        extractArg: false
         # debug 默认关闭且不自动改用临时路径；开启后必须填写日志路径。
         debug: false
         debugPath: ''

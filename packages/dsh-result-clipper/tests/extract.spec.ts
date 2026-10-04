@@ -166,7 +166,7 @@ describe('extendInPlace：就地改写已注册的定义', () => {
 describe('策略：主模型声明了目标就不再问准入模型', () => {
   it('开了准入判断，但这次调用带了 extract → 只有一次摘要请求，且规则正文是目标', async () => {
     // 准入被跳过，所以第一发就是摘要请求，脚本里只给摘要答复。
-    const { fixture, route, path } = await mounted({ admissionJudge: true, extractArg: true }, [{ text: REPLY }])
+    const { fixture, route, path } = await mounted({ admissionJudge: true }, [{ text: REPLY }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要 ERROR 的时间戳' }))
 
@@ -179,7 +179,7 @@ describe('策略：主模型声明了目标就不再问准入模型', () => {
   })
 
   it('阴性对照：没带 extract 时准入请求照发（同一配置）', async () => {
-    const { fixture, route, path } = await mounted({ admissionJudge: true, extractArg: true }, [{ text: YES }, { text: REPLY }])
+    const { fixture, route, path } = await mounted({ admissionJudge: true }, [{ text: YES }, { text: REPLY }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
 
@@ -189,17 +189,8 @@ describe('策略：主模型声明了目标就不再问准入模型', () => {
       .toMatchObject({ extract: false })
   })
 
-  it('extractArg 关着时传了也不认：准入照发、规则正文仍是配置里的摘要规则（关闭＝不生效）', async () => {
-    const { fixture, route } = await mounted({ admissionJudge: true }, [{ text: YES }, { text: REPLY }])
-    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要 ERROR 的时间戳' }))
-
-    expect(route.requests).toHaveLength(2)
-    expect(requestText(route.requests[1]!)).not.toContain('主模型这次的提取目标')
-  })
-
-  it('摘要关着时 likewise：extractArg 开着也不认目标（两个开关缺一都不启用）', async () => {
-    const { fixture, route } = await mounted({ summarize: false, extractArg: true })
+  it('摘要关着时传了也不认：不发任何请求，工具结果原样（关闭＝不生效）', async () => {
+    const { fixture, route } = await mounted({ summarize: false })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要 ERROR 的时间戳' }))
 
@@ -209,7 +200,7 @@ describe('策略：主模型声明了目标就不再问准入模型', () => {
 
 describe('声明了目标就跳过 memo', () => {
   it('带目标的那次不复用 memo：同一份正文先不带目标再带目标，两发都真的发请求', async () => {
-    const { fixture, route } = await mounted({ extractArg: true }, [{ text: REPLY }, { text: REPLY }])
+    const { fixture, route } = await mounted({}, [{ text: REPLY }, { text: REPLY }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
     await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要出错的那几行' }))
@@ -219,7 +210,7 @@ describe('声明了目标就跳过 memo', () => {
   })
 
   it('带目标的那次也不写 memo：先带目标再不带目标，后一发要重新请求', async () => {
-    const { fixture, route } = await mounted({ extractArg: true }, [{ text: REPLY }, { text: REPLY }])
+    const { fixture, route } = await mounted({}, [{ text: REPLY }, { text: REPLY }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要出错的那几行' }))
     // 目标摘要若被写进 memo，这一发会命中它、不发请求。
@@ -233,7 +224,7 @@ describe('声明了目标就跳过 memo', () => {
   })
 
   it('阳性对照：两次都不带目标时第二次命中 memo，只发一次请求', async () => {
-    const { fixture, route } = await mounted({ extractArg: true })
+    const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
     await fixture.ctx.tools.execute(exec('bash'))
@@ -243,11 +234,11 @@ describe('声明了目标就跳过 memo', () => {
 })
 
 describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
-  it('开着 extractArg 时，这个 agent 的工具表与模型侧 schema 当场多出 extract；全局那份定义不动', async () => {
+  it('摘要开着时，这个 agent 的工具表与模型侧 schema 当场多出 extract；全局那份定义不动', async () => {
     // 真 agent loop：`bash` 在装载后才注册，然后才创建 agent —— 遮蔽必须发生在 agent/created 上，
     // 且早于第一次组装提示词，所以模型侧 schema 里应当直接看得到 `extract`。
     const fixture = await runLoop(
-      { summarize: true, extractArg: true, routeProvider: 'mock', routeModel: 'mock' } as Schemastery.TypeS<typeof Config>,
+      { summarize: true, routeProvider: 'mock', routeModel: 'mock' } as Schemastery.TypeS<typeof Config>,
       LONG_BODY,
       SHORT_SUMMARY,
     )
@@ -262,7 +253,7 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
 
   it('关掉摘要时不覆盖工具：agent 的工具表与模型侧 schema 都没有 extract', async () => {
     const off = await runLoop(
-      { summarize: false, extractArg: true } as Schemastery.TypeS<typeof Config>,
+      { summarize: false } as Schemastery.TypeS<typeof Config>,
       LONG_BODY,
       SHORT_SUMMARY,
     )

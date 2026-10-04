@@ -67,7 +67,6 @@ interface PreferenceSection {
   summarize: boolean
   privacyGate: boolean
   webFetchPrivacyGate: boolean
-  extractArg: boolean
   admissionJudge: boolean
   debug: boolean
   dryRun: boolean
@@ -137,6 +136,7 @@ export function apply(ctx: Context): void {
       locale: LOCALE_NAMESPACE,
       inject: () => ({
         hooks: {
+          summarize: booleanField(form, 'summarize'),
           privacyGate: booleanField(form, 'privacyGate'),
           webFetchPrivacyGate: booleanField(form, 'webFetchPrivacyGate'),
           privacyConfirmedLocal: booleanField(form, 'privacyConfirmedLocal'),
@@ -145,8 +145,6 @@ export function apply(ctx: Context): void {
           routeModel: stringField(form, 'routeModel'),
           // 准入判断的启用开关跟着它的 route 与提示词一起在准入组里（勾选＝启用，收起＝不启用）。
           admissionJudge: booleanField(form, 'admissionJudge'),
-          // 可选参数 extract 的开关在摘要组里：它要摘要一起开着才生效。
-          extractArg: booleanField(form, 'extractArg'),
           admissionProvider: stringField(form, 'admissionProvider'),
           admissionModel: stringField(form, 'admissionModel'),
           privacyProvider: stringField(form, 'privacyProvider'),
@@ -178,7 +176,7 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'webFetchPrivacyGate' | 'extractArg' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
+  field: 'summarize' | 'privacyGate' | 'webFetchPrivacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
   fallback = false,
 ): ObservableSnapshot<boolean> {
   return {

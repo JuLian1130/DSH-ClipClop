@@ -28,7 +28,7 @@ import type { ReasoningEffort } from './reasoning.ts'
  * 先例让 schema 自己推断，`Config` 接口只描述 `apply` 收到的形状。
  */
 export interface Config {
-  /** 摘要能力开关，默认关闭（用户故事 1）。 */
+  /** 摘要能力开关，默认关闭（用户故事 1）。开着才会覆盖三类目标工具并给他们带上可选参数 `extract`。 */
   summarize?: Volatile<boolean>
   /** 隐私闸门开关，默认关闭（用户故事 2）。 */
   privacyGate?: Volatile<boolean>
@@ -41,15 +41,6 @@ export interface Config {
   webFetchPrivacyGate?: Volatile<boolean>
   /** 摘要准入判断开关，默认关闭（用户故事 17）。 */
   admissionJudge?: Volatile<boolean>
-  /**
-   * 可选参数 `extract` 的装载开关，默认关闭。
-   *
-   * **与 `summarize` 一起决定是否启用**（`extractEnabled`）：两个都开着，三类目标工具的 schema 才多一个
-   * `extract`——主模型自己声明要拿回什么，声明了就按它提取、不再问准入模型；没声明时行为与关闭时一致（走规则
-   * 与准入）。关闭时即使模型自己写了 `extract` 也不认。`read` 走 agent 作用域遮蔽；`bash` / `web_fetch` 先试
-   * 全局接管，原生还在时回落遮蔽，见 `extract.ts`。
-   */
-  extractArg?: Volatile<boolean>
   /** debug 记录开关，默认关闭；关闭时零写盘。 */
   debug?: Volatile<boolean>
   /** debug JSONL 路径；空串表示没有配置路径，此时不开 debug 也不写盘。 */
@@ -105,7 +96,6 @@ export const Config = z.object({
   privacyGate: z.boolean().default(false).volatile(),
   webFetchPrivacyGate: z.boolean().default(false).volatile(),
   admissionJudge: z.boolean().default(false).volatile(),
-  extractArg: z.boolean().default(false).volatile(),
   debug: z.boolean().default(false).volatile(),
   debugPath: z.string().default('').volatile(),
   dryRun: z.boolean().default(false).volatile(),

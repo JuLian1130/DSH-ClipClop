@@ -207,7 +207,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     initial: Partial<StubSection> = {},
   ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
     const fixture = await mounted()
-    fixture.form.value = { ...fixture.form.value, ...initial }
+    // 摘要总开关默认关着会把摘要组与准入组折起来；这一组的用例测的是展开后的控件，所以默认打开它。
+    fixture.form.value = { ...fixture.form.value, summarize: true, ...initial }
     const entry = only(fixture, 'plugins.bundle.config')
     const face = entry.options.inject!() as ResultClipperCardInjected
     const props = {
@@ -279,11 +280,11 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-effort`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-prompt`)).not.toBeNull()
     }
-    // 摘要组还带该角色的两个阈值与可选参数开关；隐私组带确认位与失败策略；诊断组只放 debug 路径。
+    // 摘要组还带总开关与两个阈值；隐私组带确认位与失败策略；诊断组只放 debug 路径。
     const summary = groupOf(container, '摘要模型')
+    expect(summary.querySelector('#plugin-config-result-clipper-summarize')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-min-inline')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-max-summarize')).not.toBeNull()
-    expect(summary.querySelector('#plugin-config-result-clipper-extract')).not.toBeNull()
     const privacy = groupOf(container, '隐私闸门模型')
     expect(privacy.querySelector('#plugin-config-result-clipper-privacy-confirmed')).not.toBeNull()
     expect(privacy.querySelector('#plugin-config-result-clipper-webfetch-gate')).not.toBeNull()
@@ -636,6 +637,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   it('目录读不到时候选为空：provider 与 model 退回手填，且改 provider 不会清掉手填的 model', async () => {
     const fixture = await mountClient([])
     open.push(fixture)
+    // 摘要总开关默认关着会把摘要组折起来，这一组的用例要展开后的控件。
+    fixture.form.value = { ...fixture.form.value, summarize: true }
     const entry = only(fixture, 'plugins.bundle.config')
     const face = entry.options.inject!() as ResultClipperCardInjected
     const props = {
@@ -802,14 +805,22 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ privacyConfirmedLocal: true, failurePolicy: 'block' })
   })
 
-  it('可选参数 extract 的开关默认不勾，勾上后随摘要组一次写回', async () => {
-    const { fixture, container } = await renderPage()
-    const box = container.querySelector('#plugin-config-result-clipper-extract input') as HTMLInputElement
-    expect(box.checked).toBe(false)
-    await fireEvent.click(box)
+  it('摘要总开关默认关着：摘要组只留开关与说明，准入组整组收起；打开后两组内容都回来', async () => {
+    const off = await renderPage({ summarize: false })
+    const offSummary = groupOf(off.container, '摘要模型')
+    expect((offSummary.querySelector('#plugin-config-result-clipper-summarize input') as HTMLInputElement).checked).toBe(false)
+    expect(offSummary.querySelector('#plugin-config-result-clipper-route-provider')).toBeNull()
+    expect(offSummary.querySelector('#plugin-config-result-clipper-summary-prompt')).toBeNull()
+    expect(groupOf(off.container, '摘要准入判断模型').querySelector('#plugin-config-result-clipper-admission-enabled')).toBeNull()
+    expect(offSummary.textContent).toContain(off.fixture.t('summarizeOffHint'))
+  })
+
+  it('摘要总开关勾上后随摘要组一次写回（与页签里那一个是同一个键）', async () => {
+    const { fixture, container } = await renderPage({ summarize: false })
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summarize input')!)
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
-    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['extractArg'], value: true }]])
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['summarize'], value: true }]])
   })
 
   it('web_fetch 的隐私开关默认不勾，勾上后随隐私组一次写回', async () => {

@@ -336,7 +336,7 @@ describe('隐私闸门默认不覆盖 web_fetch', () => {
 
 describe('隐私模式与提取目标：同一份隐私规则，带目标时按「不牵涉隐私」提取', () => {
   it('带目标时请求里既有隐私规则正文、也有目标与脱敏要求；不带目标时没有这一段', async () => {
-    const withGoal = await mounted({ extractArg: true })
+    const withGoal = await mounted()
     withGoal.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await withGoal.fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要所有邮箱地址' }))
 
@@ -348,14 +348,14 @@ describe('隐私模式与提取目标：同一份隐私规则，带目标时按�
     expect(text).toContain('"sensitive"')
 
     // 阴性对照：不带目标时提示词里没有目标那一段（与关闭该参数之前一致）。
-    const plain = await mounted({ extractArg: true })
+    const plain = await mounted()
     plain.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await plain.fixture.ctx.tools.execute(exec('bash'))
     expect(requestText(plain.route.requests[0]!)).not.toContain('提取目标')
   })
 
   it('目标模式仍然走隐私结论：判 sensitive 时照旧拦截', async () => {
-    const { fixture, route } = await mounted({ extractArg: true }, [{ text: SENSITIVE }])
+    const { fixture, route } = await mounted({}, [{ text: SENSITIVE }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要邮箱地址' }))
 

@@ -39,7 +39,7 @@
  * memo；debug 记录加一个 `dryRun` 标记，字段取值记的是「本应替换 / 本应拦截 / 本应跳过及原因」。两项字段
  * （`缓存观测`、`判断器输入 token 数`）与本票一起补齐。
  *
- * 可选参数 `extract`（`extractArg`，见 `extract.ts`）在**摘要与它都开着**时才启用：声明了目标的调用跳过准入、
+ * 可选参数 `extract`（见 `extract.ts`）跟着**摘要总开关**走：开着才给三类目标工具带上它，声明了目标的调用跳过准入、
  * 规则正文换成目标、**既不查也不写 memo**（键里没有目标，复用会把另一种问法的摘要当答案）；隐私模式不再另设
  * 提示词，而是在同一份隐私规则正文之后固定追加一段，要求按目标只交回不牵涉隐私的部分、脱敏满足不了目标时
  * 照旧返回 `sensitive`/`uncertain`。debug 记录里的 `extract` 布尔记「这次有没有声明目标」。
@@ -109,8 +109,8 @@ export function apply(ctx: Context, config: Required<Config>): void {
   const memo: SummaryMemo = new Map()
   /** 本会话已提醒过的失效原因，按会话 id 分开（同一类原因至多一条）。 */
   const reminders: ReminderLedger = new Map()
-  // 可选参数 extract：主模型在调用时声明提取目标。启用判据按每次 agent 创建读一次（摘要 + extractArg 都开着
-  // 才算），所以关掉任一个开关时，之后创建的 agent 看不到这个参数，也不再覆盖工具。
+  // 可选参数 extract：主模型在调用时声明提取目标。启用判据按每次 agent 创建读一次（就是摘要总开关），所以关掉
+  // 摘要时，之后创建的 agent 看不到这个参数，也不再覆盖工具。
   installExtractArg(ctx, () => extractEnabled(config))
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     if (exec.parent !== undefined) return next()
