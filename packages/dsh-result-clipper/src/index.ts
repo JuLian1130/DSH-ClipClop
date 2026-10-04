@@ -70,6 +70,7 @@ import {
   type ReminderLedger,
 } from './privacy.ts'
 import { composeSummaryPrompt, requestSummary, type ModelCallUsage, type SummaryAction } from './summary.ts'
+import { extractGoalOf, extractRule, installExtractArg } from './extract.ts'
 
 export * from './config.ts'
 export * from './debug.ts'
@@ -77,6 +78,7 @@ export * from './candidate.ts'
 export * from './summary.ts'
 export * from './admission.ts'
 export * from './entry.ts'
+export * from './extract.ts'
 export * from './memo.ts'
 export * from './privacy.ts'
 
@@ -101,6 +103,8 @@ export function apply(ctx: Context, config: Required<Config>): void {
   const memo: SummaryMemo = new Map()
   /** 本会话已提醒过的失效原因，按会话 id 分开（同一类原因至多一条）。 */
   const reminders: ReminderLedger = new Map()
+  // 可选参数 extract：主模型在调用时声明提取目标。默认关闭；开启后 read 遮蔽、bash/web_fetch 优先接管。
+  if (config.extractArg.get()) installExtractArg(ctx)
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     if (exec.parent !== undefined) return next()
     const startedAt = performance.now()
@@ -230,8 +234,10 @@ async function process(
   }
 
   const llm = ctx.get('llm')
+  // 主模型这次调用自己声明了提取目标时，它就是最强的那份局部意图：不再问准入模型，规则正文也用目标改写。
+  const goal = extractGoalOf(exec)
   let admission: AdmissionVerdict = 'not-applicable'
-  if (config.admissionJudge.get()) {
+  if (config.admissionJudge.get() && goal === undefined) {
     const provider = config.admissionProvider.get() || config.routeProvider.get()
     const model = config.admissionModel.get() || config.routeModel.get()
     if (llm === undefined || provider === '' || model === '') {
@@ -252,7 +258,11 @@ async function process(
   if (llm === undefined || provider === '' || model === '') return unchanged('failed', admission)
   const outcome = await requestSummary(
     llm, provider, model, config.summaryReasoningEffort.get(),
-    composeSummaryPrompt(config.summaryPrompt.get(), verdict.estimated, verdict.text),
+    composeSummaryPrompt(
+      goal === undefined ? config.summaryPrompt.get() : extractRule(goal),
+      verdict.estimated,
+      verdict.text,
+    ),
   )
   noteUsage(observation, outcome.usage)
   if (outcome.action === undefined) return unchanged('failed', admission)

@@ -34,6 +34,14 @@ export interface Config {
   privacyGate?: Volatile<boolean>
   /** 摘要准入判断开关，默认关闭（用户故事 17）。 */
   admissionJudge?: Volatile<boolean>
+  /**
+   * 可选参数 `extract` 的装载开关，默认关闭。
+   *
+   * 开启后三类目标工具的 schema 多一个 `extract`：主模型自己声明要拿回什么，声明了就按它提取、不再问准入模型；
+   * 没声明时行为与关闭时一致（走规则与准入）。`read` 走 agent 作用域遮蔽；`bash` / `web_fetch` 先试全局接管，
+   * 原生还在时回落遮蔽，见 `extract.ts`。
+   */
+  extractArg?: Volatile<boolean>
   /** debug 记录开关，默认关闭；关闭时零写盘。 */
   debug?: Volatile<boolean>
   /** debug JSONL 路径；空串表示没有配置路径，此时不开 debug 也不写盘。 */
@@ -88,6 +96,7 @@ export const Config = z.object({
   summarize: z.boolean().default(false).volatile(),
   privacyGate: z.boolean().default(false).volatile(),
   admissionJudge: z.boolean().default(false).volatile(),
+  extractArg: z.boolean().default(false).volatile(),
   debug: z.boolean().default(false).volatile(),
   debugPath: z.string().default('').volatile(),
   dryRun: z.boolean().default(false).volatile(),
