@@ -148,8 +148,13 @@ describe('票 02 第 2 条 / 票 28 / 票 29：设置座位只有一个，另加
     // 阴性对照：一个控件都没有——否则用户又会在这一页上看到按了没反应的开关。
     expect(container.querySelectorAll('[role="switch"]')).toHaveLength(0)
     expect(container.querySelectorAll('input, textarea, select, button')).toHaveLength(0)
-    // 提示要说清去哪儿设置（「插件」页里这个包的详情页）。
+    // 这句话只回答「去哪设」：点明目的地（侧边栏「插件」页里这个插件的详情页）。
     expect(fixture.t('tabPointer')).toContain('插件')
+    expect(fixture.t('tabPointer')).toContain('详情页')
+    // 页面上不解释这个界面为什么这样安排（那是对开发者说的话，规则见 AGENTS.md「插件页面文案」）：
+    // 上一版那句「这一页不放开关——它们离开自己的 route 或日志路径按不动」就是被这条判据删掉的。
+    expect(fixture.t('tabPointer')).not.toContain('不放开关')
+    expect(fixture.t('tabPointer')).not.toContain('按不动')
   })
 })
 
