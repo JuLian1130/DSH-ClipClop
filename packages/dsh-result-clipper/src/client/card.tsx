@@ -28,8 +28,7 @@ import type { ReactNode } from 'react'
 import { Button, Checkbox, SegmentedControl } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { REASONING_EFFORT_IDS } from '../reasoning.ts'
-import type { ReasoningEffort } from '../reasoning.ts'
+import { REASONING_EFFORT_IDS, resolveNoReasoning } from '../reasoning.ts'
 // 无依赖的共享模块：host 半拼装请求用的是同一份文字，所以框里显示的默认与真正发出的正文不会漂移。
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../rules.ts'
 import type { ModelCatalogProvider } from './catalog.ts'
@@ -98,11 +97,11 @@ export interface ResultClipperCardInjected {
     /** `bash` / `web_fetch` 的摘要上限。 */
     maxSummarizeTokens: ObservableSnapshot<number>
     /** 摘要请求的推理档位。 */
-    summaryReasoningEffort: ObservableSnapshot<ReasoningEffort>
+    summaryReasoningEffort: ObservableSnapshot<string>
     /** 准入请求的推理档位。 */
-    admissionReasoningEffort: ObservableSnapshot<ReasoningEffort>
+    admissionReasoningEffort: ObservableSnapshot<string>
     /** 隐私请求的推理档位。 */
-    privacyReasoningEffort: ObservableSnapshot<ReasoningEffort>
+    privacyReasoningEffort: ObservableSnapshot<string>
     /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
     summaryPrompt: ObservableSnapshot<string>
     /** 摘要总开关（与页签里那一个是同一个键）：关掉时本组与准入组收起，也不覆盖任何工具。 */
@@ -217,18 +216,6 @@ const TEXTAREA_STYLE = {
   minHeight: 80,
   resize: 'vertical',
 } as const
-
-/** 下拉框的七个档位与它们的文案键；候选集与 host 半 schema 的取值同一份（`reasoning.ts`）。 */
-const EFFORT_LABELS: Record<ReasoningEffort, ResultClipperLocaleKey> = {
-  off: 'effortOff',
-  none: 'effortNone',
-  minimal: 'effortMinimal',
-  low: 'effortLow',
-  medium: 'effortMedium',
-  high: 'effortHigh',
-  xhigh: 'effortXhigh',
-  max: 'effortMax',
-}
 
 /** 草稿里一个字段的值：数字在草稿里是字符串，输入框才能原样编辑（含临时清空）。 */
 type DraftValue = string | boolean
@@ -519,17 +506,21 @@ function NumberRow(props: {
 }
 
 /**
- * 一行推理档位：下拉框。选项是 pi-ai 的规范档位，能不能用由所选 route 的档位表决定。
- * @param props - 控件 id 与行文案、草稿值、选项与改动回调。
+ * 一行推理档位：下拉框。
+ *
+ * 候选由调用点按该 route 的档位表算出（目录里该模型声明的 `reasoning.efforts`）。空串＝「不推理」，标签里带上
+ * 插件会落成的那个 id；该模型不提供档位时只剩一条说明并禁用；目录里查不到这条 route 时退回静态兜底词表。
+ * @param props - 控件 id 与行文案、草稿值、候选、禁用位与改动回调。
  * @returns 一行下拉控件。
  */
 function EffortRow(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
-  readonly value: ReasoningEffort
-  readonly options: readonly { readonly value: ReasoningEffort; readonly label: string }[]
-  readonly onChange: (next: ReasoningEffort) => void
+  readonly value: string
+  readonly options: readonly { readonly value: string; readonly label: string }[]
+  readonly disabled?: boolean
+  readonly onChange: (next: string) => void
 }) {
   return <section style={ROW_STYLE}>
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
@@ -538,7 +529,8 @@ function EffortRow(props: {
       value={props.value}
       aria-label={props.label}
       style={SELECT_STYLE}
-      onChange={(event) => { props.onChange(event.target.value as ReasoningEffort) }}
+      disabled={props.disabled}
+      onChange={(event) => { props.onChange(event.target.value) }}
     >
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
@@ -620,7 +612,7 @@ const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summarize', kind: 'boolean' },
   { field: 'routeProvider', kind: 'text' },
   { field: 'routeModel', kind: 'text' },
-  { field: 'summaryReasoningEffort', kind: 'text', fallback: 'off' },
+  { field: 'summaryReasoningEffort', kind: 'text', fallback: '' },
   { field: 'minInlineTokens', kind: 'number', fallback: 1024 },
   { field: 'maxSummarizeTokens', kind: 'number', fallback: 12500 },
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
@@ -631,7 +623,7 @@ const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'admissionJudge', kind: 'boolean' },
   { field: 'admissionProvider', kind: 'text' },
   { field: 'admissionModel', kind: 'text' },
-  { field: 'admissionReasoningEffort', kind: 'text', fallback: 'off' },
+  { field: 'admissionReasoningEffort', kind: 'text', fallback: '' },
   { field: 'admissionPrompt', kind: 'prompt', fallback: DEFAULT_ADMISSION_RULE },
 ]
 
@@ -640,7 +632,7 @@ const PRIVACY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'webFetchPrivacyGate', kind: 'boolean' },
   { field: 'privacyProvider', kind: 'text' },
   { field: 'privacyModel', kind: 'text' },
-  { field: 'privacyReasoningEffort', kind: 'text', fallback: 'off' },
+  { field: 'privacyReasoningEffort', kind: 'text', fallback: '' },
   { field: 'privacyConfirmedLocal', kind: 'boolean' },
   { field: 'failurePolicy', kind: 'text' },
   { field: 'privacyPrompt', kind: 'prompt', fallback: DEFAULT_PRIVACY_RULE },
@@ -724,7 +716,6 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const diagnostics = useGroupDraft(DIAGNOSTIC_FIELDS, { debugPath }, props.saveFields)
 
   const failedHint = props.t('failedHint')
-  const effortOptions = REASONING_EFFORT_IDS.map(choice => ({ value: choice, label: props.t(EFFORT_LABELS[choice]) }))
   const providerOptions = catalog.map(group => ({ value: group.id, label: group.name }))
   /** 某个 provider 在目录里的模型候选；provider 还不在目录里时为空（「自定义…」仍然可用）。 */
   const modelOptions = (provider: string): readonly { readonly value: string; readonly label: string }[] =>
@@ -737,6 +728,62 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   }
   const saveLabel = props.t('saveGroup')
   const resetLabel = props.t('resetGroup')
+
+  /**
+   * 一个 role 的档位控件参数：候选来自**该 route 声明的档位表**，不再用插件自己那份词表（它只在下述第三种情形兜底）。
+   *
+   * 三种降级面（设计稿 §5）：
+   * ① 目录里认得这条 route 且它声明了档位 → 空串选项＝「不推理」，标签里标出插件会落成的那个 id（`off` 或
+   *    `none` 或该表里最低的一档）；其余选项直接用 route 给的名字，所以不会再出现它不认的值；配置里存着一个
+   *    这条 route 不接受的档位时，把它作为一条带后缀的选项显示出来（不静默改用户的配置）。
+   * ② 认得但它不提供档位 → 只剩一条说明、控件禁用（host 半不会下发任何档位）。
+   * ③ 目录里查不到这条 route（还没加载完、或手填的 id）→ 退回静态兜底词表，值原样下发，错了还有错误码兜底。
+   * @param provider - 该 role 的 provider。
+   * @param model - 该 role 的 model。
+   * @param value - 草稿里的档位值；空串＝不推理。
+   * @param id - 控件 id。
+   * @param onChange - 改动回调。
+   * @returns 交给 {@link EffortRow} 的一整组参数。
+   */
+  const effortArgs = (
+    provider: string,
+    model: string,
+    value: string,
+    id: string,
+    onChange: (next: string) => void,
+  ): Parameters<typeof EffortRow>[0] => {
+    const label = props.t('reasoningEffort')
+    const entry = catalog.find(group => group.id === provider)?.models.find(candidate => candidate.id === model)
+    if (entry !== undefined && entry.reasoning === undefined) {
+      const options = [{ value: '', label: props.t('effortUnsupported') }]
+      if (value !== '') options.push({ value, label: `${value}${props.t('effortNeverSent')}` })
+      return { id, label, value, options, disabled: true, hint: props.t('effortUnsupportedHint'), onChange }
+    }
+    const declared = entry?.reasoning?.efforts
+    if (declared === undefined) {
+      return {
+        id, label, value, onChange,
+        hint: props.t('reasoningEffortHint'),
+        options: [
+          { value: '', label: props.t('effortNoReasoning') },
+          ...REASONING_EFFORT_IDS.map(choice => ({ value: choice, label: choice })),
+        ],
+      }
+    }
+    const resolved = resolveNoReasoning(declared)
+    const nameOf = (effortId: string): string => declared.find(effort => effort.id === effortId)?.name ?? effortId
+    const options = [
+      {
+        value: '',
+        label: resolved === undefined ? props.t('effortNoReasoning') : `${props.t('effortNoReasoning')}（${nameOf(resolved)}）`,
+      },
+      ...declared.map(effort => ({ value: effort.id, label: effort.name })),
+    ]
+    if (value !== '' && !declared.some(effort => effort.id === value)) {
+      options.push({ value, label: `${value}${props.t('effortNotAccepted')}` })
+    }
+    return { id, label, value, options, hint: props.t('reasoningEffortHint'), onChange }
+  }
   /** 一组底部的按钮与失败提示。 */
   const actions = (group: DraftedGroup) => ({
     dirty: group.dirty, busy: group.busy, failed: group.failed, failedHint,
@@ -801,12 +848,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           emptyLabel: props.t('routeUnset'),
           onChange: next => { changeRoute(summary, SUMMARY_ROUTE, 'model', next) },
         }}
-        effort={{
-          id: 'plugin-config-result-clipper-summary-effort', label: props.t('reasoningEffort'),
-          hint: props.t('reasoningEffortHint'), options: effortOptions,
-          value: summary.value('summaryReasoningEffort') as ReasoningEffort,
-          onChange: next => { summary.change('summaryReasoningEffort', next) },
-        }} />
+        effort={effortArgs(
+          summary.value('routeProvider') as string,
+          summary.value('routeModel') as string,
+          summary.value('summaryReasoningEffort') as string,
+          'plugin-config-result-clipper-summary-effort',
+          next => { summary.change('summaryReasoningEffort', next) },
+        )} />
       <div style={PAIR_STYLE}>
         <NumberRow id="plugin-config-result-clipper-min-inline" label={props.t('minInlineTokens')}
           hint={props.t('minInlineTokensHint')} value={summary.value('minInlineTokens') as string}
@@ -845,12 +893,14 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           emptyLabel: props.t('followSummaryRoute'),
           onChange: next => { changeRoute(admission, ADMISSION_ROUTE, 'model', next) },
         }}
-        effort={{
-          id: 'plugin-config-result-clipper-admission-effort', label: props.t('reasoningEffort'),
-          hint: props.t('reasoningEffortHint'), options: effortOptions,
-          value: admission.value('admissionReasoningEffort') as ReasoningEffort,
-          onChange: next => { admission.change('admissionReasoningEffort', next) },
-        }} />
+        effort={effortArgs(
+          // 准入 route 留空时跟随摘要 route（host 半同一判据），所以候选也要按**有效**的那条算。
+          (admission.value('admissionProvider') as string) || (summary.value('routeProvider') as string),
+          (admission.value('admissionModel') as string) || (summary.value('routeModel') as string),
+          admission.value('admissionReasoningEffort') as string,
+          'plugin-config-result-clipper-admission-effort',
+          next => { admission.change('admissionReasoningEffort', next) },
+        )} />
       <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
         hint={props.t('promptHint')} value={admission.value('admissionPrompt') as string}
         onChange={next => { admission.change('admissionPrompt', next) }} />
@@ -877,12 +927,14 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           emptyLabel: props.t('followSummaryRoute'),
           onChange: next => { changeRoute(privacy, PRIVACY_ROUTE, 'model', next) },
         }}
-        effort={{
-          id: 'plugin-config-result-clipper-privacy-effort', label: props.t('reasoningEffort'),
-          hint: props.t('reasoningEffortHint'), options: effortOptions,
-          value: privacy.value('privacyReasoningEffort') as ReasoningEffort,
-          onChange: next => { privacy.change('privacyReasoningEffort', next) },
-        }} />
+        effort={effortArgs(
+          // 隐私 route 留空时同样跟随摘要 route。
+          (privacy.value('privacyProvider') as string) || (summary.value('routeProvider') as string),
+          (privacy.value('privacyModel') as string) || (summary.value('routeModel') as string),
+          privacy.value('privacyReasoningEffort') as string,
+          'plugin-config-result-clipper-privacy-effort',
+          next => { privacy.change('privacyReasoningEffort', next) },
+        )} />
       <CheckRow id="plugin-config-result-clipper-privacy-confirmed" label={props.t('privacyConfirmedLocal')}
         hint={props.t('privacyConfirmedLocalHint')}
         checked={privacy.value('privacyConfirmedLocal') as boolean}

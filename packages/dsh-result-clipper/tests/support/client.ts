@@ -13,7 +13,6 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import * as client from '../../src/client/index.ts'
 import type { ResultClipperLocaleKey } from '../../src/client/locales.ts'
 import { en, zh } from '../../src/client/locales.ts'
-import type { ReasoningEffort } from '../../src/reasoning.ts'
 
 /** 本插件的 settings section 值。 */
 export interface StubSection {
@@ -31,9 +30,9 @@ export interface StubSection {
   privacyModel: string
   minInlineTokens: number
   maxSummarizeTokens: number
-  summaryReasoningEffort: ReasoningEffort
-  admissionReasoningEffort: ReasoningEffort
-  privacyReasoningEffort: ReasoningEffort
+  summaryReasoningEffort: string
+  admissionReasoningEffort: string
+  privacyReasoningEffort: string
   privacyConfirmedLocal: boolean
   failurePolicy: 'passthrough' | 'block'
   summaryPrompt: string
@@ -57,9 +56,10 @@ export const SECTION_DEFAULTS: StubSection = {
   privacyModel: '',
   minInlineTokens: 1024,
   maxSummarizeTokens: 12500,
-  summaryReasoningEffort: 'off',
-  admissionReasoningEffort: 'off',
-  privacyReasoningEffort: 'off',
+  // 档位默认留空＝「不推理」，具体发哪个 id 由该 route 的档位表在请求前决定。
+  summaryReasoningEffort: '',
+  admissionReasoningEffort: '',
+  privacyReasoningEffort: '',
   privacyConfirmedLocal: false,
   failurePolicy: 'passthrough',
   summaryPrompt: '',
@@ -172,17 +172,40 @@ export interface ClientFixture {
   dispose(): Promise<void>
 }
 
-/** 目录夹具里一个 provider 分组：与 `session.modelCatalog()` 返回的 `groups` 同形。 */
-export interface StubCatalogProvider {
+/** 目录夹具里一个 provider 分组：与 `session.modelCatalog()` 返回的 `groups` 同形。 */export interface StubCatalogProvider {
   readonly id: string
   readonly name: string
-  readonly models: readonly { readonly id: string; readonly name: string }[]
+  readonly models: readonly {
+    readonly id: string
+    readonly name: string
+    /** 该模型声明的推理档位；不给＝它不提供推理档位（与目录里 `reasoning` 缺席同义）。 */
+    readonly reasoning?: {
+      readonly efforts: readonly { readonly id: string; readonly name: string }[]
+      readonly defaultEffort?: string
+    }
+  }[]
 }
+
+/** 默认目录里各模型声明的档位；`none` 这一支与 cline-pass 的词汇表同形。 */
+const EFFORTS_NONE_LOW_MEDIUM_HIGH = [
+  { id: 'none', name: 'None' },
+  { id: 'low', name: 'Low' },
+  { id: 'medium', name: 'Medium' },
+  { id: 'high', name: 'High' },
+] as const
 
 /** 默认目录：一条 route 两个模型——用例要看「候选来自 DSH 目录」时用得上，也可以整份换掉。 */
 export const CATALOG_DEFAULT: readonly StubCatalogProvider[] = [
-  { id: 'local', name: '本地 route', models: [{ id: 'qwen3', name: 'Qwen3' }, { id: 'llama3', name: 'Llama3' }] },
-  { id: 'remote', name: '远端 route', models: [{ id: 'big-model', name: 'Big Model' }] },
+  {
+    id: 'local', name: '本地 route',
+    // 档位按 DSH 目录的形状声明（真实目录里 `reasoning` 缺席＝该模型不提供推理档位，所以这里要声明，
+    // 否则卡片会把这两条模型画成"不提供档位"）。
+    models: [
+      { id: 'qwen3', name: 'Qwen3', reasoning: { efforts: EFFORTS_NONE_LOW_MEDIUM_HIGH } },
+      { id: 'llama3', name: 'Llama3', reasoning: { efforts: EFFORTS_NONE_LOW_MEDIUM_HIGH } },
+    ],
+  },
+  { id: 'remote', name: '远端 route', models: [{ id: 'big-model', name: 'Big Model', reasoning: { efforts: EFFORTS_NONE_LOW_MEDIUM_HIGH } }] },
 ]
 
 /**

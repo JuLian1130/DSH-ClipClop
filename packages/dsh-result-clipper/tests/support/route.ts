@@ -29,6 +29,18 @@ export class FakeRoute {
   /** 收到的请求，按顺序。 */
   readonly requests: GenerateOptions[] = []
 
+  /**
+   * 档位表：设过的键（`provider/model`）才算"该 route 声明了这些档位"，`null` 表示该模型不提供推理档位；
+   * 没设过 = 没命中这个方法以外的信息（实现按"该模型不提供档位"处理，与 DSH 里 `reasoning === undefined` 同义）。
+   */
+  readonly reasonings = new Map<string, readonly { readonly id: string }[] | null>()
+
+  /** `resolveModelInfo` 的调用记录，按顺序（缓存用例数它）。 */
+  readonly resolveCalls: string[] = []
+
+  /** 这些 route（`provider/model`）的档位表读取失败。 */
+  readonly resolveFailures = new Set<string>()
+
   #script: readonly FakeReply[]
 
   /**
@@ -36,6 +48,20 @@ export class FakeRoute {
    */
   constructor(script: readonly FakeReply[] = []) {
     this.#script = script.length > 0 ? script : [{ text: '' }]
+  }
+
+  /**
+   * 供 `src/efforts.ts` 读档位表：把 `reasonings` 里的读数翻成 `resolveModelInfo` 的形状。
+   * @param provider - provider id。
+   * @param model - model id。
+   * @returns 模型信息；该模型不声明档位时为 `{}`。
+   */
+  async resolveModelInfo(provider: string, model: string): Promise<{ reasoning?: { efforts: readonly { id: string }[] } }> {
+    const key = `${provider}/${model}`
+    this.resolveCalls.push(key)
+    if (this.resolveFailures.has(key)) throw new Error(`fake route cannot resolve ${key}`)
+    const efforts = this.reasonings.get(key)
+    return efforts == null ? {} : { reasoning: { efforts } }
   }
 
   /**

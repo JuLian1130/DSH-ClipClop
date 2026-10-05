@@ -20,7 +20,15 @@ import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 export interface ModelCatalogProvider {
   readonly id: string
   readonly name: string
-  readonly models: readonly { readonly id: string; readonly name: string }[]
+  readonly models: readonly {
+    readonly id: string
+    readonly name: string
+    /** 该模型声明的推理档位；没有这个字段＝它不提供推理档位（DSH 的 `reasoning === undefined` 同义）。 */
+    readonly reasoning?: {
+      readonly efforts: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
+      readonly defaultEffort?: string
+    }
+  }[]
 }
 
 /** `remote.session.modelCatalog()` 的最小形状：RemoteResult 包一层，成功时给 `groups`。 */

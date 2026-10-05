@@ -4,7 +4,8 @@
  * 全部字段都 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
  * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、`web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
- * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」、提示词留空（用内置规则正文）、debug 关闭且不
+ * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
+ * 提示词留空（用内置规则正文）、debug 关闭且不
  * 自动改用临时路径、干跑关闭。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
@@ -17,8 +18,6 @@
 
 import z from '@deepseek-ai/schemastery'
 import type { Volatile } from '@deepseek-ai/cordis'
-import { REASONING_EFFORT_IDS } from './reasoning.ts'
-import type { ReasoningEffort } from './reasoning.ts'
 
 /**
  * 本插件的配置。
@@ -63,18 +62,18 @@ export interface Config {
   minInlineTokens?: Volatile<number>
   /** `bash` / `pwsh` / `web_fetch` 的上限；达到或超过它的结果原样交给 spill。`read` 不受它约束。 */
   maxSummarizeTokens?: Volatile<number>
-  /** 摘要请求的推理档位；默认 `off`（不推理），让本地模型更快响应（用户故事 47）。 */
-  summaryReasoningEffort?: Volatile<ReasoningEffort>
-  /** 准入请求的推理档位；默认 `off`（不推理），让本地模型更快响应（用户故事 47）。 */
-  admissionReasoningEffort?: Volatile<ReasoningEffort>
+  /** 摘要请求的推理档位；空串表示不推理（按该 route 的档位表拼出对应 id）。 */
+  summaryReasoningEffort?: Volatile<string>
+  /** 准入请求的推理档位；空串表示不推理（按该 route 的档位表拼出对应 id）。 */
+  admissionReasoningEffort?: Volatile<string>
   /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
   summaryPrompt?: Volatile<string>
   /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
   admissionPrompt?: Volatile<string>
   /** 隐私提示词的规则正文覆盖；空串表示用内置默认。 */
   privacyPrompt?: Volatile<string>
-  /** 隐私请求的推理档位；默认 `off`（不推理），让本地模型更快响应（用户故事 47）。 */
-  privacyReasoningEffort?: Volatile<ReasoningEffort>
+  /** 隐私请求的推理档位；空串表示不推理（按该 route 的档位表拼出对应 id）。 */
+  privacyReasoningEffort?: Volatile<string>
   /** 「隐私 route 已确认为本地」确认位；未确认时隐私模式按失败策略处理并显示常驻警告（用户故事 30、31）。 */
   privacyConfirmedLocal?: Volatile<boolean>
   /** 隐私失效的处理策略：`passthrough` 放行原文（默认），`block` 给出拒绝结果（用户故事 27、28）。 */
@@ -82,13 +81,14 @@ export interface Config {
 }
 
 /**
- * 一个推理档位字段：候选集是 pi-ai 的规范档位，默认 `off`。
+ * 一个推理档位字段：**空串表示"不推理"**——具体发哪个 id 由该 route 的档位表决定（`off` → `none` → 该表里最低的
+ * 一档）；非空值是"这次请求就发这个档位"，能不能发同样由那张表判定（不在表里就不发）。
  *
- * 用 `z.union` 而不是 `z.string()`：写进配置的取值只能是这七个之一，拼错的档位在装载期就被拒，而不是等到
- * 某条结果上被 route 以 `UNSUPPORTED_REASONING_EFFORT` 拒收。
+ * 用 `z.string()` 而不是候选集联合：档位 id 由 route 声明，各家词表不同（cline-pass 是 `none`、deepseek 是
+ * `off`），还可能声明兜底词表以外的 id，所以装载期判定不了合法性——判定挪到请求前，依据是 route 的档位表
+ * （`src/efforts.ts`；设计稿 §3.2 与 §9）。
  */
-const effort = () =>
-  z.union(REASONING_EFFORT_IDS.map(id => z.const(id))).default('off').volatile()
+const effort = () => z.string().default('').volatile()
 
 /** 配置 schema：字段全部可选并在装载时解析成默认值。 */
 export const Config = z.object({

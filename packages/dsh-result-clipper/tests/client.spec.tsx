@@ -23,7 +23,7 @@ import type { ResultClipperTabInjected, ResultClipperTabProps } from '../src/cli
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
 import { en } from '../src/client/locales.ts'
 import { mountClient } from './support/client.ts'
-import type { ClientFixture, StubForm, StubSection } from './support/client.ts'
+import type { ClientFixture, StubCatalogProvider, StubForm, StubSection } from './support/client.ts'
 
 const open: Array<ClientFixture & { readonly form: StubForm }> = []
 
@@ -61,8 +61,8 @@ function rowSwitch(container: HTMLElement, label: string): Element {
 }
 
 /** 装一份夹具并登记收场。 */
-async function mounted(): Promise<ClientFixture & { readonly form: StubForm, readonly catalogCalls: () => number }> {
-  const fixture = await mountClient()
+async function mounted(catalog?: readonly StubCatalogProvider[]): Promise<ClientFixture & { readonly form: StubForm, readonly catalogCalls: () => number }> {
+  const fixture = catalog === undefined ? await mountClient() : await mountClient(catalog)
   open.push(fixture)
   return fixture
 }
@@ -205,8 +205,9 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
    */
   async function renderPage(
     initial: Partial<StubSection> = {},
+    catalog?: readonly StubCatalogProvider[],
   ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
-    const fixture = await mounted()
+    const fixture = await mounted(catalog)
     // 摘要总开关默认关着会把摘要组与准入组折起来；这一组的用例测的是展开后的控件，所以默认打开它。
     fixture.form.value = { ...fixture.form.value, summarize: true, ...initial }
     const entry = only(fixture, 'plugins.bundle.config')
@@ -259,11 +260,12 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，三个 provider 行同样各指一次。
     expect(container.textContent).toContain(fixture.t('modelSourceHint'))
     expect(container.textContent).toContain('设置 → 模型')
-    // 默认值来自 schema：阈值 1024 / 12500，三个角色的推理档位默认都是「不推理」。
+    // 默认值来自 schema：阈值 1024 / 12500；三个角色的推理档位默认是空串＝「不推理」（具体 id 按 route 的档位表在
+    // 请求前解析，所以控件上显示的是空项）。
     expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
     expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
     for (const role of ['summary', 'admission', 'privacy']) {
-      expect((container.querySelector(`#plugin-config-result-clipper-${role}-effort`) as HTMLSelectElement).value).toBe('off')
+      expect((container.querySelector(`#plugin-config-result-clipper-${role}-effort`) as HTMLSelectElement).value).toBe('')
     }
   })
 
@@ -732,7 +734,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('resetGroup')))
     await settle()
 
-    expect((container.querySelector('#plugin-config-result-clipper-summary-effort') as HTMLSelectElement).value).toBe('off')
+    // 档位的内置默认是空串＝「不推理」（具体发哪个 id 由该 route 的档位表在请求前决定）。
+    expect((container.querySelector('#plugin-config-result-clipper-summary-effort') as HTMLSelectElement).value).toBe('')
     expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
     expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
     expect((container.querySelector('#plugin-config-result-clipper-summary-prompt') as HTMLTextAreaElement).value)
@@ -885,6 +888,119 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     const off = await renderPage({ privacyGate: false, privacyConfirmedLocal: false })
     expect(off.container.textContent).not.toContain(off.fixture.t('routeUnconfirmedWarning'))
   })
+
+describe('推理档位：候选来自 route 声明的档位表（目录里那条模型的 reasoning）', () => {
+  /** 一份目录：同一 route 下三种模型——cline-pass 词表、deepseek 词表、不提供档位。 */
+  const catalog: readonly StubCatalogProvider[] = [
+    {
+      id: 'local',
+      name: '本地 route',
+      models: [
+        {
+          id: 'gateway',
+          name: 'Gateway',
+          reasoning: { efforts: [{ id: 'none', name: 'None' }, { id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] },
+        },
+        {
+          id: 'deepseek',
+          name: 'DeepSeek',
+          reasoning: { efforts: [{ id: 'off', name: 'Off' }, { id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] },
+        },
+        { id: 'plain', name: 'Plain' },
+      ],
+    },
+  ]
+
+  const SUMMARY_EFFORT = 'plugin-config-result-clipper-summary-effort'
+  const ADMISSION_EFFORT = 'plugin-config-result-clipper-admission-effort'
+  const PRIVACY_EFFORT = 'plugin-config-result-clipper-privacy-effort'
+
+  /** 某个档位下拉的选项（值 + 显示文本）。 */
+  const options = (container: HTMLElement, id: string): { value: string; label: string }[] =>
+    [...(container.querySelector(`#${id}`) as HTMLSelectElement).options]
+      .map(option => ({ value: option.value, label: option.textContent ?? '' }))
+
+  it('候选恰是该模型声明的档位（标签取声明名），空项标出会落成的档位；不出现它没声明的 off', async () => {
+    const { container } = await renderPage({ routeProvider: 'local', routeModel: 'gateway' }, catalog)
+
+    expect(options(container, SUMMARY_EFFORT)).toEqual([
+      { value: '', label: '不推理（None）' },
+      { value: 'none', label: 'None' },
+      { value: 'low', label: 'Low' },
+      { value: 'high', label: 'High' },
+    ])
+    // 阴性对照：这台 route 的词表里没有 off，所以它不该出现在候选里——这正是旧版「不推理（网关）」那个坑。
+    expect(options(container, SUMMARY_EFFORT).some(option => option.value === 'off')).toBe(false)
+  })
+
+  it('换成声明 off 的模型：出现 Off、不出现 None', async () => {
+    const { container } = await renderPage({ routeProvider: 'local', routeModel: 'deepseek' }, catalog)
+
+    expect(options(container, SUMMARY_EFFORT).map(option => option.value)).toEqual(['', 'off', 'low', 'high'])
+    expect(options(container, SUMMARY_EFFORT)[0]?.label).toBe('不推理（Off）')
+    // 阴性对照：这台 route 声明的是 off，所以候选里不该出现 None（旧版那个「不推理（网关）」标签的坑）。
+    expect(options(container, SUMMARY_EFFORT).some(option => option.label.includes('None'))).toBe(false)
+  })
+
+  it('表里没有 off/none 时，空项标出已知次序里最低的那一档（不是声明的第一个）', async () => {
+    const highLow: readonly StubCatalogProvider[] = [{
+      id: 'local',
+      name: '本地 route',
+      models: [{ id: 'm', name: 'M', reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'low', name: 'Low' }] } }],
+    }]
+    const { container } = await renderPage({ routeProvider: 'local', routeModel: 'm' }, highLow)
+
+    expect(options(container, SUMMARY_EFFORT)[0]).toEqual({ value: '', label: '不推理（Low）' })
+  })
+
+  it('模型不提供推理档位：控件禁用、只剩一条说明', async () => {
+    const { container } = await renderPage({ routeProvider: 'local', routeModel: 'plain' }, catalog)
+    const control = container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement
+
+    expect(control.disabled).toBe(true)
+    expect(options(container, SUMMARY_EFFORT)).toEqual([{ value: '', label: '当前模型未提供推理等级' }])
+  })
+
+  it('配置里存着这条 route 不接受的档位：作为带后缀的选项保留，不静默改配置', async () => {
+    const { container } = await renderPage(
+      { routeProvider: 'local', routeModel: 'gateway', summaryReasoningEffort: 'medium' },
+      catalog,
+    )
+
+    expect(options(container, SUMMARY_EFFORT)).toContainEqual({ value: 'medium', label: 'medium（该 route 不接受）' })
+    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('medium')
+  })
+
+  it('目录里查不到这条 route：退回静态兜底词表，值原样保留', async () => {
+    const { container } = await renderPage(
+      { routeProvider: 'ghost', routeModel: 'nope', summaryReasoningEffort: 'low' },
+      catalog,
+    )
+
+    const list = options(container, SUMMARY_EFFORT)
+    expect(list[0]).toEqual({ value: '', label: '不推理' })
+    expect(list.slice(1).map(option => option.value))
+      .toEqual(['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('low')
+  })
+
+  it('三个 role 各按各自 route 的档位表算（留空时跟随摘要 route）', async () => {
+    const { container } = await renderPage(
+      {
+        admissionJudge: true, privacyGate: true,
+        routeProvider: 'local', routeModel: 'gateway',
+        admissionProvider: 'local', admissionModel: 'deepseek',
+        privacyProvider: 'local', privacyModel: 'plain',
+      },
+      catalog,
+    )
+
+    expect(options(container, SUMMARY_EFFORT)[0]?.label).toBe('不推理（None）')
+    expect(options(container, ADMISSION_EFFORT).map(option => option.value)).toEqual(['', 'off', 'low', 'high'])
+    expect((container.querySelector(`#${PRIVACY_EFFORT}`) as HTMLSelectElement).disabled).toBe(true)
+  })
+})
+
 })
 
 

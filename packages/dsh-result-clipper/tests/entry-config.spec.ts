@@ -65,9 +65,10 @@ describe('配置契约', () => {
     expect(fiber.config?.privacyModel.get()).toBe('')
     expect(fiber.config?.minInlineTokens.get()).toBe(1024)
     expect(fiber.config?.maxSummarizeTokens.get()).toBe(12500)
-    expect(fiber.config?.summaryReasoningEffort.get()).toBe('off')
-    expect(fiber.config?.admissionReasoningEffort.get()).toBe('off')
-    expect(fiber.config?.privacyReasoningEffort.get()).toBe('off')
+    // 档位留空＝「不推理」，具体发哪个 id 由该 route 的档位表在请求前决定。
+    expect(fiber.config?.summaryReasoningEffort.get()).toBe('')
+    expect(fiber.config?.admissionReasoningEffort.get()).toBe('')
+    expect(fiber.config?.privacyReasoningEffort.get()).toBe('')
     expect(fiber.config?.summaryPrompt.get()).toBe('')
     expect(fiber.config?.admissionPrompt.get()).toBe('')
     expect(fiber.config?.privacyPrompt.get()).toBe('')
@@ -117,9 +118,12 @@ describe('配置契约', () => {
     expect(gated.fiber.config?.privacyPrompt.get()).toBe('只看我定义的机密')
   })
 
-  it('推理档位不在候选集里时装载被拒（拼错的档位不会留到请求上）', async () => {
-    const { error } = await load({ summaryReasoningEffort: 'ultra' } as unknown as Schemastery.TypeS<typeof Config>)
-    expect(error).toBeDefined()
+  it('档位字段接受任意字符串（合法性由 route 的档位表判定，不在装载期判定）', async () => {
+    // 档位 id 由 route 声明、各家词表不同（cline-pass 是 `none`、deepseek 是 `off`），还可能声明兜底词表以外的
+    // id，所以 schema 不能拦。判"能不能发"挪到请求前：不在表里就不下发（`src/efforts.ts`）。
+    const { fiber, error } = await load({ summaryReasoningEffort: 'ultra' } as unknown as Schemastery.TypeS<typeof Config>)
+    expect(error).toBeUndefined()
+    expect(fiber?.config?.summaryReasoningEffort.get()).toBe('ultra')
   })
 
   it('装上插件后工具运行时仍可用，且监听器没有替换任何结果', async () => {

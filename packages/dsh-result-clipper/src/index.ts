@@ -68,6 +68,7 @@ import {
   type UnmodifiedReason,
 } from './debug.ts'
 import { ENTRY_RESERVE, isReadBack, noteReadback, writeEntry, type ReadbackLedger } from './entry.ts'
+import { createEffortChoice, type EffortChoice } from './efforts.ts'
 import { lookupMemo, noteMemo, type SummaryMemo } from './memo.ts'
 import {
   composeBlockedFeedback,
@@ -110,6 +111,9 @@ export function apply(ctx: Context, config: Required<Config>): void {
   const memo: SummaryMemo = new Map()
   /** 本会话已提醒过的失效原因，按会话 id 分开（同一类原因至多一条）。 */
   const reminders: ReminderLedger = new Map()
+  // 三个 role 的推理档位读数：按 route 缓存"该 route 可用的档位表"，所以配置里的空串（不推理）能按各家的拼法
+  // 落到 `off` / `none` / 该表最低的一档，而每条结果不再多查一次表（设计稿 §3.2、§9）。
+  const efforts = createEffortChoice(ctx)
   // 可选参数 extract：主模型在调用时声明提取目标。启用判据按每次 agent 创建读一次（就是摘要总开关），所以关掉
   // 摘要时，之后创建的 agent 看不到这个参数，也不再覆盖工具。
   installExtractArg(ctx, () => extractEnabled(config), modes => recordMount(config, modes))
@@ -117,7 +121,7 @@ export function apply(ctx: Context, config: Required<Config>): void {
     if (exec.parent !== undefined) return next()
     const startedAt = performance.now()
     const decision = await next()
-    const applied = await process(ctx, config, readback, memo, reminders, exec, result, decision)
+    const applied = await process(ctx, config, readback, memo, reminders, efforts, exec, result, decision)
       // 任何意外都不得把工具调用变成错误结果：透传并记 `failed`。
       .catch((): Processed => ({
         decision,
@@ -187,6 +191,7 @@ async function process(
   readback: ReadbackLedger,
   memo: SummaryMemo,
   reminders: ReminderLedger,
+  efforts: EffortChoice,
   exec: ToolExecution,
   result: Readonly<ToolExecutionResult>,
   decision: PostToolDecision,
@@ -212,7 +217,7 @@ async function process(
       visible,
       [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],
     )
-    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation, goal)
+    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation, goal, efforts)
     // 干跑只预报「本应拦截」，交回的仍是下游决策——模型可见内容一个字都不变。
     if (judgement.kind === 'block') {
       return settle({
@@ -263,7 +268,8 @@ async function process(
       admission = 'failed'
     } else {
       const called = await requestAdmission(
-        llm, provider, model, config.admissionReasoningEffort.get(),
+        llm, provider, model,
+        await efforts.choose(provider, model, config.admissionReasoningEffort.get()),
         composeAdmissionPrompt(config.admissionPrompt.get(), prefix),
       )
       observation.judgeInputTokens = noteUsage(observation, called.usage)
@@ -276,7 +282,8 @@ async function process(
   const model = config.routeModel.get()
   if (llm === undefined || provider === '' || model === '') return unchanged('failed', admission)
   const outcome = await requestSummary(
-    llm, provider, model, config.summaryReasoningEffort.get(),
+    llm, provider, model,
+    await efforts.choose(provider, model, config.summaryReasoningEffort.get()),
     composeSummaryPrompt(
       goal === undefined ? config.summaryPrompt.get() : extractRule(goal),
       prefix,
@@ -327,6 +334,7 @@ type PrivacyJudgement =
  * @param dryRun - 干跑：请求照发，但不 append 会话事件。
  * @param observation - 这条结果的模型请求观测累计。
  * @param goal - 主模型这次声明的提取目标；没声明时为 `undefined`（此时请求与关闭该参数之前逐字相同）。
+ * @param efforts - 档位读数：把配置里的值换成这次请求实际要发的档位。
  * @returns 这次判断的结论。
  */
 async function judgePrivacy(
@@ -338,6 +346,7 @@ async function judgePrivacy(
   dryRun: boolean,
   observation: Observation,
   goal: string | undefined,
+  efforts: EffortChoice,
 ): Promise<PrivacyJudgement> {
   const blocked = config.failurePolicy.get() === 'block'
   const llm = ctx.get('llm')
@@ -347,7 +356,8 @@ async function judgePrivacy(
     return blocked ? { kind: 'block' } : { kind: 'passthrough', reason: 'failed' }
   }
   const called = await requestPrivacy(
-    llm, provider, model, config.privacyReasoningEffort.get(),
+    llm, provider, model,
+    await efforts.choose(provider, model, config.privacyReasoningEffort.get()),
     composePrivacyPrompt(config.privacyPrompt.get(), projection, goal),
   )
   noteUsage(observation, called.usage)

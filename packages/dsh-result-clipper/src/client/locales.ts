@@ -42,14 +42,11 @@ export type ResultClipperLocaleKey =
   | 'maxSummarizeTokensHint'
   | 'reasoningEffort'
   | 'reasoningEffortHint'
-  | 'effortOff'
-  | 'effortNone'
-  | 'effortMinimal'
-  | 'effortLow'
-  | 'effortMedium'
-  | 'effortHigh'
-  | 'effortXhigh'
-  | 'effortMax'
+  | 'effortNoReasoning'
+  | 'effortUnsupported'
+  | 'effortUnsupportedHint'
+  | 'effortNeverSent'
+  | 'effortNotAccepted'
   | 'privacyConfirmedLocal'
   | 'privacyConfirmedLocalHint'
   | 'webFetchPrivacyGate'
@@ -114,15 +111,12 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   maxSummarizeTokens: '摘要上限（token）',
   maxSummarizeTokensHint: 'bash、pwsh 与 web_fetch 达到或超过它的结果交给 spill，read 不受它约束；按 token 估算。',
   reasoningEffort: '推理档位',
-  reasoningEffortHint: '默认「不推理」以降低延迟；档位由该 route 声明，不声明时去掉该字段重发一次。',
-  effortOff: '不推理',
-  effortNone: '不推理（网关）',
-  effortMinimal: '极低',
-  effortLow: '低',
-  effortMedium: '中',
-  effortHigh: '高',
-  effortXhigh: '极高',
-  effortMax: '最高',
+  reasoningEffortHint: '留空＝不推理：插件按该 route 声明的档位表拼出对应档位（cline-pass 上是 None、deepseek 上是 Off）。候选就是该模型声明的档位，所以这里挑不出它不认的值；该模型不提供推理档位时这一行禁用、请求也不带这个字段。',
+  effortNoReasoning: '不推理',
+  effortUnsupported: '当前模型未提供推理等级',
+  effortUnsupportedHint: '该模型不声明任何推理档位，请求不会带这个字段（这里选什么都不会下发）。',
+  effortNeverSent: '（不会下发）',
+  effortNotAccepted: '（该 route 不接受）',
   privacyConfirmedLocal: '隐私 route 已确认为本地',
   privacyConfirmedLocalHint: '隐私闸门要求你确认这条 route 不会把内容发往外部网络；插件无法自行证明，也不通过 baseURL 猜测。改了这一组的 provider 或 model，这个确认就作废，要重新勾选。',
   webFetchPrivacyGate: 'web_fetch 也过隐私闸门',
@@ -186,15 +180,12 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   maxSummarizeTokens: 'Summarize ceiling (tokens)',
   maxSummarizeTokensHint: 'bash, pwsh and web_fetch results at or above it go to spill, read is not bound by it; estimated in tokens.',
   reasoningEffort: 'Reasoning effort',
-  reasoningEffortHint: '"Off" is the default because it lowers latency; the levels are declared by the route, and the plugin drops the field and retries once when the route rejects it.',
-  effortOff: 'Off',
-  effortNone: 'None (gateway)',
-  effortMinimal: 'Minimal',
-  effortLow: 'Low',
-  effortMedium: 'Medium',
-  effortHigh: 'High',
-  effortXhigh: 'Extra high',
-  effortMax: 'Max',
+  reasoningEffortHint: 'Empty means no reasoning: the plugin resolves it against the levels this route declares (None on cline-pass, Off on deepseek). The choices are exactly what the model declares, so an unaccepted value cannot be picked here; a model that offers no levels disables this row and the request carries no effort field.',
+  effortNoReasoning: 'No reasoning',
+  effortUnsupported: 'This model offers no reasoning levels',
+  effortUnsupportedHint: 'The model declares no reasoning levels, so the request never carries this field (whatever is picked here is not sent).',
+  effortNeverSent: ' (not sent)',
+  effortNotAccepted: ' (not accepted by this route)',
   privacyConfirmedLocal: 'Confirmed the privacy route is local',
   privacyConfirmedLocalHint: 'The privacy gate needs you to confirm this route never sends content to an external network; the plugin cannot prove it, and does not guess from a baseURL. Changing this group\'s provider or model invalidates the confirmation, so tick it again.',
   webFetchPrivacyGate: 'Send web_fetch results through the privacy gate too',

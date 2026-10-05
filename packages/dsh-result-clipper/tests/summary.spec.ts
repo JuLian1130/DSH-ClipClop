@@ -283,13 +283,15 @@ describe('票 03：摘要请求的内容与形态', () => {
     expect(editedText.split('只看目标与阻塞')[1]).toBe(builtinText.split(DEFAULT_SUMMARY_RULE)[1])
   })
 
-  it('默认档位是「不推理」：请求显式带 off；改选别的档位就带那一个', async () => {
+  it('留空＝不推理：请求按该 route 的档位表带对应档位；改选别的档位就带那一个', async () => {
     const off = await mounted()
+    off.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'low' }])
     off.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await off.fixture.ctx.tools.execute(exec('bash'))
-    expect(off.route.requests[0]?.reasoningEffort).toBe('off')
+    expect(off.route.requests[0]?.reasoningEffort).toBe('none')
 
     const high = await mounted({ summaryReasoningEffort: 'high' })
+    high.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'high' }])
     high.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await high.fixture.ctx.tools.execute(exec('bash'))
     // 先坐实这一臂真的发过请求：没有它，「请求带所选档位」在「压根不发请求」下也为真。
@@ -328,8 +330,13 @@ describe('票 03：透传路径的结果取值互不相同', () => {
 })
 
 describe('票 09：route 不支持 off 档时，「关闭推理」仍然按不请求推理档工作', () => {
-  it('先被拒收、去掉 reasoningEffort 重发一次后摘要完成替换', async () => {
-    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT_REPLY, { text: REPLY }])
+  it('档位表读不到时显式档位先被拒收、去掉 reasoningEffort 重发一次后摘要完成替换', async () => {
+    // 表读不到 = 发送前判定不了，显式值只能先发出去；这是唯一还会走错误码兜底的情形。
+    const { fixture, route, path } = await mounted(
+      { summaryReasoningEffort: 'off' },
+      [UNSUPPORTED_EFFORT_REPLY, { text: REPLY }],
+    )
+    route.resolveFailures.add('mock/mock')
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
@@ -342,8 +349,9 @@ describe('票 09：route 不支持 off 档时，「关闭推理」仍然按不�
     expect(records(path)).toEqual([expect.objectContaining({ action: 'summarized' })])
   })
 
-  it('route 支持 off 时不重试：只发一次，且那次请求带 off', async () => {
+  it('route 的档位表里有 off 时不重试：只发一次，且那次请求带 off', async () => {
     const { fixture, route } = await mounted()
+    route.reasonings.set('mock/mock', [{ id: 'off' }, { id: 'high' }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
 

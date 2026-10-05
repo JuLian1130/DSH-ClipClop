@@ -260,18 +260,29 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
     expect(route.requests[1]?.model).toBe('mock')
   })
 
-  it('准入请求默认档位是「不推理」；改选别的档位就带那一个', async () => {
-    const off = await mounted()
-    off.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await off.fixture.ctx.tools.execute(exec('bash'))
-    expect(off.route.requests[0]?.reasoningEffort).toBe('off')
+  it('档位字段留空时按该 route 的档位表落成「不推理」；显式选的档位原样下发', async () => {
+    // cline-pass 那种词表：有 `none`、没有 `off`。
+    const cline = await mounted()
+    cline.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'low' }, { id: 'medium' }])
+    cline.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await cline.fixture.ctx.tools.execute(exec('bash'))
+    expect(cline.route.requests).toHaveLength(2)
+    expect(cline.route.requests[0]?.reasoningEffort).toBe('none')
 
-    const chosen = await mounted({ admissionReasoningEffort: 'low' })
+    // 阳性对照：换成 deepseek 那种词表（有 `off`、没有 `none`）时落成 `off`，证明这一臂读的是表而不是写死的值。
+    const deepseek = await mounted()
+    deepseek.route.reasonings.set('mock/mock', [{ id: 'off' }, { id: 'low' }, { id: 'high' }])
+    deepseek.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await deepseek.fixture.ctx.tools.execute(exec('bash'))
+    expect(deepseek.route.requests[0]?.reasoningEffort).toBe('off')
+
+    const chosen = await mounted({ admissionReasoningEffort: 'medium' })
+    chosen.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'medium' }])
     chosen.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await chosen.fixture.ctx.tools.execute(exec('bash'))
     // 先坐实这一臂真的发过准入请求：没有它，「请求带所选档位」在「压根不发请求」下也为真。
     expect(chosen.route.requests).toHaveLength(2)
-    expect(chosen.route.requests[0]?.reasoningEffort).toBe('low')
+    expect(chosen.route.requests[0]?.reasoningEffort).toBe('medium')
   })
 
   it('准入开关默认关闭：同一份夹具只发摘要请求', async () => {
@@ -491,8 +502,13 @@ describe('票 06 第 9 条：准入提示词可编辑，安全外壳与输出格
 })
 
 describe('票 09：准入请求的「关闭推理」在无 off 档的 route 上重试一次', () => {
-  it('准入先被拒收、去掉 reasoningEffort 重发后拿到判断结论，摘要照常替换', async () => {
-    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT_REPLY, YES, { text: SUMMARY_REPLY }])
+  it('档位表读不到时显式档位原样下发、被拒后去掉字段重发，摘要照常替换', async () => {
+    // 这是唯一还会走错误码兜底的情形：表读不到就没法在发送前判定，显式值只能先发出去（档位字段留空时不发）。
+    const { fixture, route, path } = await mounted(
+      { admissionReasoningEffort: 'off', summaryReasoningEffort: 'off' },
+      [UNSUPPORTED_EFFORT_REPLY, YES, { text: SUMMARY_REPLY }],
+    )
+    route.resolveFailures.add('mock/mock')
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 

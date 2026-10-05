@@ -161,14 +161,16 @@ describe('票 07 第 1 条：隐私 route 确认位与三类请求的推理档�
     expect(records(path)).toEqual([expect.objectContaining({ action: 'rejected' })])
   })
 
-  it('隐私请求默认档位是「不推理」；改选别的档位就带那一个（两臂都先坐实发过请求）', async () => {
+  it('档位字段留空时按该 route 的档位表落成「不推理」；改选别的档位就带那一个（两臂都先坐实发过请求）', async () => {
     const off = await mounted()
+    off.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'low' }])
     off.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await off.fixture.ctx.tools.execute(exec('bash'))
     expect(off.route.requests).toHaveLength(1)
-    expect(off.route.requests[0]?.reasoningEffort).toBe('off')
+    expect(off.route.requests[0]?.reasoningEffort).toBe('none')
 
     const chosen = await mounted({ privacyReasoningEffort: 'xhigh' })
+    chosen.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'high' }, { id: 'xhigh' }])
     chosen.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await chosen.fixture.ctx.tools.execute(exec('bash'))
     expect(chosen.route.requests).toHaveLength(1)
@@ -665,8 +667,13 @@ describe('票 07 第 12 条：隐私提示词可编辑，安全外壳与输出�
 })
 
 describe('票 09：隐私请求的「关闭推理」在无 off 档的 route 上重试一次', () => {
-  it('隐私判断先被拒收、去掉 reasoningEffort 重发后得到 safe 结论并替换正文', async () => {
-    const { fixture, route, path } = await mounted({}, [UNSUPPORTED_EFFORT_REPLY, { text: SAFE }])
+  it('档位表读不到时显式档位先被拒收、去掉 reasoningEffort 重发后得到 safe 结论并替换正文', async () => {
+    // 表读不到 = 发送前判定不了，显式值只能先发出去；这是唯一还会走错误码兜底的情形。
+    const { fixture, route, path } = await mounted(
+      { privacyReasoningEffort: 'off' },
+      [UNSUPPORTED_EFFORT_REPLY, { text: SAFE }],
+    )
+    route.resolveFailures.add('mock/mock')
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 

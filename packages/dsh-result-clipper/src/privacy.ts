@@ -27,7 +27,6 @@ import { boundContextSummary, createUserMessage, ReasoningEffortId } from '@deep
 import type { ContextFormed, GenerateOptions, LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
 import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, parseAction, requestModelText } from './summary.ts'
 import type { ModelCallUsage, ModelRequestFailure, SummaryAction } from './summary.ts'
-import type { ReasoningEffort } from './reasoning.ts'
 import { DEFAULT_PRIVACY_RULE } from './rules.ts'
 
 // 消息来源是生产者自报的 kind（会话格式拒绝通用 `plugin` 包装），所以本插件在这里登记自己的来源类型。
@@ -125,7 +124,7 @@ export interface PrivacyCall {
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param provider - 隐私 route 的 provider。
  * @param model - 隐私 route 的 model id。
- * @param reasoningEffort - 这次请求的推理档位；默认 `off`。
+ * @param effort - 这次请求的推理档位；`undefined` 表示不带该字段（不推理、或该 route 的档位表判定不可用）。
  * @param prompt - {@link composePrivacyPrompt} 的产物。
  * @returns 解析出的结论与这次请求的用量；任何失败按 {@link ModelRequestFailure} 交回。
  */
@@ -133,13 +132,13 @@ export async function requestPrivacy(
   llm: LlmRuntime,
   provider: string,
   model: string,
-  reasoningEffort: ReasoningEffort,
+  effort: string | undefined,
   prompt: string,
 ): Promise<PrivacyCall> {
   const options: GenerateOptions = {
     provider,
     model,
-    reasoningEffort: ReasoningEffortId(reasoningEffort),
+    ...effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) },
     temperature: 0,
     maxTokens: SUMMARY_MAX_TOKENS,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],

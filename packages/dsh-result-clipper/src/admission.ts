@@ -18,7 +18,6 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, requestModelText } from './summary.ts'
 import type { ModelCallUsage } from './summary.ts'
-import type { ReasoningEffort } from './reasoning.ts'
 import { DEFAULT_ADMISSION_RULE } from './rules.ts'
 
 /** 固定安全外壳：只陈述输出形状与数据边界，不含任何可编辑规则。 */
@@ -67,7 +66,7 @@ export interface AdmissionOutcome {
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
  * @param provider - 准入 route 的 provider。
  * @param model - 准入 route 的 model id。
- * @param reasoningEffort - 这次请求的推理档位；默认 `off`。
+ * @param effort - 这次请求的推理档位；`undefined` 表示不带该字段（不推理、或该 route 的档位表判定不可用）。
  * @param prompt - {@link composeAdmissionPrompt} 的产物。
  * @returns `yes` 为 `true`、`no` 为 `false`；任何失败都是空结论。
  */
@@ -75,13 +74,13 @@ export async function requestAdmission(
   llm: LlmRuntime,
   provider: string,
   model: string,
-  reasoningEffort: ReasoningEffort,
+  effort: string | undefined,
   prompt: string,
 ): Promise<AdmissionOutcome> {
   const options: GenerateOptions = {
     provider,
     model,
-    reasoningEffort: ReasoningEffortId(reasoningEffort),
+    ...effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) },
     temperature: 0,
     maxTokens: SUMMARY_MAX_TOKENS,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
