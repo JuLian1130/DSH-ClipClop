@@ -48,15 +48,20 @@ function boundHooks(hooks: Record<string, ObservableSnapshot<unknown>>): Record<
 
 /**
  * 取某一行文案对应的那个开关：把「行文案」与「该行写哪个字段」绑在一起。
+ *
+ * 按开关自己的**无障碍名**（`Switch` 把行文案放进 `aria-label`）取，而不是按整行文本的包含关系：行提示里会提到
+ * 别的开关名（摘要那行现在就说"隐私闸门不受它影响"），包含匹配会点到前面那一行。取到之后仍回头核对它确实在
+ * 带这个文案的那一行里，所以「行文案与控件成对」这条判据没有丢。
  * @param container - 渲染出来的页面。
  * @param label - 该行的标题文案。
  * @returns 该行里的开关元素。
  */
 function rowSwitch(container: HTMLElement, label: string): Element {
-  const section = [...container.querySelectorAll('section')].find(node => node.textContent?.includes(label))
-  if (section === undefined) throw new Error(`fixture: no switch row labelled ${label}`)
-  const control = section.querySelector('[role="switch"]')
-  if (control === null) throw new Error(`fixture: the row labelled ${label} has no switch`)
+  const control = container.querySelector(`[role="switch"][aria-label="${label}"]`)
+  if (control === null) throw new Error(`fixture: no switch row labelled ${label}`)
+  if (control.closest('section')?.textContent?.includes(label) !== true) {
+    throw new Error(`fixture: the switch labelled ${label} is not inside a row carrying that label`)
+  }
   return control
 }
 

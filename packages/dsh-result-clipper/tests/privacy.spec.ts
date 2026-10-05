@@ -258,23 +258,23 @@ describe('票 07 第 2 条：每个标准工具结果的隐私判断', () => {
     expect(records(path)).toEqual([expect.objectContaining({ action: 'unmodified', reason: 'kept' })])
   })
 
-  it('摘要能力关闭时只发那一次隐私请求，判 safe 与按 passthrough 放行都记 summary-off', async () => {
+  it('摘要总开关关着也照样替换：隐私是同一次请求里既判定又给摘要的独立一路', async () => {
     const { fixture, route, path } = await mounted({ summarize: false })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
+    // 只发那一次隐私请求，且它的摘要就是替换正文的那一段（没有第二次摘要请求）。
     expect(route.requests).toHaveLength(1)
-    expect(textOf(result.content)).toBe(LONG_BODY)
-    expect(records(path)).toEqual([expect.objectContaining({ action: 'unmodified', reason: 'summary-off' })])
+    expect(textOf(result.content)).toContain(SAFE_SUMMARY)
+    expect(records(path)).toEqual([expect.objectContaining({ action: 'summarized' })])
 
-    // 放行侧同理（规格「契约 · 判定顺序」：摘要关闭时判 `safe` 或按 `passthrough` 放行都记 `summary-off`）：
-    // 隐私判断照常发出，但「为什么这条结果没被改动」的取值仍是摘要能力关闭。
+    // 阴性对照：同一配置下判 `uncertain` 时按失败策略放行原文（这条取值与摘要总开关无关）。
     const uncertain = await mounted({ summarize: false }, [{ text: UNCERTAIN }])
     uncertain.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const passed = await uncertain.fixture.ctx.tools.execute(exec('bash'))
     expect(uncertain.route.requests).toHaveLength(1)
     expect(textOf(passed.content)).toBe(LONG_BODY)
-    expect(records(uncertain.path)).toEqual([expect.objectContaining({ action: 'unmodified', reason: 'summary-off' })])
+    expect(records(uncertain.path)).toEqual([expect.objectContaining({ action: 'unmodified', reason: 'uncertain' })])
   })
 })
 
@@ -395,16 +395,16 @@ describe('隐私模式与提取目标：同一份隐私规则，带目标时按�
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ reason: 'not-candidate' }))
   })
 
-  it('规则摘要关闭时隐私判断照做，但它的摘要动作不被采用（记 rule-summary-off）', async () => {
+  it('规则摘要关闭不影响隐私这一路：照旧判定并用那一次请求的摘要替换正文', async () => {
     const { fixture, route, path } = await mounted({ ruleSummary: false })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
     expect(route.requests).toHaveLength(1)
-    expect(textOf(result.content)).toBe(LONG_BODY)
-    expect(records(path).at(-1)).toEqual(expect.objectContaining({
-      action: 'unmodified', reason: 'rule-summary-off',
-    }))
+    expect(textOf(result.content)).toContain(SAFE_SUMMARY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'summarized' }))
+    // 同一配置下不带 extract：这条也不是 `rule-summary-off`——那个取值属于摘要提示词那条路。
+    expect(JSON.stringify(records(path))).not.toContain('rule-summary-off')
   })
 })
 

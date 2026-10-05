@@ -21,19 +21,23 @@
  * 本票（07）在候选路径之前接入**隐私闸门**：`await next()` 之后先判隐私——判断对象是模型即将看到的完整
  * **文本**投影（下游处理后的正文与附加上下文，图片块不送分类器），不受结果长度限制，也不看工具是否在摘要
  * 候选内。判定敏感一律返回原生 `block`（固定文案，含工具名、不含参数与正文）；`uncertain` 与技术失败按失败
- * 策略放行原文或拦截；`safe` 且动作为 `summarize` 时照常走摘要路径、正文被摘要替换，`safe` + `keep` 保留
- * 原文。隐私模式只发这一次请求（准入不发），同一工具同一正文连续两次也各判一次（memo 不参与）。隐私 route
+ * 策略放行原文或拦截；`safe` 且动作为 `summarize` 时正文被摘要替换，`safe` + `keep` 保留原文。隐私模式只发
+ * 这一次请求（准入不发），同一工具同一正文连续两次也各判一次（memo 不参与）。隐私 route
  * 未确认为本地、没有 `llm` 服务或 route 没配出来都是配置失败，按失败策略处理，不另发会话提醒。`web_fetch` 的
  * 结果默认不判（`webFetchPrivacyGate` 打开才判）：它取的多是外网公开信息，被跳过的结果与隐私关闭时同路。
+ *
+ * **隐私这条路自成一路**（票 26 修正）：它不读摘要提示词，判定与摘要是同一次请求的两个字段，所以**摘要总开关
+ * 与规则摘要开关都管不到它**——隐私开着时 `safe` 的摘要照旧替换正文（`summarize: false` 也一样；否则这一次
+ * 请求的输出白付，判 `safe` 的正文也白白留着）。反过来，非隐私路径仍然要求摘要总开关与规则摘要开关都放它走。
  *
  * 失效必须可见：按 `passthrough` 放行时同一会话内每类原因（未判定 / 判断失败 / 本地窗口不足）各追加一条
  * 不含正文的插件提醒；`block` 策略下拦截本身在对话里可见，不发提醒。窗口不足与普通失败在 debug 记录里取值
  * 不同（`failed-window` / `failed`，放行的未判定是 `uncertain`）。
  *
- * 每条普通派发在 debug 记录里留一条闭合的「结果取值」：摘要关闭 `summary-off`、规则摘要关闭 `rule-summary-off`、
- * 非候选 `not-candidate`、准入判 no `admission-no`、保留全文 `kept`、没变短 `not-shorter`、按入口读回
- * `read-back`、放行的未判定 `uncertain`、失败 `failed`、窗口不足 `failed-window`、已替换 `summarized`、
- * 已拦截 `rejected`。
+ * 每条普通派发在 debug 记录里留一条闭合的「结果取值」：摘要提示词路径关闭 `summary-off`（只在没走隐私那条路
+ * 时出现）、规则摘要关闭 `rule-summary-off`、非候选 `not-candidate`、准入判 no `admission-no`、保留全文 `kept`、
+ * 没变短 `not-shorter`、按入口读回 `read-back`、放行的未判定 `uncertain`、失败 `failed`、窗口不足
+ * `failed-window`、已替换 `summarized`、已拦截 `rejected`。
  *
  * 本票（08）接入**干跑**：`dryRun` 开启且 debug 开关与日志路径都就位时，流水线照走（隐私判断、准入与摘要
  * 请求都真的发出），但交回的永远是下游决策——不替换内容、不 append 会话事件、不调用 `saveText`、不写也不查
@@ -49,7 +53,8 @@
  * 不再提供 `keep`**（`summary.ts` 与 `privacy.ts` 的固定外壳按 `allowKeep` 分叉，`extractRule` 也不再提它）：
  * 那条路径上"透传"只剩一种合法来源——结果长度低于摘要下限，此时程序自己透传、**一个模型请求都不发**（隐私
  * 闸门开着时隐私判断照发，它是闸门不是摘要能力）。另加 `ruleSummary` 开关（默认开启）：关掉后**没声明目标**的
- * 候选结果一律透传并记 `rule-summary-off`，用来量出"`extract` 为空时按摘要提示词摘要"本身有没有必要。
+ * 候选结果一律透传并记 `rule-summary-off`，用来量出"`extract` 为空时按摘要提示词摘要"本身有没有必要。它只管
+ * 摘要提示词那条路，理由同上：隐私那条路不用摘要提示词。
  *
  * 任何路径都不得抛出——`tools/post-execute` 抛错会把整个工具调用变成错误结果；调用点的兜底 catch 只负责
  * 收住意外，正常失败各自以「透传 / 拦截」结算。
@@ -233,17 +238,13 @@ async function process(
         admission: 'not-applicable',
       })
     }
-    // 摘要能力关闭时整条摘要路径都不发请求，所以「为什么这条结果没改动」的取值是摘要关闭——判 `safe` 与按
-    // `passthrough` 放行都一样（规格「契约 · 判定顺序」）；隐私判断本身照常发出。
-    if (!config.summarize.get()) return unchanged('summary-off')
+    // 隐私闸门**自成一路**：它不经过摘要提示词，判定与摘要是同一次请求的两个字段，所以摘要总开关与
+    // 规则摘要开关都管不到它——隐私开着时 `safe` 的摘要照旧替换正文（否则这一次请求的输出白付，正文也白白留着）。
     if (judgement.kind === 'passthrough') return unchanged(judgement.reason)
     // 按入口读回跳过整个摘要路径（含准入），但仍经过刚做完的隐私判断。
     if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
     const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
     if (verdict.kind === 'skip') return unchanged('not-candidate')
-    // 规则摘要关闭且这次没声明提取目标：候选结果直接透传。隐私判断照做（它是闸门，不是摘要能力），它给出的
-    // 摘要动作在这一路不被采用。
-    if (goal === undefined && !config.ruleSummary.get()) return unchanged('rule-summary-off')
     // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储、不进 memo。
     if (judgement.action.action === 'keep') return unchanged('kept')
     return settle(await replace(
