@@ -165,6 +165,15 @@ const PAIR_STYLE = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } 
 /** 一组底部的「保存 / 恢复默认」按钮行排版。 */
 const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '12px 0 0' } as const
 
+/**
+ * 缩排的两级：用缩进表示从属关系（不是嵌套的子页面，只是视觉层级）。
+ *
+ * 一级＝「摘要模型」组从属于「工具结果摘要」开关；二级＝「启用摘要准入判断」与它下面的准入组从属于摘要模型组。
+ * 每级 16px，与分组内的字号（13–14px）大致一个字的宽度。
+ */
+const NEST_ONE = { marginLeft: 16 } as const
+const NEST_TWO = { marginLeft: 32 } as const
+
 /** 隐私 route 未确认为本地时的常驻警告排版。 */
 const WARNING_STYLE = {
   color: 'var(--dsw-alias-state-warn-label)',
@@ -444,7 +453,7 @@ function RouteRow(props: RouteRowProps) {
         onChange={(event) => { props.onChange(event.target.value) }}
       />
       {props.options.length > 0 && <div>
-        <Button variant="ghost" size="sm" onClick={() => { setTyping(false) }}>{props.pickLabel}</Button>
+        <Button variant="outline" size="sm" onClick={() => { setTyping(false) }}>{props.pickLabel}</Button>
       </div>}
       <div style={HINT_STYLE}>{props.hint}</div>
     </section>
@@ -464,7 +473,7 @@ function RouteRow(props: RouteRowProps) {
       {props.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
     </select>
     <div>
-      <Button variant="ghost" size="sm" onClick={() => { setTyping(true) }}>{props.customLabel}</Button>
+      <Button variant="outline" size="sm" onClick={() => { setTyping(true) }}>{props.customLabel}</Button>
     </div>
     <div style={HINT_STYLE}>{props.hint}</div>
   </section>
@@ -588,7 +597,7 @@ function CheckRow(props: {
 /**
  * 提示词规则正文：框里是**当前生效正文的草稿**（有覆盖时从覆盖播种，否则从内置正文），编辑只改草稿；写回
  * 由所在组的「保存」完成，草稿等于内置正文时保存走 `unset`（清掉覆盖）。
- * @param props - 控件 id、行文案、提示、草稿值与改动回调。
+ * @param props - 控件 id、行文案、提示、草稿值、禁用位与改动回调。
  * @returns 一行文本域。
  */
 function PromptRow(props: {
@@ -596,6 +605,8 @@ function PromptRow(props: {
   readonly label: string
   readonly hint: string
   readonly value: string
+  /** 这段正文当前不会被用到时给出（控件只读，草稿原样保留）。 */
+  readonly disabled?: boolean
   readonly onChange: (next: string) => void
 }) {
   return <section style={ROW_STYLE}>
@@ -604,6 +615,7 @@ function PromptRow(props: {
       id={props.id}
       style={TEXTAREA_STYLE}
       value={props.value}
+      disabled={props.disabled}
       onChange={(event) => { props.onChange(event.target.value) }}
     />
     <div style={HINT_STYLE}>{props.hint}</div>
@@ -613,8 +625,8 @@ function PromptRow(props: {
 /** 摘要组的字段：总开关、规则摘要开关、route、推理档位、两个阈值与提示词。 */
 const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summarize', kind: 'boolean' },
-  // 老版本存过的 section 里没有这个键：缺席时按默认「开」算，草稿播种与「已改动」判定都拿它当基准。
-  { field: 'ruleSummary', kind: 'boolean', fallback: true },
+  // 老版本存过的 section 里没有这个键：缺席时按默认「不勾」算，草稿播种与「已改动」判定都拿它当基准。
+  { field: 'ruleSummary', kind: 'boolean', fallback: false },
   { field: 'routeProvider', kind: 'text' },
   { field: 'routeModel', kind: 'text' },
   { field: 'summaryReasoningEffort', kind: 'text', fallback: '' },
@@ -623,9 +635,13 @@ const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
 ]
 
-/** 准入组的字段：启用开关、route、推理档位与提示词。 */
+/**
+ * 准入组的字段：route、推理档位与提示词。
+ *
+ * **启用位不在这里**：它在组之外、之上，**保存即生效**（`applyAdmissionJudge`）。若它仍在草稿里，取消勾选会把
+ * 承载「保存」按钮的那一组一起收起，改动就再也存不下去。
+ */
 const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
-  { field: 'admissionJudge', kind: 'boolean' },
   { field: 'admissionProvider', kind: 'text' },
   { field: 'admissionModel', kind: 'text' },
   { field: 'admissionReasoningEffort', kind: 'text', fallback: '' },
@@ -689,6 +705,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyPrompt = props.usePrivacyPrompt(value => value)
   const debugPath = props.useDebugPath(value => value)
   const [masterFailed, setMasterFailed] = useState(false)
+  const [admissionFailed, setAdmissionFailed] = useState(false)
   const catalog = props.useModelCatalog(value => value)
   // 卡片挂载时重读一次目录：用户往往是先去「设置 → 模型」建 route、再回来选它。
   useEffect(() => { props.refreshModelCatalog() }, [])
@@ -705,6 +722,18 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       .catch(() => { setMasterFailed(true) })
   }
 
+  /**
+   * 写回准入判断的启用位。同样**保存即生效**：它折叠的是承载「保存」按钮的那一组，走草稿就会把取消勾选变成
+   * 存不下去的改动。
+   * @param next - 新的开关取值。
+   */
+  const applyAdmissionJudge = (next: boolean): void => {
+    setAdmissionFailed(false)
+    void props.saveFields([{ op: 'set', path: ['admissionJudge'], value: next }])
+      .then((accepted) => { if (!accepted) setAdmissionFailed(true) })
+      .catch(() => { setAdmissionFailed(true) })
+  }
+
   const summary = useGroupDraft(SUMMARY_FIELDS, {
     summarize, ruleSummary, routeProvider, routeModel, summaryReasoningEffort, minInlineTokens,
     maxSummarizeTokens,
@@ -712,7 +741,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     summaryPrompt: summaryPrompt === '' ? DEFAULT_SUMMARY_RULE : summaryPrompt,
   }, props.saveFields)
   const admission = useGroupDraft(ADMISSION_FIELDS, {
-    admissionJudge, admissionProvider, admissionModel, admissionReasoningEffort,
+    admissionProvider, admissionModel, admissionReasoningEffort,
     admissionPrompt: admissionPrompt === '' ? DEFAULT_ADMISSION_RULE : admissionPrompt,
   }, props.saveFields)
   const privacy = useGroupDraft(PRIVACY_FIELDS, {
@@ -833,6 +862,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     <hr style={DIVIDER_STYLE} />
 
     {summarize === true && <>
+    <div style={NEST_ONE}>
     <Group title={props.t('summaryGroup')} description={props.t('summaryGroupHint')} {...actions(summary)}>
       <CheckRow id="plugin-config-result-clipper-rule-summary" label={props.t('ruleSummary')}
         hint={props.t('ruleSummaryHint')}
@@ -871,18 +901,25 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       </div>
       <PromptRow id="plugin-config-result-clipper-summary-prompt" label={props.t('summaryPrompt')}
         hint={props.t('promptHint')} value={summary.value('summaryPrompt') as string}
+        disabled={summary.value('ruleSummary') === false}
         onChange={next => { summary.change('summaryPrompt', next) }} />
+      {summary.value('ruleSummary') === false && <div style={HINT_STYLE}>{props.t('summaryPromptInactive')}</div>}
     </Group>
+    </div>
 
     <hr style={DIVIDER_STYLE} />
 
-    <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
-      {/* 折起来就等于不启用：开关（草稿）决定这一组是否有内容，勾上才出现下面这整组设置。 */}
+    {/* 启用位在组之外、之上，且**保存即生效**：它自己折叠下面那一组；若它还在草稿里，取消勾选会把承载「保存」
+        按钮的那一组一起收起，改动就再也存不下去。从属关系用缩排表示（准入比摘要模型再退一级）。 */}
+    <div style={NEST_ONE}>
       <CheckRow id="plugin-config-result-clipper-admission-enabled" label={props.t('admissionJudge')}
         hint={props.t('admissionJudgeHint')}
-        checked={admission.value('admissionJudge') as boolean}
-        onChange={next => { admission.change('admissionJudge', next) }} />
-      {admission.value('admissionJudge') === true && <>
+        checked={admissionJudge}
+        onChange={next => { applyAdmissionJudge(next) }} />
+      {admissionFailed && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
+    </div>
+    {admissionJudge === true && <div style={NEST_TWO}>
+    <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
       <RouteLine
         provider={{
           ...routeText, id: 'plugin-config-result-clipper-admission-provider',
@@ -910,8 +947,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
         hint={props.t('promptHint')} value={admission.value('admissionPrompt') as string}
         onChange={next => { admission.change('admissionPrompt', next) }} />
-      </>}
     </Group>
+    </div>}
     </>}
 
     <hr style={DIVIDER_STYLE} />

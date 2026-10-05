@@ -66,14 +66,15 @@ async function mounted(
   route?: FakeRoute,
   spill: FakeSpill | null = new FakeSpill(),
 ): Promise<HostFixture> {
-  const fixture = await mount(config, undefined, route, spill)
+  // 规则摘要默认关闭；这些用例测的是摘要提示词路，所以夹具默认把它打开（用例仍可覆盖）。
+  const fixture = await mount({ ruleSummary: true, ...config }, undefined, route, spill)
   open.push(fixture)
   return fixture
 }
 
 /** 装一条 profile 并登记收场。 */
 async function booted(config: Record<string, unknown>, route?: FakeRoute): Promise<LiveFixture> {
-  const fixture = await bootProfile(config, route)
+  const fixture = await bootProfile({ ruleSummary: true, ...config }, route)
   live.push(fixture)
   return fixture
 }

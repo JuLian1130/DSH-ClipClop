@@ -83,7 +83,8 @@ async function mounted(
   const route = new FakeRoute(script)
   const fixture = await mount(
     {
-      privacyGate: true, summarize: true, debug: true, debugPath: path,
+      // 隐私路不受两个摘要开关影响；`ruleSummary` 打开只是为了让 `web_fetch` 那几条（默认不进隐私路）照旧走摘要路径。
+      privacyGate: true, summarize: true, ruleSummary: true, debug: true, debugPath: path,
       routeProvider: 'mock', routeModel: 'mock', privacyConfirmedLocal: true, ...overrides,
     } as Schemastery.TypeS<typeof Config>,
     undefined,

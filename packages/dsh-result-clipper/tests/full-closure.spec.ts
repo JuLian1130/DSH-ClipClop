@@ -95,7 +95,8 @@ interface Scenario {
 
 /** 一条路由配置的公共前缀：摘要 route 与 debug 就位，其余按路径需要补。 */
 function base(path: string): Schemastery.TypeS<typeof Config> {
-  return { routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: path }
+  // 规则摘要默认关闭；这张闭合矩阵测的是摘要提示词路的取值，所以基线把它打开。
+  return { ruleSummary: true, routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: path }
 }
 
 /**

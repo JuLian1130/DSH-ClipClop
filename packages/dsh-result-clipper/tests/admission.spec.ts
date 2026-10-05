@@ -81,7 +81,7 @@ async function mounted(
   const route = new FakeRoute(script)
   const fixture = await mount(
     {
-      summarize: true, admissionJudge: true, debug: true, debugPath: path,
+      summarize: true, ruleSummary: true, admissionJudge: true, debug: true, debugPath: path,
       routeProvider: 'mock', routeModel: 'mock', ...overrides,
     } as Schemastery.TypeS<typeof Config>,
     undefined,
@@ -296,7 +296,7 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
   })
 
   it('保存即生效：同一份真 profile 里写入准入开关与准入 route 后，下一条结果立刻按新值走', async () => {
-    const fixture = await booted({ summarize: true, routeProvider: 'mock', routeModel: 'mock' })
+    const fixture = await booted({ summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock' })
     const route = new FakeRoute([{ text: SUMMARY_REPLY }, YES, { text: SUMMARY_REPLY }, YES, { text: SUMMARY_REPLY }])
     fixture.ctx.provide('llm', route as never)
     fixture.ctx.provide('spillStore', new FakeSpill() as never)

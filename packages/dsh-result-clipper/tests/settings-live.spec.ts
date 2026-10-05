@@ -108,7 +108,7 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
   it('写入摘要下限后 host 行为立刻跟着变（同一个长结果先落 failed、调高下限后落 not-candidate）', async () => {
     const root = tempRoot()
     const logPath = join(root, 'debug.jsonl')
-    const fixture = await booted({ summarize: true, privacyGate: false, debug: true, debugPath: logPath })
+    const fixture = await booted({ summarize: true, ruleSummary: true, privacyGate: false, debug: true, debugPath: logPath })
     fixture.ctx.tools.register(textTool('bash', 'x'.repeat(5000)))
     // profile 里没有 llm 服务：候选命中后摘要路径失败，落 failed。
     await fixture.ctx.tools.execute(exec('bash'))

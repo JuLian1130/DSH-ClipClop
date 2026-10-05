@@ -129,7 +129,7 @@ describe('整条插件：请求上真的带的档位', () => {
   /** 挂一份插件 + 假 route 的夹具（摘要走 mock route）。 */
   async function mounted(overrides: Record<string, unknown>, route: FakeRoute): Promise<HostFixture> {
     const fixture = await mount(
-      { summarize: true, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
+      { summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
       undefined,
       route,
     )

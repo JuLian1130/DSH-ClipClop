@@ -44,8 +44,8 @@ export interface StubSection {
 /** section 缺席时控件读到的默认值（与 host 半 schema 的默认一致）。 */
 export const SECTION_DEFAULTS: StubSection = {
   summarize: false,
-  // 规则摘要默认开启（与 host 半 schema 的默认一致）。
-  ruleSummary: true,
+  // 规则摘要默认关闭（与 host 半 schema 的默认一致）：默认只摘要主模型主动请求摘要的调用。
+  ruleSummary: false,
   privacyGate: false,
   admissionJudge: false,
   debug: false,

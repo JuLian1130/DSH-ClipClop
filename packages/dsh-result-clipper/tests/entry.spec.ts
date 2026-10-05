@@ -62,7 +62,7 @@ async function mounted(
   const path = join(tempRoot(), 'debug.jsonl')
   const route = new FakeRoute(script)
   const fixture = await mount(
-    { summarize: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
+    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
     undefined,
     route,
     spill,

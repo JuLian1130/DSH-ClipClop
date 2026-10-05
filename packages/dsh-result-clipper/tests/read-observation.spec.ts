@@ -200,7 +200,7 @@ async function setup(): Promise<Fixture> {
   probe.install(ctx)
   await ctx.plugin(ToolFs, {})
   await ctx.plugin(plugin, {
-    summarize: true, routeProvider: 'mock', routeModel: 'mock',
+    summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock',
   } as Schemastery.TypeS<typeof Config>)
   return { ctx, route, spill, probe }
 }

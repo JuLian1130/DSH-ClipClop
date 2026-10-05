@@ -138,8 +138,8 @@ export function apply(ctx: Context): void {
       inject: () => ({
         hooks: {
           summarize: booleanField(form, 'summarize'),
-          // 规则摘要开关的默认是**开**：镜像里还没有这个键（老版本存过的 section）时按"照旧摘要"显示。
-          ruleSummary: booleanField(form, 'ruleSummary', true),
+          // 规则摘要开关的默认是**不勾**（与 host 半 schema 一致）：镜像里还没有这个键时按"只摘要主动请求的"显示。
+          ruleSummary: booleanField(form, 'ruleSummary'),
           privacyGate: booleanField(form, 'privacyGate'),
           webFetchPrivacyGate: booleanField(form, 'webFetchPrivacyGate'),
           privacyConfirmedLocal: booleanField(form, 'privacyConfirmedLocal'),

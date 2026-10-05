@@ -69,7 +69,7 @@ function assistantContent(fixture: LoopFixture): readonly (readonly ContentBlock
 
 describe('票 03 第 10 条：替换后的落盘内容被 token 计量器读到', () => {
   it('会话里落盘的是摘要 + 入口说明，且计量器的表面读数按它计价（阴性对照：关闭摘要时按原文计价）', async () => {
-    const on = await tracked({ summarize: true, routeProvider: 'mock', routeModel: 'mock' })
+    const on = await tracked({ summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock' })
     const off = await tracked({ summarize: false })
 
     expect(toolResultText(on)).toBe(SUMMARY + composeEntry(on.spill.refs[0]!, 'bash'))

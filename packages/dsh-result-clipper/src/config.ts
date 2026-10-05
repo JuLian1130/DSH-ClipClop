@@ -5,7 +5,7 @@
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
  * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、`web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
  * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
- * 提示词留空（用内置规则正文）、摘要提示词摘要开启（`ruleSummary`）、debug 关闭且不
+ * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（默认只摘要主模型主动请求摘要的调用，`ruleSummary`）、debug 关闭且不
  * 自动改用临时路径、干跑关闭。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
@@ -35,11 +35,11 @@ export interface Config {
    */
   summarize?: Volatile<boolean>
   /**
-   * 摘要提示词的摘要开关，默认开启。
+   * 摘要提示词的摘要开关，**默认关闭**。
    *
-   * 关闭后只有声明了提取目标（`extract`）的调用才会被摘要：没声明目标的候选结果直接透传，取值记
-   * `rule-summary-off`。用途是量出「`extract` 为空时按摘要提示词摘要」本身有没有必要——那一类结果的条数就是
-   * 这次对照实验的分母。与 `summarize` 同一范围：**它只管摘要提示词那条路**，隐私闸门不用摘要提示词、因而不受
+   * 默认只摘要"主模型主动请求摘要"的调用（`extract`）；打开它才会对没请求摘要的候选结果也按摘要提示词试一次，
+   * 取值记 `rule-summary-off`（关着且没声明 `extract` 的那批）。用途是量出「`extract` 为空时按摘要提示词摘要」
+   * 本身有没有必要。与 `summarize` 同一范围：**它只管摘要提示词那条路**，隐私闸门不用摘要提示词、因而不受
    * 它影响。
    */
   ruleSummary?: Volatile<boolean>
@@ -107,7 +107,7 @@ const effort = () => z.string().default('').volatile()
 /** 配置 schema：字段全部可选并在装载时解析成默认值。 */
 export const Config = z.object({
   summarize: z.boolean().default(false).volatile(),
-  ruleSummary: z.boolean().default(true).volatile(),
+  ruleSummary: z.boolean().default(false).volatile(),
   privacyGate: z.boolean().default(false).volatile(),
   webFetchPrivacyGate: z.boolean().default(false).volatile(),
   admissionJudge: z.boolean().default(false).volatile(),
