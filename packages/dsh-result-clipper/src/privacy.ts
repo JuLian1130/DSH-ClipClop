@@ -189,14 +189,17 @@ export function composeBlockedFeedback(toolName: string): string {
   ].join('\n')
 }
 
-/** 运行期失效放行的三类原因；与该次结果的 debug 取值一一对应。 */
-export type ReminderReason = 'uncertain' | 'failed' | 'failed-window'
+/** 运行期失效放行的原因；与该次结果的 debug 取值一一对应（`exact-text` 见 `extract.ts` 的 `wantsExactText`）。 */
+export type ReminderReason = 'uncertain' | 'failed' | 'failed-window' | 'exact-text'
 
-/** 三类失效各自的提醒文案：互不相同，且不含任何正文。 */
+/** 各类失效各自的提醒文案：互不相同，且不含任何正文。 */
 const REMINDER_TEXT: Record<ReminderReason, string> = {
   uncertain: '隐私闸门未能判定刚才那条工具结果是否涉及隐私，已按失败策略放行原文。',
   failed: '隐私闸门判断刚才那条工具结果时失败，已按失败策略放行原文。',
   'failed-window': '本地隐私模型的窗口装不下刚才那条工具结果，未能完成判断，已按失败策略放行原文。',
+  // 摘要器只能改写，给不出逐字保证，所以这次声明逐字时直接放行原文；提醒把该用的那条路写出来。
+  'exact-text': '刚才那次调用声明的是逐字原文，摘要会改写正文，所以已按原文透传。'
+    + '需要逐字时请改用 offset/limit 读那个区间，不要声明提取目标。',
 }
 
 /** 按会话分开的「已提醒原因」台账：同一会话内每类原因至多一条。 */

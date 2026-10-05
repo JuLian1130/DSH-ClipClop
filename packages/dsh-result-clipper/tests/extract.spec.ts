@@ -22,6 +22,7 @@ import {
   EXTRACT_DESCRIPTION,
   extractGoalOf,
   extractRule,
+  wantsExactText,
   extendedDefinition,
   extendInPlace,
   installExtractArg,
@@ -29,7 +30,7 @@ import {
   takeoverPlan,
 } from '../src/extract.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
-import type { HostFixture } from './support/host.ts'
+import type { AppendedNotice, HostFixture } from './support/host.ts'
 import { runLoop } from './support/loop.ts'
 import type { LoopFixture } from './support/loop.ts'
 import { FakeRoute, requestText } from './support/route.ts'
@@ -95,6 +96,72 @@ describe('extractGoalOf：只认 arguments.extract 上的非空字符串', () =>
   it('参数不是对象时不抛', () => {
     expect(extractGoalOf({ arguments: undefined })).toBeUndefined()
     expect(extractGoalOf({ arguments: 'x' })).toBeUndefined()
+  })
+})
+
+describe('wantsExactText：只认明确针对文本的逐字要求', () => {
+  it.each([
+    ['the exact 400 error message, verbatim', true],
+    ['Exact text of lines 1-50, verbatim.', true],
+    ['character-for-character copy of the signature', true],
+    ['exactly as written in the docs', true],
+    ['Quote verbatim: the cap constants (READ_LIMIT, maxLineLength)', true],
+    ['逐字给出那几行', true],
+    ['把原来的那段原样贴出来', true],
+    // 反例：`exact` 修饰的是"概念"而不是正文，这类目标的摘要是对的。
+    ['exact conditions and codes of failures thrown in the compaction region', false],
+    ['which values does the config accept, and what are the defaults', false],
+    ['quote the relevant doc lines about retries', false],
+  ])('%s → %s', (goal, expected) => {
+    expect(wantsExactText(goal)).toBe(expected)
+  })
+})
+
+describe('声明逐字原文时按原文透传（不发摘要请求）', () => {
+  it('候选结果：结果逐字不变、记 exact-text、同类提醒只发一次', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const notices: AppendedNotice[] = []
+    const first = await fixture.ctx.tools.execute(
+      exec('bash', undefined, { command: 'ls', extract: 'the exact output, verbatim' }, 's1', notices),
+    )
+    const second = await fixture.ctx.tools.execute(
+      exec('bash', undefined, { command: 'ls', extract: 'verbatim once more' }, 's1', notices),
+    )
+
+    expect(route.requests).toHaveLength(0)
+    expect(textOf(first.content)).toBe(LONG_BODY)
+    expect(textOf(second.content)).toBe(LONG_BODY)
+    expect(notices).toHaveLength(1)
+    expect(textOf(notices[0]!.message.content)).toContain('offset/limit')
+    const records = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line) as unknown)
+    expect(records.at(-1)).toMatchObject({ action: 'unmodified', reason: 'exact-text', extract: true })
+    expect(records.at(-2)).toMatchObject({ action: 'unmodified', reason: 'exact-text' })
+  })
+
+  it('低于摘要下限时不认这条规则：仍记 not-candidate、不发提醒', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', 'x'.repeat(100)))
+    const notices: AppendedNotice[] = []
+    await fixture.ctx.tools.execute(
+      exec('bash', undefined, { command: 'ls', extract: 'verbatim please' }, 's1', notices),
+    )
+
+    expect(route.requests).toHaveLength(0)
+    expect(notices).toHaveLength(0)
+    expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
+      .toMatchObject({ action: 'unmodified', reason: 'not-candidate' })
+  })
+
+  it('规则摘要开着也一样：逐字目标不交给摘要器', async () => {
+    const { fixture, route } = await mounted({ ruleSummary: true })
+    fixture.ctx.tools.register(textTool('read', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(
+      exec('read', undefined, { file_path: 'a.ts', extract: 'character-for-character copy' }),
+    )
+
+    expect(route.requests).toHaveLength(0)
+    expect(textOf(result.content)).toBe(LONG_BODY)
   })
 })
 

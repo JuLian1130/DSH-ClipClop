@@ -91,7 +91,7 @@ import {
   type ReminderLedger,
 } from './privacy.ts'
 import { composeSummaryPrompt, describeCall, composeRequestPrefix, requestSummary, type ModelCallUsage, type SummaryAction } from './summary.ts'
-import { extractEnabled, extractGoalOf, extractRule, installExtractArg } from './extract.ts'
+import { extractEnabled, extractGoalOf, extractRule, installExtractArg, wantsExactText } from './extract.ts'
 
 export * from './config.ts'
 export * from './debug.ts'
@@ -217,6 +217,12 @@ async function process(
   const settle = (applied: Applied): Processed => ({ ...applied, observation, extract: goal !== undefined })
   const unchanged = (reason: UnmodifiedReason, admission: AdmissionVerdict = 'not-applicable'): Processed =>
     settle({ decision, outcome: { action: 'unmodified', reason }, admission })
+  // 声明逐字原文时按原文透传：摘要器只能改写，给不出逐字保证（exp9 实测 6 条候选里 4 条被改写、模型随即
+  // 又读一次同一文件）。放在候选判定之后，所以低于下限的结果仍记 `not-candidate`。
+  const exactText = (): Processed => {
+    if (!dryRun) notifyFailure(reminders, exec.agent?.session, 'exact-text')
+    return unchanged('exact-text')
+  }
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文；它也不是本次要判断的工具内容。
   if (decision.kind === 'block') return unchanged('not-candidate')
 
@@ -246,6 +252,7 @@ async function process(
     if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
     const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
     if (verdict.kind === 'skip') return unchanged('not-candidate')
+    if (goal !== undefined && wantsExactText(goal)) return exactText()
     // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储、不进 memo。
     if (judgement.action.action === 'keep') return unchanged('kept')
     return settle(await replace(
@@ -258,6 +265,7 @@ async function process(
   if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
   const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
   if (verdict.kind === 'skip') return unchanged('not-candidate')
+  if (goal !== undefined && wantsExactText(goal)) return exactText()
   // 规则摘要关闭（`ruleSummary`）且这次没声明提取目标：候选结果直接透传，这条取值就是该对照实验的计数。
   // 放在候选判定之后：不是候选的结果仍记 `not-candidate`，`rule-summary-off` 才恰好是"本该摘要却没摘"的那批。
   if (goal === undefined && !config.ruleSummary.get()) return unchanged('rule-summary-off')

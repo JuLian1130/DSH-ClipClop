@@ -36,7 +36,32 @@ export const EXTRACT_DESCRIPTION = [
   'What you need the result reduced to, when you want a conclusion, a filter, or an aggregation',
   'rather than the complete output (for example "every line containing ERROR, with its timestamp").',
   'Leave it empty when you need the complete output verbatim. Small results pass through unchanged.',
+  // 反例：实测（exp9）模型会用 `whole file` 这类说法表达"要整份"，而它按契约是**目标**，整份结果因此被缩成
+  // 那两三个词（8 条候选里 7 条被摘要，其中 3 条模型立刻回头又读一次）。空值才是"要整份"。
+  'Writing "whole file", "everything" or "full text" is not how you say that — any other wording counts',
+  'as a goal, and the result is reduced to it.',
 ].join(' ')
+
+/**
+ * 逐字原文的说法（大小写不敏感）。
+ *
+ * 只认**明确针对文本**的词：裸 `exact` 不算——"exact conditions and codes" 要的是精确的**概念**，
+ * 它的摘要是对的（exp9 里就有这条目标）。
+ */
+const EXACT_TEXT = /verbatim|character[- ]for[- ]character|exactly as written|exact (?:text|lines|wording)|逐字|一字不差|原样/i
+
+/**
+ * 目标是不是在要**逐字原文**。
+ *
+ * 摘要器只能改写正文，给不出逐字保证。实测（exp9）：6 条候选级 `read` 的目标写了逐字要求，其中 4 条被摘要
+ * 替换，模型随后又去读了同一个文件。这类目标按失败策略放行原文（`exact-text`），并由会话提醒引导它下次用
+ * `offset/limit` 读那个区间。
+ * @param goal - 主模型写的提取目标。
+ * @returns 要不要按逐字原文处理。
+ */
+export function wantsExactText(goal: string): boolean {
+  return EXACT_TEXT.test(goal)
+}
 
 /** `read` 的工具说明追加段：把"范围读"与"声明提取目标"两条路的边界写清楚。 */
 export const READ_GUIDANCE = [

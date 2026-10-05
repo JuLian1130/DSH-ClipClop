@@ -6,7 +6,8 @@
  * `not-shorter`、`failed` 自 03，`read-back` 自 04，`admission-no` 与「准入结论」字段自 06，`uncertain`、
  * `failed-window` 与 `rejected` 自 07。本票（08）补齐规格列出的另两个字段——`缓存观测`（前缀缓存命中）与
  * `判断器输入 token 数`（准入判断那次请求的输入规模）——并给干跑记录加一个 `dryRun` 标记。票 26 加入
- * `rule-summary-off`（规则摘要关闭且这次没声明提取目标）。0.1.4 起每条记录（含挂载决策记录）带 `pluginVersion`：
+ * `rule-summary-off`（规则摘要关闭且这次没声明提取目标）。票 39 加入 `exact-text`（目标要求逐字原文，
+ * 摘要器给不出逐字保证，按失败策略透传）。0.1.4 起每条记录（含挂载决策记录）带 `pluginVersion`：
  * 日志按追加写、跨版本混在一个文件里，没有这个字段就无法把观测归属到当时在跑的构建。
  *
  * 同一个文件里还有一条**挂载决策记录**（`kind: 'mount'`，见 {@link MountRecord}）：每次装载写在最前面，
@@ -56,6 +57,7 @@ export type UnmodifiedReason =
   | 'uncertain'
   | 'failed'
   | 'failed-window'
+  | 'exact-text'
 
 /**
  * 准入结论：这次结果有没有进准入判断、判断说了什么。`not-applicable` 覆盖所有没进准入阶段的情形
