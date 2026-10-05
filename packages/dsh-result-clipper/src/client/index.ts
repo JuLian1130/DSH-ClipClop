@@ -1,18 +1,22 @@
 /**
- * dsh-result-clipper 的浏览器半：把两项能力开关、摘要准入判断开关、debug 开关与干跑开关注册成「设置 →
- * 内置插件」里的一个页签，并把三个角色（摘要、摘要准入判断、隐私闸门）各自的 route、推理档位与提示词，
- * 以及摘要阈值与 debug 日志路径，注册成包详情页的配置区。
+ * dsh-result-clipper 的浏览器半：把本插件的全部设置注册成包详情页里的一块配置区（`plugins.bundle.config`）——
+ * 三项能力（摘要、摘要准入判断、隐私闸门）的开关与它们各自的 route、推理档位、提示词与阈值，加诊断组的 debug、
+ * 干跑与日志路径。
  *
- * 座位分两处的依据是设计文档「配置面与设置座位」：开关在插件页签，参数在包自己的详情页配置区；两处都经
- * `ctx.configForms.get(ns)` 取得同一个 settings 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口
- * `name`，不是包名）。配置区走 `plugins.bundle.config` 而不是 `plugins.item`：本插件按 profile bundle 装载
+ * **只有一个座位**（设计文档「配置面与设置座位」）：本插件不再往「设置 → 内置插件」注册页签。曾经有过那样一个
+ * 页签，但插件自己的开关就是「设置某项能力」本身——摘要与隐私的开关离开它们要用的 route 按不动，debug 与干跑
+ * 离开日志路径什么也不写；开关与它们要用的设置放在一起才读得懂、才用得起来。两处读数都经
+ * `ctx.configForms.get(ns)` 取自同一个 settings 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口
+ * `name`，不是包名）。
+ *
+ * 配置区走 `plugins.bundle.config` 而不是 `plugins.item`：本插件按 profile bundle 装载
  * （`dsh.bundle.patch` + `dsh.profile.bundles`），插件管理器给它的卡片是包卡片，而包详情页只渲染按包名索引
  * 的 `plugins.bundle.config`，注册到 `plugins.item` 会得到另一张「官方插件」卡片、包详情页仍是空的。
  *
  * 当前值与写回全走 `ctx.configForms`：`getSnapshot()` 读，配置区用 `mutate(ops)` 把一组的改动作为一次原子写入
- * 提交、页签的开关用 `set(field, value)` 立即写；两者在 Host 拒绝时都**resolve `false`**（不是 reject、也不抛），
- * 所以失败态由控件/分组在 await 之后核验返回值置位。注册包在 `whileServed([...])` 里：宿主从未 serve 该命名
- * 空间的部署不显示这两处，否则会出现没有写入目标的死页。
+ * 提交（能力开关是单字段的一次写入）；它在 Host 拒绝时**resolve `false`**（不是 reject、也不抛），所以失败态
+ * 由控件/分组在 await 之后核验返回值置位。注册包在 `whileServed([...])` 里：宿主从未 serve 该命名空间的部署不
+ * 显示它，否则会出现没有写入目标的死页。
  *
  * 产物形状（CJS 闭包工厂）与打包步骤见 `scripts/build-client.mjs`；`import type` 一律只进类型图，产物里
  * 除平台模块外没有别的跨包值依赖。
@@ -24,7 +28,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 // 类型专用：`ctx.locale` 的 Context 合并与文案字典。
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-// 类型专用：`ctx.configForms` 的 Context 合并、`ConfigForm` 类型与 `settings.plugins.tab` 槽位声明。
+// 类型专用：`ctx.configForms` 的 Context 合并与 `ConfigForm` 类型。
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 // 类型专用：`plugins.bundle.config` 槽位声明。
@@ -34,7 +38,6 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { createModelCatalog } from './catalog.ts'
 import { ResultClipperCard, type ResultClipperSettingOp } from './card.tsx'
 import { en, zh, type ResultClipperLocaleKey } from './locales.ts'
-import { ResultClipperTab, type ResultClipperToggle } from './tab.tsx'
 import type { ReasoningEffort } from '../reasoning.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -46,12 +49,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** settings 命名空间 = profile patch 行的 `id`（也是 host 半的入口 `name`）。 */
 export const PREFERENCE_NAMESPACE = 'dsh-result-clipper'
-
-/** 本页签在 `settings.plugins.tab` 里的注册 id。 */
-const TAB_ID = 'result-clipper'
-
-/** 本页签的排序位。 */
-const TAB_ORDER = 30
 
 /**
  * 本插件在 profile 里的包名：`plugins.bundle.config` 是按包名索引的 keyed 槽位，包详情页用
@@ -99,36 +96,13 @@ interface PreferenceSection {
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
 
 /**
- * 注册页签与包详情页配置区。
+ * 注册包详情页配置区。
  * @param ctx - 客户端插件 context；上面 inject 的服务都已就绪。
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, { zh, en }), 'dsh-result-clipper: dictionaries')
-  // 页签名是 thunk：内置插件那一节每次投影都重读它，所以语言切换不必重新注册。
-  const t = ctx.locale.bind(LOCALE_NAMESPACE)
   const form = ctx.configForms.get<PreferenceSection>(PREFERENCE_NAMESPACE)
   const catalog = createModelCatalog(ctx)
-  ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
-    'settings.plugins.tab',
-    () => ctx.slots.register({
-      name: 'settings.plugins.tab',
-      id: TAB_ID,
-      order: TAB_ORDER,
-      label: () => t('tab'),
-      locale: LOCALE_NAMESPACE,
-      inject: () => ({
-        hooks: {
-          summarize: booleanField(form, 'summarize'),
-          privacyGate: booleanField(form, 'privacyGate'),
-          debug: booleanField(form, 'debug'),
-          dryRun: booleanField(form, 'dryRun'),
-          // 干跑生效与否要读日志路径：两者缺一时页签上当场给出提示。
-          debugPath: stringField(form, 'debugPath'),
-        },
-        setToggle: (field: ResultClipperToggle, value: boolean) => form.set(field, value),
-      }),
-    }, ResultClipperTab),
-  )), 'dsh-result-clipper: built-in plugins tab')
   ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
     'plugins.bundle.config',
     () => ctx.slots.register({
@@ -160,6 +134,9 @@ export function apply(ctx: Context): void {
           summaryPrompt: stringField(form, 'summaryPrompt'),
           admissionPrompt: stringField(form, 'admissionPrompt'),
           privacyPrompt: stringField(form, 'privacyPrompt'),
+          // 诊断组的两个开关与它们的路径同组：干跑生不生效要看已保存的 debug 与路径，所以三个都在这里注入。
+          debug: booleanField(form, 'debug'),
+          dryRun: booleanField(form, 'dryRun'),
           debugPath: stringField(form, 'debugPath'),
           modelCatalog: catalog,
         },

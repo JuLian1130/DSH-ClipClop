@@ -1,7 +1,13 @@
 /**
- * `plugins.bundle.config` 的包详情页配置区：摘要、摘要准入判断、隐私闸门三个角色各自成一组，每组把该角色的
- * route（provider 与 model）、推理档位与提示词规则正文放在一起；摘要组另带两个阈值，最后是诊断组的 debug
- * 日志路径。三个模型组之间用一条横线隔开。
+ * `plugins.bundle.config` 的包详情页配置区：**本插件唯一的设置界面**。摘要、摘要准入判断、隐私闸门三个角色
+ * 各自成一组，每组把该角色的 route（provider 与 model）、推理档位与提示词规则正文放在一起；摘要组另带两个
+ * 阈值；最后是诊断组——debug 与干跑两个开关加它们的日志路径。组之间用一条横线隔开。
+ *
+ * **三项能力的开关都紧挨各自那一组、且一律保存即生效**（`applySwitch`）：摘要开关在摘要组之上、准入启用位在
+ * 准入组之上、隐私闸门开关在隐私组之上；三者关掉时，它们下面那一整组（含该组的保存 / 恢复默认）都不显示。
+ * 走即时写入而不是分组草稿是必须的——它们折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次
+ * 存不下去的改动。其余开关（自动摘要大内容、web_fetch 也过隐私闸门、隐私确认位、debug 与干跑）留在所属组的
+ * 草稿里，由该组的「保存」一次写回。
  *
  * **每组是「草稿 + 保存」**：控件只改本地草稿，不点该组的「保存」什么都不落盘；「保存」把该组所有改动作为
  * **一次原子写入**提交（`configForms.mutate` 的多个 op 共用一个 revision 栅栏与一次 Host 校验），任一条被
@@ -10,7 +16,11 @@
  * model、隐私确认位、失败策略与 debug 路径回到**上一次保存的值**（即丢掉未保存的改动）。草稿在 Host 侧取值
  * 变化时（保存被接受，或别处写入）整体重新播种。
  *
- * 座位约定见设计文档「配置面与设置座位」——开关在插件页签、参数在包自己的详情页。
+ * 座位约定见设计文档「配置面与设置座位」——**只有一个座位**：本页。插件自己的开关就是「设置某项能力」本身，
+ * 所以它们不做成入口页上的一排开关，而是与它们要用的 route、提示词与阈值放在一起。
+ *
+ * 从属关系用缩排表示（{@link NEST_ONE} / {@link NEST_TWO}，每级 32px）：摘要组比摘要开关退一级；隐私组比隐私
+ * 开关退一级；准入启用位与摘要组同层，它下面那一组再退一级。
  *
  * **端点与凭据不在这里**：DSH 的请求形状只带 `provider` 与 `model`，endpoint、协议与 API key 归 LLM 适配器
  * 按 route 持有（`GenerateOptions` 没有 baseURL / apiKey 字段）。所以卡片顶部与三个 provider 行都把用户指到
@@ -56,6 +66,8 @@ export type ResultClipperCardField =
   | 'summaryPrompt'
   | 'admissionPrompt'
   | 'privacyPrompt'
+  | 'debug'
+  | 'dryRun'
   | 'debugPath'
 
 /**
@@ -113,6 +125,10 @@ export interface ResultClipperCardInjected {
     admissionPrompt: ObservableSnapshot<string>
     /** 隐私提示词的规则正文覆盖；空串表示用内置默认。 */
     privacyPrompt: ObservableSnapshot<string>
+    /** debug 记录开关的当前值。 */
+    debug: ObservableSnapshot<boolean>
+    /** 干跑开关的当前值。 */
+    dryRun: ObservableSnapshot<boolean>
     /** debug JSONL 路径；未配置时为空串。 */
     debugPath: ObservableSnapshot<string>
     /** DSH 当前可路由的 provider 分组与模型；provider 与 model 的候选来自它。 */
@@ -168,11 +184,11 @@ const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '12px 0 0' } as const
 /**
  * 缩排的两级：用缩进表示从属关系（不是嵌套的子页面，只是视觉层级）。
  *
- * 一级＝「摘要模型」组从属于「工具结果摘要」开关；二级＝「启用摘要准入判断」与它下面的准入组从属于摘要模型组。
- * 每级 16px，与分组内的字号（13–14px）大致一个字的宽度。
+ * 一级＝「摘要模型」组（以及「隐私闸门模型」组）从属于它上面那个能力开关；二级＝「启用摘要准入判断」与它下面
+ * 的准入组从属于摘要模型组。每级 32px：**缩一格（16px）在真机上几乎看不出来**，两格才读得出层级。
  */
-const NEST_ONE = { marginLeft: 16 } as const
-const NEST_TWO = { marginLeft: 32 } as const
+const NEST_ONE = { marginLeft: 32 } as const
+const NEST_TWO = { marginLeft: 64 } as const
 
 /** 隐私 route 未确认为本地时的常驻警告排版。 */
 const WARNING_STYLE = {
@@ -227,6 +243,17 @@ const TEXTAREA_STYLE = {
   padding: '6px 10px',
   minHeight: 80,
   resize: 'vertical',
+} as const
+
+/**
+ * 不会被用到的那份正文：换第三档灰的字色与「不可编辑」指针。**只改字色不改底色**——浅色主题里
+ * `--dsw-alias-bg-layer-2` 与 `--dsw-alias-bg-layer-1` 是同一个值（都取 `neutral-bluish-00`），换底色在浅色下
+ * 根本看不出来，灰字才是两种主题都读得出的「这段现在用不上」（浏览器默认的 disabled 样式只管一小部分控件）。
+ */
+const DISABLED_TEXTAREA_STYLE = {
+  ...TEXTAREA_STYLE,
+  color: 'var(--dsw-alias-label-tertiary)',
+  cursor: 'not-allowed',
 } as const
 
 /** 草稿里一个字段的值：数字在草稿里是字符串，输入框才能原样编辑（含临时清空）。 */
@@ -598,14 +625,14 @@ function CheckRow(props: {
  * 提示词规则正文：框里是**当前生效正文的草稿**（有覆盖时从覆盖播种，否则从内置正文），编辑只改草稿；写回
  * 由所在组的「保存」完成，草稿等于内置正文时保存走 `unset`（清掉覆盖）。
  * @param props - 控件 id、行文案、提示、草稿值、禁用位与改动回调。
- * @returns 一行文本域。
+ * @returns 一行文本域；{@link DISABLED_TEXTAREA_STYLE} 给出时框里是灰字，一眼看得出这段现在用不上。
  */
 function PromptRow(props: {
   readonly id: string
   readonly label: string
   readonly hint: string
   readonly value: string
-  /** 这段正文当前不会被用到时给出（控件只读，草稿原样保留）。 */
+  /** 这段正文当前不会被用到时给出（控件只读、灰字，草稿原样保留）。 */
   readonly disabled?: boolean
   readonly onChange: (next: string) => void
 }) {
@@ -613,7 +640,7 @@ function PromptRow(props: {
     <label htmlFor={props.id} style={TITLE_STYLE}>{props.label}</label>
     <textarea
       id={props.id}
-      style={TEXTAREA_STYLE}
+      style={props.disabled === true ? DISABLED_TEXTAREA_STYLE : TEXTAREA_STYLE}
       value={props.value}
       disabled={props.disabled}
       onChange={(event) => { props.onChange(event.target.value) }}
@@ -659,8 +686,17 @@ const PRIVACY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'privacyPrompt', kind: 'prompt', fallback: DEFAULT_PRIVACY_RULE },
 ]
 
-/** 诊断组的字段：debug 日志路径。 */
-const DIAGNOSTIC_FIELDS: readonly GroupFieldSpec[] = [{ field: 'debugPath', kind: 'text' }]
+/**
+ * 诊断组的字段：debug 与干跑两个开关，加它们的日志路径。
+ *
+ * 这两个开关留在草稿里（不像三个能力开关那样即时写入）：它们不折叠任何东西，改动与该组的路径一样点「保存」
+ * 一次写回。判断干跑生不生效的那句提示读的是**已保存**的取值——它说的是"现在有没有在干跑"，不是草稿。
+ */
+const DIAGNOSTIC_FIELDS: readonly GroupFieldSpec[] = [
+  { field: 'debug', kind: 'boolean' },
+  { field: 'dryRun', kind: 'boolean' },
+  { field: 'debugPath', kind: 'text' },
+]
 
 /** 一条 route 的两个字段名；`confirm` 只有隐私组有——「已确认为本地」是对这条 route 的声明。 */
 interface RouteFields {
@@ -703,36 +739,30 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const summaryPrompt = props.useSummaryPrompt(value => value)
   const admissionPrompt = props.useAdmissionPrompt(value => value)
   const privacyPrompt = props.usePrivacyPrompt(value => value)
+  const debug = props.useDebug(value => value)
+  const dryRun = props.useDryRun(value => value)
   const debugPath = props.useDebugPath(value => value)
-  const [masterFailed, setMasterFailed] = useState(false)
-  const [admissionFailed, setAdmissionFailed] = useState(false)
+  // 能力开关写入失败时记下是哪一个，提示就出现在那一行下面。
+  const [failedSwitch, setFailedSwitch] = useState<'summarize' | 'admissionJudge' | 'privacyGate'>()
   const catalog = props.useModelCatalog(value => value)
   // 卡片挂载时重读一次目录：用户往往是先去「设置 → 模型」建 route、再回来选它。
   useEffect(() => { props.refreshModelCatalog() }, [])
 
   /**
-   * 写回总开关。它是**保存即生效**的一行（与页签里那一个开关同一个键），不走分组草稿——因为两组会在它关闭时
-   * 一起收起，草稿的「保存」按钮那时也不在页面上。
+   * 写回一个能力开关（摘要 / 准入启用位 / 隐私闸门）。三者都是**保存即生效**的一行，不走分组草稿——每个开关
+   * 折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次存不下去的改动。
+   * @param field - 要写的开关字段。
    * @param next - 新的开关取值。
    */
-  const applySummarize = (next: boolean): void => {
-    setMasterFailed(false)
-    void props.saveFields([{ op: 'set', path: ['summarize'], value: next }])
-      .then((accepted) => { if (!accepted) setMasterFailed(true) })
-      .catch(() => { setMasterFailed(true) })
+  const applySwitch = (field: 'summarize' | 'admissionJudge' | 'privacyGate', next: boolean): void => {
+    setFailedSwitch(undefined)
+    void props.saveFields([{ op: 'set', path: [field], value: next }])
+      .then((accepted) => { if (!accepted) setFailedSwitch(field) })
+      .catch(() => { setFailedSwitch(field) })
   }
 
-  /**
-   * 写回准入判断的启用位。同样**保存即生效**：它折叠的是承载「保存」按钮的那一组，走草稿就会把取消勾选变成
-   * 存不下去的改动。
-   * @param next - 新的开关取值。
-   */
-  const applyAdmissionJudge = (next: boolean): void => {
-    setAdmissionFailed(false)
-    void props.saveFields([{ op: 'set', path: ['admissionJudge'], value: next }])
-      .then((accepted) => { if (!accepted) setAdmissionFailed(true) })
-      .catch(() => { setAdmissionFailed(true) })
-  }
+  /** 干跑没在跑：三个取值都读已保存的那份（这句提示说的是现在，而不是草稿）。 */
+  const dryRunInactive = dryRun && (!debug || debugPath === '')
 
   const summary = useGroupDraft(SUMMARY_FIELDS, {
     summarize, ruleSummary, routeProvider, routeModel, summaryReasoningEffort, minInlineTokens,
@@ -749,7 +779,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     failurePolicy,
     privacyPrompt: privacyPrompt === '' ? DEFAULT_PRIVACY_RULE : privacyPrompt,
   }, props.saveFields)
-  const diagnostics = useGroupDraft(DIAGNOSTIC_FIELDS, { debugPath }, props.saveFields)
+  const diagnostics = useGroupDraft(DIAGNOSTIC_FIELDS, { debug, dryRun, debugPath }, props.saveFields)
 
   const failedHint = props.t('failedHint')
   const providerOptions = catalog.map(group => ({ value: group.id, label: group.name }))
@@ -850,13 +880,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     {privacyGate && !privacyConfirmedLocal
       && <div role="alert" style={WARNING_STYLE}>{props.t('routeUnconfirmedWarning')}</div>}
 
-    {/* 总开关在两组之上：与页签里第一个开关是同一个键、保存即生效（不走分组草稿）；它关掉时下面「摘要模型」与
-        「摘要准入判断模型」两组连同各自的保存 / 恢复默认一起收起——准入判断只在摘要开着时才有意义。 */}
+    {/* 能力开关在各自那一组之上、保存即生效（不走分组草稿）；它关掉时下面「摘要模型」与「摘要准入判断模型」
+        两组连同各自的保存 / 恢复默认一起收起——准入判断只在摘要开着时才有意义。 */}
     <CheckRow id="plugin-config-result-clipper-summarize" label={props.t('summarize')}
       hint={props.t('summarizeHint')}
       checked={summarize}
-      onChange={next => { applySummarize(next) }} />
-    {masterFailed && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
+      onChange={next => { applySwitch('summarize', next) }} />
+    {failedSwitch === 'summarize' && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
     {summarize === false && <div style={HINT_STYLE}>{props.t('summarizeOffHint')}</div>}
 
     <hr style={DIVIDER_STYLE} />
@@ -915,8 +945,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       <CheckRow id="plugin-config-result-clipper-admission-enabled" label={props.t('admissionJudge')}
         hint={props.t('admissionJudgeHint')}
         checked={admissionJudge}
-        onChange={next => { applyAdmissionJudge(next) }} />
-      {admissionFailed && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
+        onChange={next => { applySwitch('admissionJudge', next) }} />
+      {failedSwitch === 'admissionJudge' && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
     </div>
     {admissionJudge === true && <div style={NEST_TWO}>
     <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
@@ -953,6 +983,15 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
     <hr style={DIVIDER_STYLE} />
 
+    {/* 隐私闸门的开关就是原来那个键、同样保存即生效：不勾时它下面这一整组（含该组自己的保存 / 恢复默认）不
+        显示，隐私这条路也就不参与（摘要那条路不受影响）。 */}
+    <CheckRow id="plugin-config-result-clipper-privacy-enabled" label={props.t('privacyGate')}
+      hint={props.t('privacyGateHint')}
+      checked={privacyGate}
+      onChange={next => { applySwitch('privacyGate', next) }} />
+    {failedSwitch === 'privacyGate' && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
+
+    {privacyGate === true && <div style={NEST_ONE}>
     <Group title={props.t('privacyGroup')} description={props.t('privacyGroupHint')} {...actions(privacy)}>
       <RouteLine
         provider={{
@@ -996,10 +1035,20 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         hint={props.t('promptHint')} value={privacy.value('privacyPrompt') as string}
         onChange={next => { privacy.change('privacyPrompt', next) }} />
     </Group>
+    </div>}
 
     <hr style={DIVIDER_STYLE} />
 
     <Group title={props.t('diagnosticsGroup')} description={props.t('diagnosticsGroupHint')} {...actions(diagnostics)}>
+      <CheckRow id="plugin-config-result-clipper-debug" label={props.t('debug')}
+        hint={props.t('debugHint')}
+        checked={diagnostics.value('debug') as boolean}
+        onChange={next => { diagnostics.change('debug', next) }} />
+      <CheckRow id="plugin-config-result-clipper-dry-run" label={props.t('dryRun')}
+        hint={props.t('dryRunHint')}
+        checked={diagnostics.value('dryRun') as boolean}
+        onChange={next => { diagnostics.change('dryRun', next) }} />
+      {dryRunInactive && <div role="alert" style={HINT_STYLE}>{props.t('dryRunInactiveHint')}</div>}
       <TextRow id="plugin-config-result-clipper-debug-path" label={props.t('debugPath')}
         hint={props.t('debugPathHint')} value={diagnostics.value('debugPath') as string}
         onChange={next => { diagnostics.change('debugPath', next) }} />

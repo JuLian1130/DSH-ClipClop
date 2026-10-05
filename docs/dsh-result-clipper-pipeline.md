@@ -25,9 +25,9 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | --- | --- |
 | 目标工具 | `bash`、`pwsh`、`read`、`web_fetch`；其余工具的结果不进摘要候选（隐私开着时仍过闸门） |
 | 候选 | 目标工具 + 结果全是文本块 + 估算大小 ≥ `minInlineTokens`；`bash`/`pwsh`/`web_fetch` 另需 < `maxSummarizeTokens`，`read` 无上限 |
-| 摘要总开关 | `summarize`（页签第一个开关）。开：给目标工具挂 `extract` 参数，摘要提示词路才工作 |
+| 摘要总开关 | `summarize`（配置区顶端第一个开关）。开：给目标工具挂 `extract` 参数，摘要提示词路才工作 |
 | 规则摘要开关 | `ruleSummary`（摘要组第一个勾选，**默认关**）。关：没声明 `extract` 的候选结果直接透传 |
-| 隐私闸门 | `privacyGate`（+ `webFetchPrivacyGate`）。判定与摘要是**同一次请求**的两个字段 |
+| 隐私闸门 | `privacyGate`（隐私组之上的开关，+ `webFetchPrivacyGate`）。判定与摘要是**同一次请求**的两个字段 |
 | 提取目标 | 主模型在调用参数里写的 `extract`；只在摘要总开关开着时被认 |
 | 入口读回 | `read` 读的路径命中本会话里插件自己写出的 spill `locator` |
 | memo | 摘要提示词路的复用（键 = 工具名 + 正文 hash）；只在隐私关闭时参与 |

@@ -2,7 +2,6 @@
 
 /** 本命名空间的文案键。 */
 export type ResultClipperLocaleKey =
-  | 'tab'
   | 'summarize'
   | 'summarizeHint'
   | 'ruleSummary'
@@ -72,7 +71,6 @@ export type ResultClipperLocaleKey =
 
 /** 中文文案。 */
 export const zh: Record<ResultClipperLocaleKey, string> = {
-  tab: '工具结果裁剪',
   summarize: '工具结果摘要',
   summarizeHint: '允许主模型自主请求摘要（摘要 token 消耗计入摘要模型）。改动对之后新建的会话生效。',
   summarizeOffHint: '摘要关着：主模型不会看到「请求摘要」这项能力，这一组与准入判断的设置随之收起。隐私闸门若开着，仍会逐条判断并用它给出的摘要替换正文。',
@@ -81,7 +79,7 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   admissionJudge: '启用摘要准入判断',
   admissionJudgeHint: '不勾选（默认）就不做这一步：候选结果直接去摘要。勾上才先问一次「值不值得摘要」，不值得的就不再产生摘要请求、省下这部分费用；走哪条 route、用哪份提示词在下面设置，改完要点那一组的「保存」。勾选与否当场生效。',
   privacyGate: '隐私闸门',
-  privacyGateHint: '开启后每个标准工具结果先经所选模型判断；默认关闭。',
+  privacyGateHint: '开启后每个标准工具结果先经所选模型判断；默认关闭，关着时它下面这组设置不显示。',
   debug: 'debug 记录',
   debugHint: '开启后向下面的日志路径追加 metadata 记录；关闭时不写盘。',
   dryRun: '干跑',
@@ -143,7 +141,6 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
 
 /** 英文文案。 */
 export const en: Record<ResultClipperLocaleKey, string> = {
-  tab: 'Result clipper',
   summarize: 'Summarize tool results',
   summarizeHint: 'Lets the main model ask for a summary by itself (the summary tokens are billed to the summary model). The change applies to sessions created afterwards.',
   summarizeOffHint: 'Summarization is off: the main model does not get the option to ask for a summary, and this group and the admission settings fold away. A privacy gate that is on still judges every result and replaces a safe one with its summary.',
@@ -152,7 +149,7 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   admissionJudge: 'Enable the admission judge',
   admissionJudgeHint: 'Unchecked (the default) skips this step: results go straight to summarization. Tick it to ask “is this worth summarizing?” first, so results that are not never cost a summary call; the route and prompt for that question are set below and need that group\'s Save. Ticking itself takes effect at once.',
   privacyGate: 'Privacy gate',
-  privacyGateHint: 'Judges every standard tool result with the selected model before it reaches the model; off by default.',
+  privacyGateHint: 'Judges every standard tool result with the selected model before it reaches the model; off by default, and while it is off the settings below stay hidden.',
   debug: 'Debug records',
   debugHint: 'Appends metadata records to the log path below; nothing is written while off.',
   dryRun: 'Dry run',

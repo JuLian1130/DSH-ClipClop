@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 /**
- * 票 02 第 2 条：设置页里的两个开关（以及 debug 开关与路径）与保存即生效。
+ * 票 02 第 2 条 / 票 28：设置界面只有一处座位——包详情页的配置区。
  *
- * 观察面分两层：注册层断言两处座位与它们的 id / 页签名 / 包名键（`settings.plugins.tab` 一个页签放开关，
- * `plugins.bundle.config` 以包名为键放参数）；控件层把注册面注入的业务面按渲染机的形状绑定到组件上，断言点了
- * 开关就写对应字段、Host 拒绝时出现 `role="alert"`、路径输入失焦即写。
+ * 观察面分两层：注册层断言只有 `plugins.bundle.config` 一处注册（key 是包名），控件层把注册面注入的业务面按
+ * 渲染机的形状绑定到组件上，断言能力开关点了就写对应字段、Host 拒绝时出现 `role="alert"`、分组里的字段要按
+ * 该组的「保存」才写回。
  *
- * 注册 id、页签名与字段名都是判据的一部分：`{ id: 'result-clipper', locale }` 决定页签出现在哪里，
- * `set('summarize', true)` 决定写回的是哪个 settings 键。
+ * 注册键与字段名都是判据的一部分：`key: '@dsh-clipclop/dsh-result-clipper'` 决定配置区落在哪个包的详情页，
+ * `{ op: 'set', path: ['summarize'] }` 决定写回的是哪个 settings 键。
  *
  * @module
  */
@@ -19,7 +19,6 @@ import { useSyncExternalStore } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
-import type { ResultClipperTabInjected, ResultClipperTabProps } from '../src/client/tab.tsx'
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
 import { en } from '../src/client/locales.ts'
 import { mountClient } from './support/client.ts'
@@ -47,22 +46,61 @@ function boundHooks(hooks: Record<string, ObservableSnapshot<unknown>>): Record<
 }
 
 /**
- * 取某一行文案对应的那个开关：把「行文案」与「该行写哪个字段」绑在一起。
+ * 按配置区的形状渲染一次：装配夹具、绑定注入面、渲染组件。
  *
- * 按开关自己的**无障碍名**（`Switch` 把行文案放进 `aria-label`）取，而不是按整行文本的包含关系：行提示里会提到
- * 别的开关名（摘要那行现在就说"隐私闸门不受它影响"），包含匹配会点到前面那一行。取到之后仍回头核对它确实在
- * 带这个文案的那一行里，所以「行文案与控件成对」这条判据没有丢。
- * @param container - 渲染出来的页面。
- * @param label - 该行的标题文案。
- * @returns 该行里的开关元素。
+ * **摘要与隐私两个能力开关默认关着**，它们关着的组不显示；这一层大多要看展开后的控件，所以默认把两个都打开，
+ * 用例需要收起的状态时显式覆盖。
+ * @param initial - 渲染前先写进 settings 替身的取值（已存值、常驻警告这类静态状态的用例要用它）。
+ * @param catalog - 模型目录替身；不给就用夹具的默认目录。
+ * @returns 夹具、容器与注入面。
  */
-function rowSwitch(container: HTMLElement, label: string): Element {
-  const control = container.querySelector(`[role="switch"][aria-label="${label}"]`)
-  if (control === null) throw new Error(`fixture: no switch row labelled ${label}`)
-  if (control.closest('section')?.textContent?.includes(label) !== true) {
-    throw new Error(`fixture: the switch labelled ${label} is not inside a row carrying that label`)
-  }
-  return control
+async function renderCard(
+  initial: Partial<StubSection> = {},
+  catalog?: readonly StubCatalogProvider[],
+): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
+  const fixture = await mounted(catalog)
+  fixture.form.value = { ...fixture.form.value, summarize: true, privacyGate: true, ...initial }
+  const entry = only(fixture, 'plugins.bundle.config')
+  const face = entry.options.inject!() as ResultClipperCardInjected
+  const props = {
+    view: 'page',
+    t: fixture.t,
+    ...boundHooks(face.hooks),
+    saveFields: face.saveFields,
+    refreshModelCatalog: face.refreshModelCatalog,
+  } as unknown as ResultClipperCardProps
+  const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
+  const { container } = render(<CardComponent {...props} />)
+  return { fixture, container, face }
+}
+
+/** 一次点击后等异步写入结算并让重渲染落定。 */
+const settle = (): Promise<void> => act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
+
+/**
+ * 标题所在的那一组：分组标题的父元素就是这一组的容器。
+ * @param container - 渲染出来的页面。
+ * @param title - 分组标题文案。
+ * @returns 该分组的元素。
+ */
+function groupOf(container: HTMLElement, title: string): Element {
+  const heading = [...container.querySelectorAll('h4')].find(node => node.textContent === title)
+  if (heading === undefined) throw new Error(`fixture: no group titled ${title}`)
+  return heading.parentElement!
+}
+
+/**
+ * 某组底部的「保存」或「恢复默认」按钮。
+ * @param container - 渲染出来的页面。
+ * @param title - 分组标题文案。
+ * @param label - 按钮文案。
+ * @returns 该组里的那个按钮。
+ */
+function groupButton(container: HTMLElement, title: string, label: string): HTMLButtonElement {
+  const button = [...groupOf(container, title).querySelectorAll('button')]
+    .find(candidate => candidate.textContent === label)
+  if (button === undefined) throw new Error(`fixture: no button labelled ${label} in group ${title}`)
+  return button
 }
 
 /** 装一份夹具并登记收场。 */
@@ -79,184 +117,119 @@ function only(fixture: ClientFixture, slot: string) {
   return entries[0]!
 }
 
-describe('票 02 第 2 条：两处座位注册在设置页里', () => {
-  it('插件页签注册一个开关页，id 与页签名（随语言切换）都是写死的', async () => {
-    const fixture = await mounted()
-    const entry = only(fixture, 'settings.plugins.tab')
-    expect(entry.options.id).toBe('result-clipper')
-    expect(entry.options.locale).toBe('resultClipper')
-    const label = entry.options.label as () => string
-    expect(label()).toBe('工具结果裁剪')
-    fixture.setLocale('en')
-    expect(label()).toBe('Result clipper')
-  })
-
-  it('包详情页配置区以包名为键注册一个参数页，与 profile 里的包名逐字相同', async () => {
+describe('票 02 第 2 条 / 票 28：设置界面只有一处座位', () => {
+  it('配置区以包名为键注册，与 profile 里的包名逐字相同', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'plugins.bundle.config')
     expect(entry.options.key).toBe('@dsh-clipclop/dsh-result-clipper')
   })
+
+  it('不再往「设置 → 内置插件」注册页签：本插件只有一个座位', async () => {
+    const fixture = await mounted()
+    expect(fixture.entries('settings.plugins.tab')).toEqual([])
+  })
 })
 
-describe('票 02 第 2 条：两个开关可分别开关，保存即生效', () => {
-  it('页面上有摘要、隐私闸门、debug、干跑四个开关，初始都读 host 的默认值（关闭）', async () => {
-    const fixture = await mounted()
-    const entry = only(fixture, 'settings.plugins.tab')
-    const face = entry.options.inject!() as ResultClipperTabInjected
-    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
-    const { container } = render(<TabComponent {...props} />)
-
-    const switches = [...container.querySelectorAll('[role="switch"]')]
-    expect(switches).toHaveLength(4)
-    expect(switches.map(control => control.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'false'])
-    expect(container.textContent).toContain('工具结果摘要')
-    expect(container.textContent).toContain('隐私闸门')
-    expect(container.textContent).toContain('debug 记录')
-    expect(container.textContent).toContain('干跑')
-    // 四个开关各自都在**自己那一行**里，行文案与控件成对出现。
-    expect(rowSwitch(container, '工具结果摘要')).not.toBeNull()
-    expect(rowSwitch(container, '隐私闸门')).not.toBeNull()
-    expect(rowSwitch(container, 'debug 记录')).not.toBeNull()
-    expect(rowSwitch(container, '干跑')).not.toBeNull()
+describe('票 02 第 2 条 / 票 28：能力开关保存即生效，诊断组的开关随该组保存', () => {
+  it('摘要开关默认不勾；点一下当场写回 summarize=true，不经过任何「保存」', async () => {
+    const { fixture, container } = await renderCard({ summarize: false })
+    const toggle = container.querySelector('#plugin-config-result-clipper-summarize input') as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+    await fireEvent.click(toggle)
+    await settle()
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['summarize'], value: true }]])
+    expect(fixture.form.value.summarize).toBe(true)
   })
 
-  it('点摘要开关写 summarize=true，点隐私开关写 privacyGate=true（各写各的字段）', async () => {
-    const fixture = await mounted()
-    const entry = only(fixture, 'settings.plugins.tab')
-    const face = entry.options.inject!() as ResultClipperTabInjected
-    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
-    const { container } = render(<TabComponent {...props} />)
+  it('隐私闸门开关默认不勾、就在隐私组之上：勾上当场写回并展开那一组，取消勾选再收起', async () => {
+    const { fixture, container } = await renderCard({ privacyGate: false, privacyConfirmedLocal: true })
+    const toggle = (): HTMLInputElement =>
+      container.querySelector('#plugin-config-result-clipper-privacy-enabled input') as HTMLInputElement
+    // 关着时整组（标题、route、确认位、失败策略、提示词与它的保存 / 恢复默认）都不在 DOM 上。
+    expect(toggle().checked).toBe(false)
+    expect(container.querySelector('#plugin-config-result-clipper-privacy-provider')).toBeNull()
+    expect([...container.querySelectorAll('h4')].map(node => node.textContent)).not.toContain(fixture.t('privacyGroup'))
+    // 开关不在那一组里：否则取消勾选会把承载「保存」按钮的那一组连开关一起收起。
+    expect(container.querySelector('#plugin-config-result-clipper-privacy-enabled')).not.toBeNull()
 
-    // 按**行文案**点，而不是按 DOM 次序：把两行文案对调、或把某行接到别的字段，都会在这里变红。
-    await fireEvent.click(rowSwitch(container, '工具结果摘要'))
-    await fireEvent.click(rowSwitch(container, '隐私闸门'))
-    expect(fixture.form.writes).toEqual([
-      { field: 'summarize', value: true },
-      { field: 'privacyGate', value: true },
+    await fireEvent.click(toggle())
+    await settle()
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['privacyGate'], value: true }]])
+    expect(fixture.form.value.privacyGate).toBe(true)
+    expect(container.querySelector('#plugin-config-result-clipper-privacy-provider')).not.toBeNull()
+
+    await fireEvent.click(toggle())
+    await settle()
+    expect(container.querySelector('#plugin-config-result-clipper-privacy-provider')).toBeNull()
+  })
+
+  it('摘要与隐私两个开关各写各的字段，读回也落在各自字段上', async () => {
+    const { fixture, container, face } = await renderCard({ summarize: false, privacyGate: false })
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summarize input')!)
+    await settle()
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-privacy-enabled input')!)
+    await settle()
+    expect(fixture.form.mutations).toEqual([
+      [{ op: 'set', path: ['summarize'], value: true }],
+      [{ op: 'set', path: ['privacyGate'], value: true }],
     ])
-    // 写入落在同一个 settings section 上，下一次读快照就是新值（不需要重启）。
-    expect(fixture.form.value).toMatchObject({ summarize: true, privacyGate: true, debug: false })
-    // 读回绑定也要落到各自的字段上：只断言写入数组的话，把某个 hook 映射到别的字段仍会绿。
+    // 读回绑定也要落到各自的字段上：只断言写入的话，把某个 hook 映射到别的字段仍会绿。
     expect(face.hooks.summarize.getSnapshot()).toBe(true)
     expect(face.hooks.privacyGate.getSnapshot()).toBe(true)
     expect(face.hooks.debug.getSnapshot()).toBe(false)
   })
 
-  it('读数订阅在写入后收到通知（页面读的就是被写的那几个字段）', async () => {
-    const fixture = await mounted()
-    const entry = only(fixture, 'settings.plugins.tab')
-    const face = entry.options.inject!() as ResultClipperTabInjected
-    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
-    const { container } = render(<TabComponent {...props} />)
-
-    const notified: boolean[] = []
-    const off = face.hooks.summarize.subscribe(() => { notified.push(face.hooks.summarize.getSnapshot()) })
-    await fireEvent.click([...container.querySelectorAll('[role="switch"]')][0]!)
-    off()
-    expect(notified).toEqual([true])
-  })
-
-  it('debug 开关写 debug=true', async () => {
-    const fixture = await mounted()
-    const entry = only(fixture, 'settings.plugins.tab')
-    const face = entry.options.inject!() as ResultClipperTabInjected
-    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
-    const { container } = render(<TabComponent {...props} />)
-
-    await fireEvent.click(rowSwitch(container, 'debug 记录'))
-    expect(fixture.form.writes).toEqual([{ field: 'debug', value: true }])
-    expect(face.hooks.debug.getSnapshot()).toBe(true)
-  })
-
-  it('这一页只剩四个开关：摘要准入判断的启用跟着它的 route 搬进了包详情页的准入组', async () => {
-    const fixture = await mounted()
-    const entry = only(fixture, 'settings.plugins.tab')
-    const face = entry.options.inject!() as ResultClipperTabInjected
-    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
-    const { container } = render(<TabComponent {...props} />)
-
-    expect([...container.querySelectorAll('[role="switch"]')]).toHaveLength(4)
-    expect(container.textContent).not.toContain(fixture.t('admissionJudge'))
-    // 业务面也不再读它：一个字段只有一处写入路径，不留下两套语义（这边立即写、那边要保存）。
-    expect('admissionJudge' in face.hooks).toBe(false)
-  })
-
-  it('Host 业务拒绝（resolve false）时该行出现 role="alert"', async () => {
-    const fixture = await mounted()
+  it('Host 业务拒绝（resolve false）时该开关下面出现 role="alert"，快照仍是旧值', async () => {
+    // 两个开关都关着：页面上不该有别的 alert（隐私开着又没确认本地时顶部就有一条常驻警告）。
+    const { fixture, container } = await renderCard({ summarize: false, privacyGate: false })
     fixture.form.accepted = false
-    const entry = only(fixture, 'settings.plugins.tab')
-    const face = entry.options.inject!() as ResultClipperTabInjected
-    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
-    const { container } = render(<TabComponent {...props} />)
-
-    await fireEvent.click([...container.querySelectorAll('[role="switch"]')][0]!)
-    await Promise.resolve()
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summarize input')!)
+    await settle()
     expect(container.querySelector('[role="alert"]')).not.toBeNull()
     // 被拒绝时不装作已生效：快照仍是旧值。
     expect(fixture.form.value.summarize).toBe(false)
   })
+
+  it('诊断组的 debug 与干跑是草稿：点开关一个字段都不落盘，点该组「保存」才一次写回', async () => {
+    const { fixture, container } = await renderCard()
+    const debug = container.querySelector('#plugin-config-result-clipper-debug input') as HTMLInputElement
+    const dryRun = container.querySelector('#plugin-config-result-clipper-dry-run input') as HTMLInputElement
+    expect(debug.checked).toBe(false)
+    expect(dryRun.checked).toBe(false)
+
+    await fireEvent.click(debug)
+    await fireEvent.click(dryRun)
+    expect(fixture.form.mutations).toEqual([])
+    expect(debug.checked).toBe(true)
+
+    await fireEvent.click(groupButton(container, '诊断', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['debug'], value: true },
+      { op: 'set', path: ['dryRun'], value: true },
+    ]])
+    expect(fixture.form.value).toMatchObject({ debug: true, dryRun: true })
+  })
+
+  it('干跑没在跑时给出提示：读的是已保存的 debug 与日志路径，两者都就位后消失', async () => {
+    const noDebug = await renderCard({ dryRun: true, debug: false, debugPath: '/tmp/dry.jsonl' })
+    expect(noDebug.container.textContent).toContain(noDebug.fixture.t('dryRunInactiveHint'))
+
+    const noPath = await renderCard({ dryRun: true, debug: true, debugPath: '' })
+    expect(noPath.container.textContent).toContain(noPath.fixture.t('dryRunInactiveHint'))
+
+    const ready = await renderCard({ dryRun: true, debug: true, debugPath: '/tmp/dry.jsonl' })
+    expect(ready.container.textContent).not.toContain(ready.fixture.t('dryRunInactiveHint'))
+
+    // 阳性对照：干跑没开时不该出现这句提示（否则上一条断的就只是「这行文案一直在」）。
+    const off = await renderCard({ dryRun: false, debug: false, debugPath: '' })
+    expect(off.container.textContent).not.toContain(off.fixture.t('dryRunInactiveHint'))
+  })
 })
 
 describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配置区的分组草稿与保存', () => {
-  /**
-   * 按配置区页的形状渲染一次，返回容器与注入面。
-   * @param initial - 渲染前先写进 settings 替身的取值（已存值、常驻警告这类静态状态的用例要用它）。
-   */
-  async function renderPage(
-    initial: Partial<StubSection> = {},
-    catalog?: readonly StubCatalogProvider[],
-  ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
-    const fixture = await mounted(catalog)
-    // 摘要总开关默认关着会把摘要组与准入组折起来；这一组的用例测的是展开后的控件，所以默认打开它。
-    fixture.form.value = { ...fixture.form.value, summarize: true, ...initial }
-    const entry = only(fixture, 'plugins.bundle.config')
-    const face = entry.options.inject!() as ResultClipperCardInjected
-    const props = {
-      view: 'page',
-      t: fixture.t,
-      ...boundHooks(face.hooks),
-      saveFields: face.saveFields,
-      refreshModelCatalog: face.refreshModelCatalog,
-    } as unknown as ResultClipperCardProps
-    const CardComponent = entry.component as ComponentType<ResultClipperCardProps>
-    const { container } = render(<CardComponent {...props} />)
-    return { fixture, container, face }
-  }
-
-  /**
-   * 标题所在的那一组：分组标题的父元素就是这一组的容器。
-   * @param container - 渲染出来的页面。
-   * @param title - 分组标题文案。
-   * @returns 该分组的元素。
-   */
-  function groupOf(container: HTMLElement, title: string): Element {
-    const heading = [...container.querySelectorAll('h4')].find(node => node.textContent === title)
-    if (heading === undefined) throw new Error(`fixture: no group titled ${title}`)
-    return heading.parentElement!
-  }
-
-  /**
-   * 某组底部的「保存」或「恢复默认」按钮。
-   * @param container - 渲染出来的页面。
-   * @param title - 分组标题文案。
-   * @param label - 按钮文案。
-   * @returns 该组里的那个按钮。
-   */
-  function groupButton(container: HTMLElement, title: string, label: string): HTMLButtonElement {
-    const button = [...groupOf(container, title).querySelectorAll('button')]
-      .find(candidate => candidate.textContent === label)
-    if (button === undefined) throw new Error(`fixture: no button labelled ${label} in group ${title}`)
-    return button
-  }
-
-  /** 一次点击后等异步写入结算并让重渲染落定。 */
-  const settle = (): Promise<void> => act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
+  /** 这一组用例的入口名：与顶层的 {@link renderCard} 是同一份实现（默认展开摘要与隐私两组）。 */
+  const renderPage = renderCard
 
   it('page 视图显示数据流向与端点归属提示，控件读 schema 的默认值', async () => {
     // 准入组默认是收起的，要看到它的控件得先启用（默认折叠的用例在下面单列）。
@@ -287,8 +260,11 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-effort`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-prompt`)).not.toBeNull()
     }
-    // 摘要总开关在两组之上（不在任何组里）；摘要组还带两个阈值；隐私组带确认位与失败策略；诊断组只放 debug 路径。
-    expect(container.querySelector('#plugin-config-result-clipper-summarize')).not.toBeNull()
+    // 三个能力开关都在各自那一组之上（不在任何组里）；摘要组还带两个阈值；隐私组带确认位与失败策略；
+    // 诊断组放 debug 与干跑两个开关加它们的日志路径。
+    for (const id of ['summarize', 'privacy-enabled']) {
+      expect(container.querySelector(`#plugin-config-result-clipper-${id}`)).not.toBeNull()
+    }
     const summary = groupOf(container, '摘要模型')
     expect(summary.querySelector('#plugin-config-result-clipper-min-inline')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-max-summarize')).not.toBeNull()
@@ -296,7 +272,13 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(privacy.querySelector('#plugin-config-result-clipper-privacy-confirmed')).not.toBeNull()
     expect(privacy.querySelector('#plugin-config-result-clipper-webfetch-gate')).not.toBeNull()
     expect(privacy.querySelector('#plugin-config-result-clipper-failure-policy')).not.toBeNull()
-    expect(groupOf(container, '诊断').querySelector('#plugin-config-result-clipper-debug-path')).not.toBeNull()
+    const diagnostics = groupOf(container, '诊断')
+    for (const id of ['debug', 'dry-run', 'debug-path']) {
+      expect(diagnostics.querySelector(`#plugin-config-result-clipper-${id}`)).not.toBeNull()
+    }
+    // 三个能力开关都不在任何一组里：否则它们会被自己折叠起来。
+    expect(groupOf(container, '摘要模型').querySelector('#plugin-config-result-clipper-summarize')).toBeNull()
+    expect(groupOf(container, '隐私闸门模型').querySelector('#plugin-config-result-clipper-privacy-enabled')).toBeNull()
     // 总开关那一行之上是一条横线，加上三组分隔线：一共四条。
     expect([...container.querySelectorAll('hr')]).toHaveLength(4)
     // 每个分组都有一行「这是做什么的」。
@@ -389,18 +371,22 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(groupOf(container, '摘要准入判断模型').querySelector('#plugin-config-result-clipper-admission-provider')).not.toBeNull()
   })
 
-  it('已启用的准入组直接展开：启用位的读回落在 admissionJudge 上，且组在它下面（缩进一级）', async () => {
+  it('已启用的准入组直接展开：启用位的读回落在 admissionJudge 上，且组在它下面（每级缩排 32px）', async () => {
     const { container } = await renderPage({ admissionJudge: true })
     const toggle = container.querySelector('#plugin-config-result-clipper-admission-enabled input') as HTMLInputElement
     expect(toggle.checked).toBe(true)
     expect(container.querySelector('#plugin-config-result-clipper-admission-provider')).not.toBeNull()
     expect(container.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
 
-    // 从属关系用缩排表示：摘要模型退一级；启用位退一级、它下面那一组再退一级。
-    expect((groupOf(container, '摘要模型').parentElement as HTMLElement).style.marginLeft).toBe('16px')
+    // 从属关系用缩排表示，每级 32px（16px 在真机上几乎看不出来）：摘要组与隐私组各比自己的开关退一级；
+    // 准入的启用位与摘要组同层，它下面那一组再退一级。
+    expect((groupOf(container, '摘要模型').parentElement as HTMLElement).style.marginLeft).toBe('32px')
+    expect((groupOf(container, '隐私闸门模型').parentElement as HTMLElement).style.marginLeft).toBe('32px')
     const enabled = container.querySelector('#plugin-config-result-clipper-admission-enabled') as HTMLElement
-    expect((enabled.parentElement as HTMLElement).style.marginLeft).toBe('16px')
-    expect((groupOf(container, '摘要准入判断模型').parentElement as HTMLElement).style.marginLeft).toBe('32px')
+    expect((enabled.parentElement as HTMLElement).style.marginLeft).toBe('32px')
+    expect((groupOf(container, '摘要准入判断模型').parentElement as HTMLElement).style.marginLeft).toBe('64px')
+    // 诊断组没有上级开关，顶格。
+    expect((groupOf(container, '诊断').parentElement as HTMLElement).style.marginLeft).toBe('')
   })
 
   it('换 provider 时 model 跟着走：不属于新 provider 的 model 被清空，不留跨 provider 的配对', async () => {
@@ -858,7 +844,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   })
 
   it('摘要总开关被 Host 拒绝时当场给出提示，不装作已生效', async () => {
-    const { fixture, container } = await renderPage({ summarize: false })
+    // 隐私也关掉：页面上不该有别的 alert，这一条断的才是这个开关自己的失败提示。
+    const { fixture, container } = await renderPage({ summarize: false, privacyGate: false })
     fixture.form.accepted = false
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summarize input')!)
     await settle()
@@ -892,15 +879,20 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(box.checked).toBe(false)
   })
 
-  it('规则摘要不勾时用不到那段规则正文：文本域只读并给出原因，勾上才可编辑', async () => {
+  it('规则摘要不勾时用不到那段规则正文：文本域只读、灰字并给出原因，勾上才可编辑', async () => {
     const { fixture, container } = await renderPage()
     const field = (): HTMLTextAreaElement =>
       container.querySelector('#plugin-config-result-clipper-summary-prompt') as HTMLTextAreaElement
     expect(field().disabled).toBe(true)
+    // 灰字：这段现在用不上一眼要看得出来。用字色而不是底色——浅色主题里 `bg-layer-2` 与 `bg-layer-1` 同值。
+    expect(field().style.color).toBe('var(--dsw-alias-label-tertiary)')
+    expect(field().style.cursor).toBe('not-allowed')
     expect(container.textContent).toContain(fixture.t('summaryPromptInactive'))
 
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-rule-summary input')!)
     expect(field().disabled).toBe(false)
+    expect(field().style.color).toBe('var(--dsw-alias-label-primary)')
+    expect(field().style.cursor).toBe('')
     expect(container.textContent).not.toContain(fixture.t('summaryPromptInactive'))
   })
 
@@ -1057,46 +1049,3 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
 
 })
 
-
-describe('票 08 第 1 条：干跑开关与「干跑不生效」提示', () => {
-  /**
-   * 按页签的形状渲染一次。
-   * @param initial - 渲染前先写进 settings 替身的取值（干跑提示这类静态状态的用例要用它）。
-   */
-  async function renderTab(
-    initial: Partial<StubSection> = {},
-  ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperTabInjected }> {
-    const fixture = await mounted()
-    fixture.form.value = { ...fixture.form.value, ...initial }
-    const entry = only(fixture, 'settings.plugins.tab')
-    const face = entry.options.inject!() as ResultClipperTabInjected
-    const props = { t: fixture.t, ...boundHooks(face.hooks), setToggle: face.setToggle } as unknown as ResultClipperTabProps
-    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
-    const { container } = render(<TabComponent {...props} />)
-    return { fixture, container, face }
-  }
-
-  it('点干跑开关写 dryRun=true（不是 debug 那一路）', async () => {
-    const { fixture, container, face } = await renderTab()
-    await fireEvent.click(rowSwitch(container, '干跑'))
-    expect(fixture.form.writes).toEqual([{ field: 'dryRun', value: true }])
-    // 读回绑定也要落在干跑那个字段上：只断言写入数组的话，把 hook 映射到别的字段仍会绿。
-    expect(face.hooks.dryRun.getSnapshot()).toBe(true)
-    expect(face.hooks.debug.getSnapshot()).toBe(false)
-  })
-
-  it('干跑开启而 debug 关闭或日志路径为空时提示不生效；两者都就位后提示消失', async () => {
-    const noDebug = await renderTab({ dryRun: true, debug: false, debugPath: '/tmp/dry.jsonl' })
-    expect(noDebug.container.textContent).toContain(noDebug.fixture.t('dryRunInactiveHint'))
-
-    const noPath = await renderTab({ dryRun: true, debug: true, debugPath: '' })
-    expect(noPath.container.textContent).toContain(noPath.fixture.t('dryRunInactiveHint'))
-
-    const ready = await renderTab({ dryRun: true, debug: true, debugPath: '/tmp/dry.jsonl' })
-    expect(ready.container.textContent).not.toContain(ready.fixture.t('dryRunInactiveHint'))
-
-    // 阳性对照：干跑没开时这一行根本不该出现提示（否则上一条断的就只是「这行文案一直在」）。
-    const off = await renderTab({ dryRun: false, debug: false, debugPath: '' })
-    expect(off.container.textContent).not.toContain(off.fixture.t('dryRunInactiveHint'))
-  })
-})
