@@ -46,7 +46,6 @@ export type ResultClipperLocaleKey =
   | 'effortUnsupported'
   | 'effortUnsupportedHint'
   | 'effortNeverSent'
-  | 'effortNotAccepted'
   | 'privacyConfirmedLocal'
   | 'privacyConfirmedLocalHint'
   | 'webFetchPrivacyGate'
@@ -116,7 +115,6 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   effortUnsupported: '当前模型未提供推理等级',
   effortUnsupportedHint: '该模型不声明任何推理档位，请求不会带这个字段（这里选什么都不会下发）。',
   effortNeverSent: '（不会下发）',
-  effortNotAccepted: '（该 route 不接受）',
   privacyConfirmedLocal: '隐私 route 已确认为本地',
   privacyConfirmedLocalHint: '隐私闸门要求你确认这条 route 不会把内容发往外部网络；插件无法自行证明，也不通过 baseURL 猜测。改了这一组的 provider 或 model，这个确认就作废，要重新勾选。',
   webFetchPrivacyGate: 'web_fetch 也过隐私闸门',
@@ -185,7 +183,6 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   effortUnsupported: 'This model offers no reasoning levels',
   effortUnsupportedHint: 'The model declares no reasoning levels, so the request never carries this field (whatever is picked here is not sent).',
   effortNeverSent: ' (not sent)',
-  effortNotAccepted: ' (not accepted by this route)',
   privacyConfirmedLocal: 'Confirmed the privacy route is local',
   privacyConfirmedLocalHint: 'The privacy gate needs you to confirm this route never sends content to an external network; the plugin cannot prove it, and does not guess from a baseURL. Changing this group\'s provider or model invalidates the confirmation, so tick it again.',
   webFetchPrivacyGate: 'Send web_fetch results through the privacy gate too',

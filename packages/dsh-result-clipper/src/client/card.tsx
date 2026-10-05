@@ -733,9 +733,10 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
    * 一个 role 的档位控件参数：候选来自**该 route 声明的档位表**，不再用插件自己那份词表（它只在下述第三种情形兜底）。
    *
    * 三种降级面（设计稿 §5）：
-   * ① 目录里认得这条 route 且它声明了档位 → 空串选项＝「不推理」，标签里标出插件会落成的那个 id（`off` 或
-   *    `none` 或该表里最低的一档）；其余选项直接用 route 给的名字，所以不会再出现它不认的值；配置里存着一个
-   *    这条 route 不接受的档位时，把它作为一条带后缀的选项显示出来（不静默改用户的配置）。
+   * ① 目录里认得这条 route 且它声明了档位 → 候选**就是声明的那些**，标签用 route 给的名字（cline-pass 上就是
+   *    `None`、deepseek 上就是 `Off`）。配置留空＝「不推理」，控件上显示的就是插件会落成的那一档：**不另造一个
+   *    「不推理（X）」的空项**，也不把另一个拼法画成"该 route 不接受"；配置里的值不在表里时同样显示解析结果，
+   *    因为那个值不会被下发。
    * ② 认得但它不提供档位 → 只剩一条说明、控件禁用（host 半不会下发任何档位）。
    * ③ 目录里查不到这条 route（还没加载完、或手填的 id）→ 退回静态兜底词表，值原样下发，错了还有错误码兜底。
    * @param provider - 该 role 的 provider。
@@ -754,12 +755,12 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   ): Parameters<typeof EffortRow>[0] => {
     const label = props.t('reasoningEffort')
     const entry = catalog.find(group => group.id === provider)?.models.find(candidate => candidate.id === model)
-    if (entry !== undefined && entry.reasoning === undefined) {
+    const declared = entry?.reasoning?.efforts
+    if (entry !== undefined && (declared === undefined || declared.length === 0)) {
       const options = [{ value: '', label: props.t('effortUnsupported') }]
       if (value !== '') options.push({ value, label: `${value}${props.t('effortNeverSent')}` })
       return { id, label, value, options, disabled: true, hint: props.t('effortUnsupportedHint'), onChange }
     }
-    const declared = entry?.reasoning?.efforts
     if (declared === undefined) {
       return {
         id, label, value, onChange,
@@ -770,19 +771,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         ],
       }
     }
+    // 留空＝「不推理」：显示的就是插件会落成的那一档；配置里的值不在表里时同样显示它（那个值不会被下发）。
     const resolved = resolveNoReasoning(declared)
-    const nameOf = (effortId: string): string => declared.find(effort => effort.id === effortId)?.name ?? effortId
-    const options = [
-      {
-        value: '',
-        label: resolved === undefined ? props.t('effortNoReasoning') : `${props.t('effortNoReasoning')}（${nameOf(resolved)}）`,
-      },
-      ...declared.map(effort => ({ value: effort.id, label: effort.name })),
-    ]
-    if (value !== '' && !declared.some(effort => effort.id === value)) {
-      options.push({ value, label: `${value}${props.t('effortNotAccepted')}` })
+    const shown = value !== '' && declared.some(effort => effort.id === value) ? value : resolved ?? ''
+    return {
+      id, label, value: shown, hint: props.t('reasoningEffortHint'), onChange,
+      options: declared.map(effort => ({ value: effort.id, label: effort.name })),
     }
-    return { id, label, value, options, hint: props.t('reasoningEffortHint'), onChange }
   }
   /** 一组底部的按钮与失败提示。 */
   const actions = (group: DraftedGroup) => ({

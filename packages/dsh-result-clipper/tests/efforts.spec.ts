@@ -44,13 +44,14 @@ function writeSettings(ctx: Context): void {
 }
 
 describe('档位读数：配置里的值 → 要发的 id', () => {
-  it('留空＝不推理，按该 route 的表拼；显式值在表里就发它、不在就不发', async () => {
+  it('留空＝不推理，按该 route 的表拼；显式值在表里就发它、不在就落到不推理', async () => {
     const { route, efforts } = host()
     route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'low' }, { id: 'medium' }])
 
     expect(await efforts.choose('mock', 'mock', '')).toBe('none')
     expect(await efforts.choose('mock', 'mock', 'medium')).toBe('medium')
-    expect(await efforts.choose('mock', 'mock', 'off')).toBeUndefined()
+    // 表里没有 `off`：这个值发出去只会被拒，所以按「不推理」解析（与卡片上显示的生效档位一致）。
+    expect(await efforts.choose('mock', 'mock', 'off')).toBe('none')
   })
 
   it('表里没有 off/none 时取已知次序最低的那一档，而不是声明的第一个', async () => {
@@ -88,7 +89,8 @@ describe('档位表的缓存语义', () => {
 
     expect(await efforts.choose('mock', 'mock', '')).toBe('none')
     expect(await efforts.choose('mock', 'mock', 'low')).toBe('low')
-    expect(await efforts.choose('mock', 'mock', 'off')).toBeUndefined()
+    // 表里没有 `off`：落到不推理（同样是内存查表，不额外调用）。
+    expect(await efforts.choose('mock', 'mock', 'off')).toBe('none')
     expect(route.resolveCalls).toEqual(['mock/mock'])
 
     // 换一条 route 才再查一次。
@@ -118,7 +120,7 @@ describe('档位表的缓存语义', () => {
 
     route.resolveFailures.delete('mock/mock')
     route.reasonings.set('mock/mock', [{ id: 'none' }])
-    expect(await efforts.choose('mock', 'mock', 'off')).toBeUndefined()
+    expect(await efforts.choose('mock', 'mock', 'off')).toBe('none')
     expect(route.resolveCalls).toHaveLength(2)
   })
 })
@@ -157,7 +159,7 @@ describe('整条插件：请求上真的带的档位', () => {
     expect(route.requests[0]?.reasoningEffort).toBe('low')
   })
 
-  it('显式值不在表里时不发该字段，且请求只发一次（不靠失败重发兜底）', async () => {
+  it('显式值不在表里时按不推理下发，请求只发一次（不靠失败重发兜底）', async () => {
     const route = new FakeRoute([SUMMARY_REPLY])
     route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'low' }])
     const fixture = await mounted({ summaryReasoningEffort: 'medium' }, route)
@@ -165,7 +167,7 @@ describe('整条插件：请求上真的带的档位', () => {
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
     expect(route.requests).toHaveLength(1)
-    expect(route.requests[0]?.reasoningEffort).toBeUndefined()
+    expect(route.requests[0]?.reasoningEffort).toBe('none')
     expect(textOf(result.content)).toContain('这是一段短说明')
   })
 

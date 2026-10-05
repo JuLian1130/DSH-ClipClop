@@ -98,8 +98,9 @@ export function createEffortChoice(ctx: Context): EffortChoice {
       // 该模型不声明任何档位：带值必被拒（DSH 在 provider I/O 之前就抛），所以一律不带。
       if (reading.kind === 'none') return undefined
       if (configured === '') return resolveNoReasoning(reading.efforts)
-      // 表可用时"不在表里"就不再下发：与历来的"被拒后去掉字段重发"结果一致，但省掉那次尝试。
-      return acceptsEffort(reading.efforts, configured) ? configured : undefined
+      // 表里没有这个值：它发出去只会被拒，按「不推理」解析——与卡片上显示的生效档位一致。
+      if (!acceptsEffort(reading.efforts, configured)) return resolveNoReasoning(reading.efforts)
+      return configured
     },
   }
 }

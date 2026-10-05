@@ -920,29 +920,33 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
     [...(container.querySelector(`#${id}`) as HTMLSelectElement).options]
       .map(option => ({ value: option.value, label: option.textContent ?? '' }))
 
-  it('候选恰是该模型声明的档位（标签取声明名），空项标出会落成的档位；不出现它没声明的 off', async () => {
+  it('候选恰是该模型声明的档位（标签取声明名）；留空显示的就是会落成的那一档，且它不重复出现', async () => {
     const { container } = await renderPage({ routeProvider: 'local', routeModel: 'gateway' }, catalog)
 
     expect(options(container, SUMMARY_EFFORT)).toEqual([
-      { value: '', label: '不推理（None）' },
       { value: 'none', label: 'None' },
       { value: 'low', label: 'Low' },
       { value: 'high', label: 'High' },
     ])
-    // 阴性对照：这台 route 的词表里没有 off，所以它不该出现在候选里——这正是旧版「不推理（网关）」那个坑。
+    // 留空＝不推理：控件上选中的就是插件会落成的 `none`（供应商给的名字），不另造一个「不推理（None）」的空项。
+    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('none')
+    // 阴性对照：这台 route 的词表里没有 off，所以它不该出现在候选里。
     expect(options(container, SUMMARY_EFFORT).some(option => option.value === 'off')).toBe(false)
   })
 
   it('换成声明 off 的模型：出现 Off、不出现 None', async () => {
     const { container } = await renderPage({ routeProvider: 'local', routeModel: 'deepseek' }, catalog)
 
-    expect(options(container, SUMMARY_EFFORT).map(option => option.value)).toEqual(['', 'off', 'low', 'high'])
-    expect(options(container, SUMMARY_EFFORT)[0]?.label).toBe('不推理（Off）')
-    // 阴性对照：这台 route 声明的是 off，所以候选里不该出现 None（旧版那个「不推理（网关）」标签的坑）。
+    expect(options(container, SUMMARY_EFFORT)).toEqual([
+      { value: 'off', label: 'Off' },
+      { value: 'low', label: 'Low' },
+      { value: 'high', label: 'High' },
+    ])
+    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('off')
     expect(options(container, SUMMARY_EFFORT).some(option => option.label.includes('None'))).toBe(false)
   })
 
-  it('表里没有 off/none 时，空项标出已知次序里最低的那一档（不是声明的第一个）', async () => {
+  it('表里没有 off/none 时，留空显示的是已知次序里最低的那一档（不是声明的第一个）', async () => {
     const highLow: readonly StubCatalogProvider[] = [{
       id: 'local',
       name: '本地 route',
@@ -950,7 +954,7 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
     }]
     const { container } = await renderPage({ routeProvider: 'local', routeModel: 'm' }, highLow)
 
-    expect(options(container, SUMMARY_EFFORT)[0]).toEqual({ value: '', label: '不推理（Low）' })
+    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('low')
   })
 
   it('模型不提供推理档位：控件禁用、只剩一条说明', async () => {
@@ -961,14 +965,14 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
     expect(options(container, SUMMARY_EFFORT)).toEqual([{ value: '', label: '当前模型未提供推理等级' }])
   })
 
-  it('配置里存着这条 route 不接受的档位：作为带后缀的选项保留，不静默改配置', async () => {
+  it('配置里存着这条 route 不接受的档位：候选仍是声明的那些，显示按会落成的那一档（那个值不会被下发）', async () => {
     const { container } = await renderPage(
       { routeProvider: 'local', routeModel: 'gateway', summaryReasoningEffort: 'medium' },
       catalog,
     )
 
-    expect(options(container, SUMMARY_EFFORT)).toContainEqual({ value: 'medium', label: 'medium（该 route 不接受）' })
-    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('medium')
+    expect(options(container, SUMMARY_EFFORT).map(option => option.value)).toEqual(['none', 'low', 'high'])
+    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('none')
   })
 
   it('目录里查不到这条 route：退回静态兜底词表，值原样保留', async () => {
@@ -995,8 +999,9 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
       catalog,
     )
 
-    expect(options(container, SUMMARY_EFFORT)[0]?.label).toBe('不推理（None）')
-    expect(options(container, ADMISSION_EFFORT).map(option => option.value)).toEqual(['', 'off', 'low', 'high'])
+    expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('none')
+    expect(options(container, ADMISSION_EFFORT).map(option => option.value)).toEqual(['off', 'low', 'high'])
+    expect((container.querySelector(`#${ADMISSION_EFFORT}`) as HTMLSelectElement).value).toBe('off')
     expect((container.querySelector(`#${PRIVACY_EFFORT}`) as HTMLSelectElement).disabled).toBe(true)
   })
 })
