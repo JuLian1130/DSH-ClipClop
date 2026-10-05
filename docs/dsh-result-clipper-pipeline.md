@@ -97,10 +97,10 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 
 | 什么时候 | 取值 | 必要条件 |
 | --- | --- | --- |
-| 隐私路判 `safe` + `summarize` | `summarized` | 隐私闸门对这一条生效（`web_fetch` 要先勾 `webFetchPrivacyGate`） |
-| 声明了 `extract`，摘要模型给了短说明 | `summarized` | 摘要总开关开；结果进了候选 |
-| 没声明 `extract`，摘要模型给了短说明 | `summarized` | 摘要总开关开 + 规则摘要开 |
-| 没声明 `extract`，memo 命中 | `summarized` | 摘要总开关开 + 规则摘要开；隐私关闭（memo 只在隐私关闭时参与） |
+| 隐私路判 `safe` + `summarize` | `summarized` | 隐私闸门对这一条生效（`web_fetch` 要先勾 `webFetchPrivacyGate`）且结果进了候选 |
+| 声明了 `extract`，摘要模型给了短说明 | `summarized` | 摘要总开关开，且结果进了候选 |
+| 没声明 `extract`，摘要模型给了短说明 | `summarized` | 摘要总开关开 + 规则摘要开，且结果进了候选 |
+| 没声明 `extract`，memo 命中 | `summarized` | 摘要总开关开 + 规则摘要开，且结果进了候选（隐私关闭，memo 才参与） |
 
 其余一律透传原文。拦截（`rejected`）不是透传：模型看到的是固定拒绝文案。
 
