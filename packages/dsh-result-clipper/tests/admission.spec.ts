@@ -23,6 +23,7 @@ import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
 import { DEFAULT_ADMISSION_RULE } from '../src/rules.ts'
+import { describeCall } from '../src/summary.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
@@ -170,6 +171,68 @@ describe('票 06 第 3、4 条：准入请求不含正文、含结果大小，�
     // 两次请求都必须各自带上它（含 `yes`/`no` 输出格式的准入请求也带）。
     expect(admissionText).toMatch(new RegExp(`估算大小[^\\n]*${ESTIMATED}`))
     expect(summaryText).toMatch(new RegExp(`估算大小[^\\n]*${ESTIMATED}`))
+  })
+
+  it('调用的形态进共用前缀：工具名与关键参数两次请求都带，且逐字相同', async () => {
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('read', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('read', undefined, { file_path: '/repo/src/app.ts', offset: 40, limit: 60 }))
+
+    const admissionText = requestText(route.requests[0]!)
+    const summaryText = requestText(route.requests[1]!)
+    const line = '本次调用：read：分片；file_path=/repo/src/app.ts；offset=40；limit=60'
+    expect(admissionText).toContain(line)
+    expect(summaryText).toContain(line)
+    // 它在共用前缀里：只放进其中一次请求，共同开头就会在它之前断开。
+    expect(commonPrefix(admissionText, summaryText)).toContain(line)
+  })
+
+  it('命令头截到 120 字符：内嵌在命令里的正文不会整段进准入请求', async () => {
+    const tail = 'SECRET-TAIL-9f3c'
+    const command = `echo ${'x'.repeat(200)} ${tail}`
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('bash', undefined, { description: '取样', command }))
+
+    const admissionText = requestText(route.requests[0]!)
+    expect(admissionText).toContain('本次调用：bash：description=取样；command 头=echo ')
+    expect(admissionText).toContain(command.slice(0, 120))
+    // 阳性对照：截断确实发生了——命令尾部的哨兵一个字都不在，正文本身也不在。
+    expect(command.slice(0, 120).length).toBe(120)
+    expect(admissionText).not.toContain(tail)
+    expect(admissionText).not.toContain(LONG_BODY)
+  })
+
+  it('参数里没有可报的形态时不写「本次调用」这一行（假 exec 的空参数就是这种）', async () => {
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('bash', undefined, {}))
+
+    expect(requestText(route.requests[0]!)).not.toContain('本次调用')
+    expect(requestText(route.requests[0]!)).toMatch(new RegExp(`估算大小[^\\n]*${ESTIMATED}`))
+  })
+})
+
+describe('调用形态的口径（照 `docs/dsh-reasoning-effort-research.md` 的 `shape_of`）', () => {
+  it.each([
+    ['read', { file_path: '/a/b.ts' }, 'read：整文件（无 offset/limit）；file_path=/a/b.ts'],
+    ['read', { file_path: '/a/b.ts', offset: 10 }, 'read：分片；file_path=/a/b.ts；offset=10'],
+    ['read', { file_path: '/a/b.ts', limit: 20 }, 'read：分片；file_path=/a/b.ts；limit=20'],
+    ['read', {}, ''],
+    ['bash', { description: '列目录', command: 'ls -la' }, 'bash：description=列目录；command 头=ls -la'],
+    ['pwsh', { command: 'Get-ChildItem' }, 'pwsh：description=（无）；command 头=Get-ChildItem'],
+    ['bash', {}, ''],
+    ['web_fetch', { url: 'https://example.com' }, 'web_fetch：url=https://example.com'],
+    ['web_fetch', {}, ''],
+    ['grep', { pattern: 'x' }, ''],
+  ] as const)('%s %j → %j', (toolName, args, expected) => {
+    expect(describeCall(toolName, args)).toBe(expected)
+  })
+
+  it('参数不是对象时不抛', () => {
+    expect(describeCall('bash', undefined)).toBe('')
+    expect(describeCall('bash', 'command=ls')).toBe('')
+    expect(describeCall('read', null)).toBe('')
   })
 })
 

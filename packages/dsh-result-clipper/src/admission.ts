@@ -3,7 +3,7 @@
  *
  * 它是摘要请求的**闸门**——只判断值不值得花一次带正文的调用，不判断这条结果对当前任务是否需要逐字完整
  * （那是摘要模型的事，见 `summary.ts`）。因此请求不读工具正文，只带与摘要请求逐字相同的固定前缀
- * （{@link composeRequestPrefix}，含这次结果的估算大小那一行）加准入规则正文，回答严格取 `yes` / `no`。
+ * （{@link composeRequestPrefix}：这次调用的形态 + 这次结果的估算大小）加准入规则正文，回答严格取 `yes` / `no`。
  *
  * **判断失败不是关闭功能**：调用失败、超时、空结果、非严格 `yes`/`no` 都以 `undefined` 交回调用点，由它
  * 直接发起带正文的摘要请求（设计文档「摘要」的准入条）。这一层不抛：`tools/post-execute` 抛错会把工具调用
@@ -16,7 +16,7 @@
 
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, composeRequestPrefix, requestModelText } from './summary.ts'
+import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, requestModelText } from './summary.ts'
 import type { ModelCallUsage } from './summary.ts'
 import type { ReasoningEffort } from './reasoning.ts'
 import { DEFAULT_ADMISSION_RULE } from './rules.ts'
@@ -31,12 +31,12 @@ const FIXED_SHELL = [
 /**
  * 把可编辑的规则正文与固定外壳、共用前缀拼成一次准入请求的用户输入。
  * @param rule - 可编辑的规则正文；空串时用 {@link DEFAULT_ADMISSION_RULE}。
- * @param estimatedSize - 这次结果的估算大小（估算器单位）；与摘要请求共用那一行。
+ * @param prefix - {@link composeRequestPrefix} 的产物；与摘要请求逐字共用。
  * @returns 请求用的提示词文本。
  */
-export function composeAdmissionPrompt(rule: string, estimatedSize: number): string {
+export function composeAdmissionPrompt(rule: string, prefix: string): string {
   const edited = rule === '' ? DEFAULT_ADMISSION_RULE : rule
-  return `${composeRequestPrefix(estimatedSize)}\n\n${edited}\n\n${FIXED_SHELL}\n`
+  return `${prefix}\n\n${edited}\n\n${FIXED_SHELL}\n`
 }
 
 /**

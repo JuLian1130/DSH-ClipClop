@@ -76,7 +76,7 @@ import {
   requestPrivacy,
   type ReminderLedger,
 } from './privacy.ts'
-import { composeSummaryPrompt, requestSummary, type ModelCallUsage, type SummaryAction } from './summary.ts'
+import { composeSummaryPrompt, describeCall, composeRequestPrefix, requestSummary, type ModelCallUsage, type SummaryAction } from './summary.ts'
 import { extractEnabled, extractGoalOf, extractRule, installExtractArg } from './extract.ts'
 
 export * from './config.ts'
@@ -251,6 +251,9 @@ async function process(
   }
 
   const llm = ctx.get('llm')
+  // 调用的形态进共用前缀：规则正文只写判据，而实测里最强的三个信号（整文件 read、同一路径曾被摘过、bash）
+  // 全是调用形态，模型只有在前缀里才看得见它们。前缀在这里拼一次，准入与摘要两次请求逐字共用。
+  const prefix = composeRequestPrefix(describeCall(exec.name, exec.arguments), verdict.estimated)
   // 声明了目标的调用不再问准入模型：目标本身就是最强的那份局部意图，规则正文也用目标改写。
   let admission: AdmissionVerdict = 'not-applicable'
   if (config.admissionJudge.get() && goal === undefined) {
@@ -261,7 +264,7 @@ async function process(
     } else {
       const called = await requestAdmission(
         llm, provider, model, config.admissionReasoningEffort.get(),
-        composeAdmissionPrompt(config.admissionPrompt.get(), verdict.estimated),
+        composeAdmissionPrompt(config.admissionPrompt.get(), prefix),
       )
       observation.judgeInputTokens = noteUsage(observation, called.usage)
       // 判断失败不是关功能：`failed` 只记进准入结论，照常发起带正文的摘要请求。
@@ -276,7 +279,7 @@ async function process(
     llm, provider, model, config.summaryReasoningEffort.get(),
     composeSummaryPrompt(
       goal === undefined ? config.summaryPrompt.get() : extractRule(goal),
-      verdict.estimated,
+      prefix,
       verdict.text,
     ),
   )

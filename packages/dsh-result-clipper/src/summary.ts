@@ -48,28 +48,76 @@ const FIXED_SHELL = [
   '4. 不要复述原文。',
 ].join('\n')
 
+/** shell 命令头保留的字符数：命令里可能内嵌正文，而准入请求的契约是「不带正文」。 */
+const COMMAND_HEAD_CHARS = 120
+
 /**
- * 摘要路径上准入与摘要两次请求共用的固定前缀（含这次结果的估算大小那一行）。
+ * 摘要路径上准入与摘要两次请求共用的固定前缀：这次调用的形态 + 这次结果的估算大小。
  *
- * 两次请求用它开头、逐字相同：准入请求在它之后接准入规则正文，摘要请求接摘要规则正文、外壳与工具正文。
- * 「结果大小」是元数据而非正文，所以准入请求带上它不违反「准入不读取工具正文」（设计文档「摘要」的准入条）。
+ * 两次请求用它开头、逐字相同：准入请求在它之后接准入规则正文，摘要请求接摘要规则正文、外壳与工具正文。前缀
+ * 在这里**只拼一次**，两个组装函数收到的就是同一个字符串——「共用前缀」由此不是一句约定，而是调用点的形状。
+ * 两行都是元数据而非正文（命令头在 {@link describeCall} 里截断），所以准入请求带上它们不违反「准入不读取
+ * 工具正文」（设计文档「摘要」的准入条）。
+ * @param call - 这次调用的形态，见 {@link describeCall}；空串时前缀里不出现这一行。
  * @param estimatedSize - 这次结果的估算大小（估算器单位）。
  * @returns 两次请求逐字相同的前缀。
  */
-export function composeRequestPrefix(estimatedSize: number): string {
-  return `这次工具结果的估算大小：${estimatedSize} 估算单位。`
+export function composeRequestPrefix(call: string, estimatedSize: number): string {
+  const lines = call === '' ? [] : [`本次调用：${call}`]
+  lines.push(`这次工具结果的估算大小：${estimatedSize} 估算单位。`)
+  return lines.join('\n')
+}
+
+/**
+ * 这次调用的形态：工具名 + 关键参数，拼成一行给模型看。
+ *
+ * 字段照 `docs/dsh-reasoning-effort-research.md` 的实验口径（探针 `retest2-prompts.py` 的 `shape_of`）：
+ * `read` 报「整文件 / 分片」与路径（分片再报 offset/limit），`bash`/`pwsh` 报 description 与命令头，
+ * `web_fetch` 报 url。那份实测里三个最强信号——整文件 `read`（+16pp）、同一路径曾被摘过（+9 条）、`bash`
+ * （−15pp）——都只能从这些字段看出来，所以规则正文之外必须把它们摆到模型面前。
+ *
+ * 认不出的工具、或一个字段都没有时返回空串（前缀里就不出现这一行）：测试里的假 exec 常常只有空参数。
+ * @param toolName - 工具名。
+ * @param args - 这次调用的参数（`exec.arguments`）。
+ * @returns 形如 `read：整文件（无 offset/limit）；file_path=/x/y.ts` 的一行。
+ */
+export function describeCall(toolName: string, args: unknown): string {
+  if (typeof args !== 'object' || args === null) return ''
+  const values = args as Record<string, unknown>
+  if (toolName === 'read') {
+    const path = typeof values.file_path === 'string' ? values.file_path : undefined
+    const offset = typeof values.offset === 'number' ? values.offset : undefined
+    const limit = typeof values.limit === 'number' ? values.limit : undefined
+    if (path === undefined && offset === undefined && limit === undefined) return ''
+    const bits = [offset === undefined && limit === undefined ? '整文件（无 offset/limit）' : '分片']
+    if (path !== undefined) bits.push(`file_path=${path}`)
+    if (offset !== undefined) bits.push(`offset=${offset}`)
+    if (limit !== undefined) bits.push(`limit=${limit}`)
+    return `read：${bits.join('；')}`
+  }
+  if (toolName === 'bash' || toolName === 'pwsh') {
+    const description = typeof values.description === 'string' ? values.description : undefined
+    const command = typeof values.command === 'string' ? values.command : undefined
+    if (description === undefined && command === undefined) return ''
+    const head = (command ?? '').slice(0, COMMAND_HEAD_CHARS)
+    return `${toolName}：description=${description ?? '（无）'}；command 头=${head}`
+  }
+  if (toolName === 'web_fetch') {
+    return typeof values.url === 'string' ? `web_fetch：url=${values.url}` : ''
+  }
+  return ''
 }
 
 /**
  * 把可编辑的规则正文与固定外壳、工具正文拼成一次请求的用户输入。
  * @param rule - 可编辑的规则正文；空串时用 {@link DEFAULT_SUMMARY_RULE}。
- * @param estimatedSize - 这次结果的估算大小；与准入请求共用同一行前缀。
+ * @param prefix - {@link composeRequestPrefix} 的产物；与准入请求逐字共用。
  * @param body - 工具的文本正文。
  * @returns 请求用的提示词文本。
  */
-export function composeSummaryPrompt(rule: string, estimatedSize: number, body: string): string {
+export function composeSummaryPrompt(rule: string, prefix: string, body: string): string {
   const edited = rule === '' ? DEFAULT_SUMMARY_RULE : rule
-  return `${composeRequestPrefix(estimatedSize)}\n\n${edited}\n\n${FIXED_SHELL}\n\n${BODY_OPEN}\n${body}\n${BODY_CLOSE}\n`
+  return `${prefix}\n\n${edited}\n\n${FIXED_SHELL}\n\n${BODY_OPEN}\n${body}\n${BODY_CLOSE}\n`
 }
 
 /** 摘要请求的结论：改写正文，或要求保留全文（`keep` 是信号，不是复述）。 */
