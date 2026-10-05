@@ -2,6 +2,8 @@
 
 /** 本命名空间的文案键。 */
 export type ResultClipperLocaleKey =
+  | 'tab'
+  | 'tabPointer'
   | 'summarize'
   | 'summarizeHint'
   | 'ruleSummary'
@@ -71,6 +73,8 @@ export type ResultClipperLocaleKey =
 
 /** 中文文案。 */
 export const zh: Record<ResultClipperLocaleKey, string> = {
+  tab: '工具结果裁剪',
+  tabPointer: '本插件的全部设置都在「插件」页里这个包的详情页：摘要、摘要准入判断与隐私闸门各自的 route、推理档位与提示词，摘要阈值，以及 debug 记录与干跑。这一页不放开关——它们离开自己那条 route 或日志路径按不动，所以和各自的设置放在了一起。',
   summarize: '工具结果摘要',
   summarizeHint: '允许主模型自主请求摘要（摘要 token 消耗计入摘要模型）。改动对之后新建的会话生效。',
   summarizeOffHint: '摘要关着：主模型不会看到「请求摘要」这项能力，这一组与准入判断的设置随之收起。隐私闸门若开着，仍会逐条判断并用它给出的摘要替换正文。',
@@ -141,6 +145,8 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
 
 /** 英文文案。 */
 export const en: Record<ResultClipperLocaleKey, string> = {
+  tab: 'Result clipper',
+  tabPointer: 'Every setting for this plugin lives on this package\'s detail page in the Plugins page: the route, reasoning effort and prompt for summarization, the admission judge and the privacy gate, the summary thresholds, plus debug records and dry runs. This tab carries no switches — without their own route or log path they would do nothing, so each one sits next to the settings it needs.',
   summarize: 'Summarize tool results',
   summarizeHint: 'Lets the main model ask for a summary by itself (the summary tokens are billed to the summary model). The change applies to sessions created afterwards.',
   summarizeOffHint: 'Summarization is off: the main model does not get the option to ask for a summary, and this group and the admission settings fold away. A privacy gate that is on still judges every result and replaces a safe one with its summary.',

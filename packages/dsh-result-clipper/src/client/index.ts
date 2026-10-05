@@ -3,11 +3,12 @@
  * 三项能力（摘要、摘要准入判断、隐私闸门）的开关与它们各自的 route、推理档位、提示词与阈值，加诊断组的 debug、
  * 干跑与日志路径。
  *
- * **只有一个座位**（设计文档「配置面与设置座位」）：本插件不再往「设置 → 内置插件」注册页签。曾经有过那样一个
- * 页签，但插件自己的开关就是「设置某项能力」本身——摘要与隐私的开关离开它们要用的 route 按不动，debug 与干跑
- * 离开日志路径什么也不写；开关与它们要用的设置放在一起才读得懂、才用得起来。两处读数都经
- * `ctx.configForms.get(ns)` 取自同一个 settings 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口
- * `name`，不是包名）。
+ * **设置只有一个座位**（设计文档「配置面与设置座位」）：包详情页的配置区。浏览器半另外往「设置 → 内置插件」注册
+ * 一个**只做指路**的页签——它没有任何控件、也不注入业务面，只写一句「设置在哪、为什么不在这一页」。曾经那一页
+ * 放的是摘要、隐私、debug 与干跑四个开关，问题是插件自己的开关就是「设置某项能力」本身：摘要与隐私的开关离开
+ * 它们要用的 route 按不动，debug 与干跑离开日志路径什么也不写，用户在这一页上只能看到按了没反应的开关。所以
+ * 开关都搬到它们要用的设置旁边，这一页只留一个入口。两处读数都经 `ctx.configForms.get(ns)` 取自同一个 settings
+ * 命名空间（命名空间 = profile patch 行的 `id`，本插件的入口 `name`，不是包名）。
  *
  * 配置区走 `plugins.bundle.config` 而不是 `plugins.item`：本插件按 profile bundle 装载
  * （`dsh.bundle.patch` + `dsh.profile.bundles`），插件管理器给它的卡片是包卡片，而包详情页只渲染按包名索引
@@ -28,7 +29,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 // 类型专用：`ctx.locale` 的 Context 合并与文案字典。
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-// 类型专用：`ctx.configForms` 的 Context 合并与 `ConfigForm` 类型。
+// 类型专用：`ctx.configForms` 的 Context 合并、`ConfigForm` 类型与 `settings.plugins.tab` 槽位声明。
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 // 类型专用：`plugins.bundle.config` 槽位声明。
@@ -38,6 +39,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { createModelCatalog } from './catalog.ts'
 import { ResultClipperCard, type ResultClipperSettingOp } from './card.tsx'
 import { en, zh, type ResultClipperLocaleKey } from './locales.ts'
+import { ResultClipperTab } from './tab.tsx'
 import type { ReasoningEffort } from '../reasoning.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -49,6 +51,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** settings 命名空间 = profile patch 行的 `id`（也是 host 半的入口 `name`）。 */
 export const PREFERENCE_NAMESPACE = 'dsh-result-clipper'
+
+/** 指路页签在 `settings.plugins.tab` 里的注册 id。 */
+const TAB_ID = 'result-clipper'
+
+/** 指路页签的排序位。 */
+const TAB_ORDER = 30
 
 /**
  * 本插件在 profile 里的包名：`plugins.bundle.config` 是按包名索引的 keyed 槽位，包详情页用
@@ -96,13 +104,26 @@ interface PreferenceSection {
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session']
 
 /**
- * 注册包详情页配置区。
+ * 注册指路页签与包详情页配置区。
  * @param ctx - 客户端插件 context；上面 inject 的服务都已就绪。
  */
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, { zh, en }), 'dsh-result-clipper: dictionaries')
+  // 页签名是 thunk：内置插件那一节每次投影都重读它，所以语言切换不必重新注册。
+  const t = ctx.locale.bind(LOCALE_NAMESPACE)
   const form = ctx.configForms.get<PreferenceSection>(PREFERENCE_NAMESPACE)
   const catalog = createModelCatalog(ctx)
+  // 这一页只指路：没有控件、也不注入业务面（读数与写入路径一概没有），所以它注册成没有 `inject` 的一条。
+  ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
+    'settings.plugins.tab',
+    () => ctx.slots.register({
+      name: 'settings.plugins.tab',
+      id: TAB_ID,
+      order: TAB_ORDER,
+      label: () => t('tab'),
+      locale: LOCALE_NAMESPACE,
+    }, ResultClipperTab),
+  )), 'dsh-result-clipper: settings pointer tab')
   ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
     'plugins.bundle.config',
     () => ctx.slots.register({

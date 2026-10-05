@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 /**
- * 票 02 第 2 条 / 票 28：设置界面只有一处座位——包详情页的配置区。
+ * 票 02 第 2 条 / 票 28 / 票 29：设置界面只有一个**设置**座位（包详情页的配置区），另加一个只做指路的页签。
  *
- * 观察面分两层：注册层断言只有 `plugins.bundle.config` 一处注册（key 是包名），控件层把注册面注入的业务面按
- * 渲染机的形状绑定到组件上，断言能力开关点了就写对应字段、Host 拒绝时出现 `role="alert"`、分组里的字段要按
- * 该组的「保存」才写回。
+ * 观察面分两层：注册层断言两处座位的键（`plugins.bundle.config` 的 key 是包名；`settings.plugins.tab` 的页签
+ * 只指路、不注入业务面），控件层把注册面注入的业务面按渲染机的形状绑定到组件上，断言能力开关点了就写对应
+ * 字段、Host 拒绝时出现 `role="alert"`、分组里的字段要按该组的「保存」才写回。
  *
  * 注册键与字段名都是判据的一部分：`key: '@dsh-clipclop/dsh-result-clipper'` 决定配置区落在哪个包的详情页，
  * `{ op: 'set', path: ['summarize'] }` 决定写回的是哪个 settings 键。
@@ -19,6 +19,7 @@ import { useSyncExternalStore } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
+import type { ResultClipperTabProps } from '../src/client/tab.tsx'
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
 import { en } from '../src/client/locales.ts'
 import { mountClient } from './support/client.ts'
@@ -117,16 +118,38 @@ function only(fixture: ClientFixture, slot: string) {
   return entries[0]!
 }
 
-describe('票 02 第 2 条 / 票 28：设置界面只有一处座位', () => {
+describe('票 02 第 2 条 / 票 28 / 票 29：设置座位只有一个，另加一个指路页签', () => {
   it('配置区以包名为键注册，与 profile 里的包名逐字相同', async () => {
     const fixture = await mounted()
     const entry = only(fixture, 'plugins.bundle.config')
     expect(entry.options.key).toBe('@dsh-clipclop/dsh-result-clipper')
   })
 
-  it('不再往「设置 → 内置插件」注册页签：本插件只有一个座位', async () => {
+  it('「设置 → 内置插件」里保留一个页签：id 与页签名（随语言切换）都是写死的', async () => {
     const fixture = await mounted()
-    expect(fixture.entries('settings.plugins.tab')).toEqual([])
+    const entry = only(fixture, 'settings.plugins.tab')
+    expect(entry.options.id).toBe('result-clipper')
+    expect(entry.options.locale).toBe('resultClipper')
+    const label = entry.options.label as () => string
+    expect(label()).toBe('工具结果裁剪')
+    fixture.setLocale('en')
+    expect(label()).toBe('Result clipper')
+  })
+
+  it('那个页签只指路：一句话、没有任何控件，也不注入业务面', async () => {
+    const fixture = await mounted()
+    const entry = only(fixture, 'settings.plugins.tab')
+    // 不注入业务面：这一页没有可写的东西，也就没有「点一下写哪个字段」这回事。
+    expect(entry.options.inject).toBeUndefined()
+    const TabComponent = entry.component as ComponentType<ResultClipperTabProps>
+    const { container } = render(<TabComponent {...{ t: fixture.t } as unknown as ResultClipperTabProps} />)
+
+    expect(container.textContent).toBe(fixture.t('tabPointer'))
+    // 阴性对照：一个控件都没有——否则用户又会在这一页上看到按了没反应的开关。
+    expect(container.querySelectorAll('[role="switch"]')).toHaveLength(0)
+    expect(container.querySelectorAll('input, textarea, select, button')).toHaveLength(0)
+    // 提示要说清去哪儿设置（「插件」页里这个包的详情页）。
+    expect(fixture.t('tabPointer')).toContain('插件')
   })
 })
 
