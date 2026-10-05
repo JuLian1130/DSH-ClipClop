@@ -37,6 +37,7 @@ import type { ResultClipperLocaleKey } from './locales.ts'
 /** 卡片的可写字段，与 host 半 `Config` 的字段同名（也是 settings section 里的键）。 */
 export type ResultClipperCardField =
   | 'summarize'
+  | 'ruleSummary'
   | 'routeProvider'
   | 'routeModel'
   | 'admissionJudge'
@@ -106,6 +107,8 @@ export interface ResultClipperCardInjected {
     summaryPrompt: ObservableSnapshot<string>
     /** 摘要总开关（与页签里那一个是同一个键）：关掉时本组与准入组收起，也不覆盖任何工具。 */
     summarize: ObservableSnapshot<boolean>
+    /** 摘要提示词的摘要开关：关掉后只有声明了 `extract` 的调用才摘要。 */
+    ruleSummary: ObservableSnapshot<boolean>
     /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
     admissionPrompt: ObservableSnapshot<string>
     /** 隐私提示词的规则正文覆盖；空串表示用内置默认。 */
@@ -607,9 +610,11 @@ function PromptRow(props: {
   </section>
 }
 
-/** 摘要组的字段：总开关、route、推理档位、两个阈值与提示词。 */
+/** 摘要组的字段：总开关、规则摘要开关、route、推理档位、两个阈值与提示词。 */
 const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summarize', kind: 'boolean' },
+  // 老版本存过的 section 里没有这个键：缺席时按默认「开」算，草稿播种与「已改动」判定都拿它当基准。
+  { field: 'ruleSummary', kind: 'boolean', fallback: true },
   { field: 'routeProvider', kind: 'text' },
   { field: 'routeModel', kind: 'text' },
   { field: 'summaryReasoningEffort', kind: 'text', fallback: '' },
@@ -665,6 +670,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyConfirmedLocal = props.usePrivacyConfirmedLocal(value => value)
   const webFetchPrivacyGate = props.useWebFetchPrivacyGate(value => value)
   const summarize = props.useSummarize(value => value)
+  const ruleSummary = props.useRuleSummary(value => value)
   const failurePolicy = props.useFailurePolicy(value => value)
   const routeProvider = props.useRouteProvider(value => value)
   const routeModel = props.useRouteModel(value => value)
@@ -700,7 +706,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   }
 
   const summary = useGroupDraft(SUMMARY_FIELDS, {
-    summarize, routeProvider, routeModel, summaryReasoningEffort, minInlineTokens, maxSummarizeTokens,
+    summarize, ruleSummary, routeProvider, routeModel, summaryReasoningEffort, minInlineTokens,
+    maxSummarizeTokens,
     // 提示词的已存值是**生效正文**：草稿与它相同就没有改动，等于内置正文时保存走 `unset`。
     summaryPrompt: summaryPrompt === '' ? DEFAULT_SUMMARY_RULE : summaryPrompt,
   }, props.saveFields)
@@ -827,6 +834,10 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
     {summarize === true && <>
     <Group title={props.t('summaryGroup')} description={props.t('summaryGroupHint')} {...actions(summary)}>
+      <CheckRow id="plugin-config-result-clipper-rule-summary" label={props.t('ruleSummary')}
+        hint={props.t('ruleSummaryHint')}
+        checked={summary.value('ruleSummary') as boolean}
+        onChange={next => { summary.change('ruleSummary', next) }} />
       <RouteLine
         provider={{
           ...routeText, id: 'plugin-config-result-clipper-route-provider',

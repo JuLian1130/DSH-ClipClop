@@ -53,6 +53,8 @@ describe('配置契约', () => {
     expect(error).toBeUndefined()
     expect(fiber.config?.summarize.get()).toBe(false)
     expect(fiber.config?.privacyGate.get()).toBe(false)
+    // 规则摘要默认开启：不配置时行为与加这个开关之前一致（提取路径不受它影响）。
+    expect(fiber.config?.ruleSummary.get()).toBe(true)
     expect(fiber.config?.admissionJudge.get()).toBe(false)
     expect(fiber.config?.debug.get()).toBe(false)
     expect(fiber.config?.debugPath.get()).toBe('')
@@ -84,6 +86,9 @@ describe('配置契约', () => {
     expect(fiber.config?.debugPath.get()).toBe('/tmp/result-clipper.jsonl')
     expect(fiber.config?.dryRun.get()).toBe(true)
     expect(fiber.config?.privacyGate.get()).toBe(false)
+
+    const rulesOff = await load({ ruleSummary: false })
+    expect(rulesOff.fiber.config?.ruleSummary.get()).toBe(false)
 
     const tuned = await load({
       routeProvider: 'local', routeModel: 'qwen', minInlineTokens: 0,

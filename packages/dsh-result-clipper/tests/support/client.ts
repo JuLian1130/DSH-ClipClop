@@ -17,6 +17,7 @@ import { en, zh } from '../../src/client/locales.ts'
 /** 本插件的 settings section 值。 */
 export interface StubSection {
   summarize: boolean
+  ruleSummary: boolean
   privacyGate: boolean
   admissionJudge: boolean
   debug: boolean
@@ -43,6 +44,8 @@ export interface StubSection {
 /** section 缺席时控件读到的默认值（与 host 半 schema 的默认一致）。 */
 export const SECTION_DEFAULTS: StubSection = {
   summarize: false,
+  // 规则摘要默认开启（与 host 半 schema 的默认一致）。
+  ruleSummary: true,
   privacyGate: false,
   admissionJudge: false,
   debug: false,

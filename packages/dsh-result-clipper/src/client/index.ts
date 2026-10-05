@@ -65,6 +65,7 @@ const LOCALE_NAMESPACE = 'resultClipper'
 /** 本命名空间在浏览器侧的形状（只声明本半读到的键）。 */
 interface PreferenceSection {
   summarize: boolean
+  ruleSummary: boolean
   privacyGate: boolean
   webFetchPrivacyGate: boolean
   admissionJudge: boolean
@@ -137,6 +138,8 @@ export function apply(ctx: Context): void {
       inject: () => ({
         hooks: {
           summarize: booleanField(form, 'summarize'),
+          // 规则摘要开关的默认是**开**：镜像里还没有这个键（老版本存过的 section）时按"照旧摘要"显示。
+          ruleSummary: booleanField(form, 'ruleSummary', true),
           privacyGate: booleanField(form, 'privacyGate'),
           webFetchPrivacyGate: booleanField(form, 'webFetchPrivacyGate'),
           privacyConfirmedLocal: booleanField(form, 'privacyConfirmedLocal'),
@@ -176,7 +179,7 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'privacyGate' | 'webFetchPrivacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
+  field: 'summarize' | 'ruleSummary' | 'privacyGate' | 'webFetchPrivacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
   fallback = false,
 ): ObservableSnapshot<boolean> {
   return {

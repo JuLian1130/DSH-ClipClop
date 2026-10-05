@@ -98,12 +98,47 @@ describe('extractGoalOf：只认 arguments.extract 上的非空字符串', () =>
   })
 })
 
-describe('extractRule：目标进规则正文，并说明"原样"也可以只贴片段', () => {
-  it('含目标原文，且明确 keep 只在等长时才用', () => {
+describe('extractRule：目标进规则正文，且不再提 keep', () => {
+  it('含目标原文，且说明"原样"也可以只贴片段', () => {
     const rule = extractRule('只要 redis 段的两个值')
     expect(rule).toContain('只要 redis 段的两个值')
     expect(rule).toContain('只贴相关的那几行或那个片段')
-    expect(rule).toContain('返回 summarize')
+    expect(rule).toContain('不要交回整段结果')
+  })
+
+  it('正文里不出现 keep：这条路径的"不摘要"只有「低于摘要下限」一种来源', () => {
+    expect(extractRule('只要 redis 段的两个值')).not.toContain('keep')
+  })
+})
+
+describe('声明了提取目标时输出契约里没有 keep', () => {
+  it('带 extract 的摘要请求只提供 summarize 一种动作', async () => {
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要 ERROR 的时间戳' }))
+
+    const text = requestText(route.requests[0]!)
+    expect(text).toContain('{"action":"summarize","summary":string}')
+    expect(text).not.toContain('keep')
+  })
+
+  it('阴性对照：同一配置下不带 extract 的请求照旧提供 keep', async () => {
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(requestText(route.requests[0]!)).toContain('{"action":"summarize"|"keep","summary":string|null}')
+  })
+
+  it('结果低于摘要下限时一个模型请求都不发，原样透传（带 extract 也一样）', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', 'x'.repeat(10)))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要标题' }))
+
+    expect(route.requests).toHaveLength(0)
+    expect(textOf(result.content)).toBe('x'.repeat(10))
+    expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
+      .toMatchObject({ action: 'unmodified', reason: 'not-candidate', extract: true })
   })
 })
 

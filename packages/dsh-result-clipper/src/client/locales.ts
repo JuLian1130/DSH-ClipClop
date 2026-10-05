@@ -5,6 +5,8 @@ export type ResultClipperLocaleKey =
   | 'tab'
   | 'summarize'
   | 'summarizeHint'
+  | 'ruleSummary'
+  | 'ruleSummaryHint'
   | 'admissionJudge'
   | 'admissionJudgeHint'
   | 'privacyGate'
@@ -73,6 +75,8 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   summarize: '工具结果摘要',
   summarizeHint: '这个插件只有这一个总开关：开启后 read / bash / web_fetch 的工具说明里会多一个可选参数 extract（主模型可以自己声明这次要拿回什么），结果也才可能被改写；关闭时工具保持原生形态，不覆盖任何工具、也不发任何请求。改动对之后新建的会话生效。',
   summarizeOffHint: '摘要关着：这三个工具保持原生形态，插件不发任何请求；这一组与准入判断的设置随之收起。',
+  ruleSummary: '摘要提示词摘要',
+  ruleSummaryHint: '默认勾选：没声明 extract 的候选结果也按摘要提示词判断要不要摘要。取消勾选后，只有传了 extract 的调用会被摘要，其余候选结果直接透传（诊断记录里记 rule-summary-off）——用来量出「extract 为空时按摘要提示词摘要」本身有没有必要。声明了 extract 的路径不受这个开关影响；隐私闸门照常判断，只是它的摘要动作在关闭时不被采用。',
   admissionJudge: '启用摘要准入判断',
   admissionJudgeHint: '不勾选就没有这一步（默认）：结果直接去摘要。勾选后才先做一次判断，本组的 route 与提示词也随之出现；改动要点本组的「保存」写回。',
   privacyGate: '隐私闸门',
@@ -141,6 +145,8 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   summarize: 'Summarize tool results',
   summarizeHint: 'This plugin has one master switch: turning it on adds an optional extract argument to read / bash / web_fetch (the model can declare what it wants back this time) and is the only way a result can be rewritten; while off, tools stay native, nothing is covered and no request is sent. The change applies to sessions created afterwards.',
   summarizeOffHint: 'Summarization is off: those three tools stay native and the plugin sends no request; this group and the admission settings fold away.',
+  ruleSummary: 'Summarize with the summary prompt',
+  ruleSummaryHint: 'Ticked by default: a candidate result without an extract goal is summarized through the summary prompt too. Unticked, only calls that pass extract are summarized and every other candidate result passes through unchanged (recorded as rule-summary-off) — that counts how often the prompt-based summary was worth doing at all. The extract path is unaffected, and the privacy gate still judges every result; its summary action is simply not used while this is off.',
   admissionJudge: 'Enable the admission judge',
   admissionJudgeHint: 'Unchecked (the default) skips this step: results go straight to summarization. Check it to judge first — the route and prompt of this group appear with it, and this group\'s Save writes the change.',
   privacyGate: 'Privacy gate',

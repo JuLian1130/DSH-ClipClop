@@ -365,6 +365,47 @@ describe('隐私模式与提取目标：同一份隐私规则，带目标时按�
     expect(result.isError).toBe(true)
     expect(textOf(result.content)).toContain('bash')
   })
+
+  it('带目标时输出契约里没有 keep（阴性对照：不带目标的同一份提示词里有）', async () => {
+    const withGoal = await mounted()
+    withGoal.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await withGoal.fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要邮箱地址' }))
+
+    const text = requestText(withGoal.route.requests[0]!)
+    expect(text).toContain('{"privacyVerdict":"safe"|"sensitive"|"uncertain","action":"summarize","summary":string}')
+    expect(text).not.toContain('"action":"summarize"|"keep"')
+    // 可编辑的隐私政策正文两种模式共用，提到的 keep 由这一段固定说明当场作废。
+    expect(text).toContain('action 固定为 summarize（不提供 keep）')
+
+    const plain = await mounted()
+    plain.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await plain.fixture.ctx.tools.execute(exec('bash'))
+    expect(requestText(plain.route.requests[0]!)).toContain('"action":"summarize"|"keep"')
+  })
+
+  it('结果低于摘要下限时只剩隐私判断这一次请求：不摘要、原样透传', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', SHORT_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要标题' }))
+
+    // 隐私判断不受长度限制，照发；摘要请求不该有第二条。
+    expect(route.requests).toHaveLength(1)
+    expect(requestText(route.requests[0]!)).toContain(SHORT_BODY)
+    expect(textOf(result.content)).toBe(SHORT_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({ reason: 'not-candidate' }))
+  })
+
+  it('规则摘要关闭时隐私判断照做，但它的摘要动作不被采用（记 rule-summary-off）', async () => {
+    const { fixture, route, path } = await mounted({ ruleSummary: false })
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(1)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({
+      action: 'unmodified', reason: 'rule-summary-off',
+    }))
+  })
 })
 
 describe('票 07 第 4 条：uncertain 与技术失败按失败策略处理', () => {

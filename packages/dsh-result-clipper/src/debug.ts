@@ -5,7 +5,8 @@
  * 元数据。`结果取值` 是封闭的两段式（动作 + 未改动原因）：`summary-off` 自 02，`not-candidate`、`kept`、
  * `not-shorter`、`failed` 自 03，`read-back` 自 04，`admission-no` 与「准入结论」字段自 06，`uncertain`、
  * `failed-window` 与 `rejected` 自 07。本票（08）补齐规格列出的另两个字段——`缓存观测`（前缀缓存命中）与
- * `判断器输入 token 数`（准入判断那次请求的输入规模）——并给干跑记录加一个 `dryRun` 标记。
+ * `判断器输入 token 数`（准入判断那次请求的输入规模）——并给干跑记录加一个 `dryRun` 标记。票 26 加入
+ * `rule-summary-off`（规则摘要关闭且这次没声明提取目标）。
  *
  * 同一个文件里还有一条**挂载决策记录**（`kind: 'mount'`，见 {@link MountRecord}）：每次装载写在最前面，
  * 记下目标工具各自走的是接管还是遮蔽。它是"真单关是否生效"的唯一观测点。
@@ -20,6 +21,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 /** `unmodified` 的透传原因。新增取值随引入它的机制一起加到这里。 */
 export type UnmodifiedReason =
   | 'summary-off'
+  | 'rule-summary-off'
   | 'not-candidate'
   | 'admission-no'
   | 'kept'

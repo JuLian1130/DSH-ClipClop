@@ -526,6 +526,9 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.t('maxSummarizeTokens')).toContain('token')
     // 隐私确认位是对具体 route 的声明：文案要说清「换了 route 就作废」。
     expect(fixture.t('privacyConfirmedLocalHint')).toContain('作废')
+    // 规则摘要开关：说明它只管没声明 extract 的那一路，并点名诊断记录里的取值。
+    expect(fixture.t('ruleSummaryHint')).toContain('只有传了 extract')
+    expect(fixture.t('ruleSummaryHint')).toContain('rule-summary-off')
 
     // 英文侧逐条对上中文（它不经 `fixture.t` 渲染，所以要单独断言，避免单独漂移）。
     expect(en.routeUnset).toContain('clear')
@@ -548,6 +551,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(en.minInlineTokens).toContain('tokens')
     expect(en.maxSummarizeTokens).toContain('tokens')
     expect(en.privacyConfirmedLocalHint).toContain('invalidates the confirmation')
+    expect(en.ruleSummaryHint).toContain('only calls that pass extract')
+    expect(en.ruleSummaryHint).toContain('rule-summary-off')
 
     // 页面上渲染的就是这些文案（简介与阈值标题都进了 DOM）。
     expect(groupOf(container, '摘要模型').textContent).toContain(fixture.t('summaryGroupHint'))
@@ -853,6 +858,22 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     await fireEvent.click(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')))
     await settle()
     expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['webFetchPrivacyGate'], value: true }]])
+  })
+
+  it('规则摘要开关默认勾上，取消勾选后随摘要组一次写回 false', async () => {
+    const { fixture, container } = await renderPage()
+    const box = container.querySelector('#plugin-config-result-clipper-rule-summary input') as HTMLInputElement
+    expect(box.checked).toBe(true)
+    await fireEvent.click(box)
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations).toEqual([[{ op: 'set', path: ['ruleSummary'], value: false }]])
+  })
+
+  it('镜像里没有这个键时按 host 的默认显示勾上（老版本存过的 section 不变样）', async () => {
+    const { container } = await renderPage({ ruleSummary: undefined as unknown as boolean })
+    const box = container.querySelector('#plugin-config-result-clipper-rule-summary input') as HTMLInputElement
+    expect(box.checked).toBe(true)
   })
 
   it('诊断组的 debug 路径同样要点「保存」才写回', async () => {

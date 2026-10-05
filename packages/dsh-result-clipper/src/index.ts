@@ -30,9 +30,10 @@
  * 不含正文的插件提醒；`block` 策略下拦截本身在对话里可见，不发提醒。窗口不足与普通失败在 debug 记录里取值
  * 不同（`failed-window` / `failed`，放行的未判定是 `uncertain`）。
  *
- * 每条普通派发在 debug 记录里留一条闭合的「结果取值」：摘要关闭 `summary-off`、非候选 `not-candidate`、
- * 准入判 no `admission-no`、保留全文 `kept`、没变短 `not-shorter`、按入口读回 `read-back`、放行的未判定
- * `uncertain`、失败 `failed`、窗口不足 `failed-window`、已替换 `summarized`、已拦截 `rejected`。
+ * 每条普通派发在 debug 记录里留一条闭合的「结果取值」：摘要关闭 `summary-off`、规则摘要关闭 `rule-summary-off`、
+ * 非候选 `not-candidate`、准入判 no `admission-no`、保留全文 `kept`、没变短 `not-shorter`、按入口读回
+ * `read-back`、放行的未判定 `uncertain`、失败 `failed`、窗口不足 `failed-window`、已替换 `summarized`、
+ * 已拦截 `rejected`。
  *
  * 本票（08）接入**干跑**：`dryRun` 开启且 debug 开关与日志路径都就位时，流水线照走（隐私判断、准入与摘要
  * 请求都真的发出），但交回的永远是下游决策——不替换内容、不 append 会话事件、不调用 `saveText`、不写也不查
@@ -43,6 +44,12 @@
  * 规则正文换成目标、**既不查也不写 memo**（键里没有目标，复用会把另一种问法的摘要当答案）；隐私模式不再另设
  * 提示词，而是在同一份隐私规则正文之后固定追加一段，要求按目标只交回不牵涉隐私的部分、脱敏满足不了目标时
  * 照旧返回 `sensitive`/`uncertain`。debug 记录里的 `extract` 布尔记「这次有没有声明目标」。
+ *
+ * 本票（26）收口 extract 路径的"不摘要"出口，并给规则摘要加一个对照开关。**声明了提取目标的调用，输出契约里
+ * 不再提供 `keep`**（`summary.ts` 与 `privacy.ts` 的固定外壳按 `allowKeep` 分叉，`extractRule` 也不再提它）：
+ * 那条路径上"透传"只剩一种合法来源——结果长度低于摘要下限，此时程序自己透传、**一个模型请求都不发**（隐私
+ * 闸门开着时隐私判断照发，它是闸门不是摘要能力）。另加 `ruleSummary` 开关（默认开启）：关掉后**没声明目标**的
+ * 候选结果一律透传并记 `rule-summary-off`，用来量出"`extract` 为空时按摘要提示词摘要"本身有没有必要。
  *
  * 任何路径都不得抛出——`tools/post-execute` 抛错会把整个工具调用变成错误结果；调用点的兜底 catch 只负责
  * 收住意外，正常失败各自以「透传 / 拦截」结算。
@@ -234,6 +241,9 @@ async function process(
     if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
     const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
     if (verdict.kind === 'skip') return unchanged('not-candidate')
+    // 规则摘要关闭且这次没声明提取目标：候选结果直接透传。隐私判断照做（它是闸门，不是摘要能力），它给出的
+    // 摘要动作在这一路不被采用。
+    if (goal === undefined && !config.ruleSummary.get()) return unchanged('rule-summary-off')
     // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储、不进 memo。
     if (judgement.action.action === 'keep') return unchanged('kept')
     return settle(await replace(
@@ -246,6 +256,9 @@ async function process(
   if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
   const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
   if (verdict.kind === 'skip') return unchanged('not-candidate')
+  // 规则摘要关闭（`ruleSummary`）且这次没声明提取目标：候选结果直接透传，这条取值就是该对照实验的计数。
+  // 放在候选判定之后：不是候选的结果仍记 `not-candidate`，`rule-summary-off` 才恰好是"本该摘要却没摘"的那批。
+  if (goal === undefined && !config.ruleSummary.get()) return unchanged('rule-summary-off')
 
   // memo 只在隐私关闭时参与判重（裁决 B），并且必须在准入判断之前查找——命中即整条摘要请求路径短路。干跑
   // 既不写也不查：查找会刷新最近使用次序，同样改变随后真实运行的行为，而命中与否不改变记录里的取值。
@@ -288,6 +301,8 @@ async function process(
       goal === undefined ? config.summaryPrompt.get() : extractRule(goal),
       prefix,
       verdict.text,
+      // 声明了提取目标时输出契约里没有 `keep`：那条路径上只有"长度低于摘要下限"才透传，且由程序自己透传。
+      goal === undefined,
     ),
   )
   noteUsage(observation, outcome.usage)

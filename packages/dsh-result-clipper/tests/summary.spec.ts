@@ -384,3 +384,47 @@ describe('票 09：route 不支持 off 档时，「关闭推理」仍然按不�
     expect(result).toEqual({ ok: false, failure: 'failed' })
   })
 })
+
+describe('票 26：规则摘要关闭（`ruleSummary`）时只在传了 extract 时摘要', () => {
+  it('没声明 extract 的候选结果原样透传、一个请求都不发，记 rule-summary-off', async () => {
+    const { fixture, route, path } = await mounted({ ruleSummary: false })
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(0)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({
+      action: 'unmodified', reason: 'rule-summary-off', extract: false,
+    }))
+  })
+
+  it('阳性对照：同一配置下声明了 extract 的调用照常摘要（这个开关只管没声明目标的那一路）', async () => {
+    const { fixture, route, path } = await mounted({ ruleSummary: false })
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只要标题' }))
+
+    expect(route.requests).toHaveLength(1)
+    expect(textOf(result.content)).toContain(SHORT_SUMMARY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({
+      action: 'summarized', extract: true,
+    }))
+  })
+
+  it('取值恰好是"本该摘要却没摘"的那批：非候选仍记 not-candidate，不混进 rule-summary-off', async () => {
+    const { fixture, route, path } = await mounted({ ruleSummary: false })
+    fixture.ctx.tools.register(textTool('grep', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('grep'))
+
+    expect(route.requests).toHaveLength(0)
+    expect(records(path).at(-1)?.reason).toBe('not-candidate')
+  })
+
+  it('另一个阴性对照：默认（不配这个字段）时照旧按摘要提示词摘要', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    await fixture.ctx.tools.execute(exec('bash'))
+
+    expect(route.requests).toHaveLength(1)
+    expect(records(path).at(-1)?.action).toBe('summarized')
+  })
+})
