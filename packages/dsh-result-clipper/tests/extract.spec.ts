@@ -16,7 +16,7 @@ import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deep
 import { SessionId } from '@deepseek-ai/dsh-session'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { Config } from '../src/index.ts'
+import { Config, PLUGIN_VERSION } from '../src/index.ts'
 import type { MountRecord } from '../src/index.ts'
 import {
   EXTRACT_DESCRIPTION,
@@ -325,6 +325,7 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     expect(reports).toHaveLength(1)
     expect(reports[0]).toMatchObject({
       kind: 'mount',
+      pluginVersion: expect.any(String),
       platform: process.platform,
       tools: { bash: 'takeover', web_fetch: 'takeover', pwsh: 'absent' },
     })
@@ -380,7 +381,8 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     const records = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
     const mountRecord = records.find(record => record.kind === 'mount')
     expect(mountRecord, '装载时应当留下一行挂载决策记录').toBeDefined()
-    expect(mountRecord).toMatchObject({ platform: process.platform })
+    // 与结果记录同一契约：这条记录也要能归属到当时在跑的构建（取值等于本包的版本号）。
+    expect(mountRecord).toMatchObject({ pluginVersion: PLUGIN_VERSION, platform: process.platform })
     // 这条夹具里的 `bash` 由测试先注册（=原生还在），所以插件走遮蔽而不是接管。
     expect(mountRecord!.tools).toMatchObject({ bash: 'shadow' })
   })

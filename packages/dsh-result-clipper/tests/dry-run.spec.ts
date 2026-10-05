@@ -334,8 +334,8 @@ describe('票 08 第 4 条：干跑记录受同一条禁写约束', () => {
     // 记录只留动作、结果取值与观测字段：没有放摘要文本、原文或入口的位置。
     const [record] = readRecords(path)
     expect(Object.keys(record!).sort()).toEqual([
-      'action', 'admission', 'cacheObservation', 'dryRun', 'durationMs', 'extract', 'judgeInputTokens', 'resultBytes',
-      'toolName',
+      'action', 'admission', 'cacheObservation', 'dryRun', 'durationMs', 'extract', 'judgeInputTokens', 'pluginVersion',
+      'resultBytes', 'toolName',
     ])
   })
 })

@@ -3,8 +3,8 @@
  *
  * 1. **结果取值**：十一条已知路径各自产出**互不相同**的「动作 + 原因」取值，且每条都能在自己的 debug 记录
  *    里找到对应取值。断言方式是逐条路径取出它那条记录、与期望取值逐字段相等，再把全部取值放在一起查重。
- * 2. **debug 字段**：一条记录恰好是规格列出的七项（工具名、结果大小、准入结论、结果取值、调用耗时、缓存
- *    观测、判断器输入 token 数），且两个观测字段的读数与假 route 报告的用量对得上。
+ * 2. **debug 字段**：一条记录恰好是规格列出的八项（插件版本、工具名、结果大小、准入结论、结果取值、调用耗时、
+ *    缓存观测、判断器输入 token 数），且两个观测字段的读数与假 route 报告的用量对得上。
  * 3. **配置默认值**：schema 的逐字段默认、保存后立即生效、逐字段清掉覆盖后回落到底层默认。
  *
  * @module
@@ -14,7 +14,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
-import { Config } from '../src/index.ts'
+import { Config, PLUGIN_VERSION } from '../src/index.ts'
 import { mount, exec, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
@@ -302,7 +302,7 @@ describe('票 08 全量闭合一：上述已知路径的取值互不相同，且
 })
 
 describe('票 08 全量闭合二：debug 字段齐全', () => {
-  it('一次完整摘要的记录恰好是七项，两个观测字段与假 route 报告的用量对得上', async () => {
+  it('一次完整摘要的记录恰好是八项，两个观测字段与假 route 报告的用量对得上', async () => {
     const path = join(tempRoot(), 'debug.jsonl')
     // 第一段是准入判断（yes），第二段是摘要；两段都带用量，且第二段命中前缀缓存。
     const route = new FakeRoute([
@@ -317,9 +317,11 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
 
     const [record] = readRecords(path)
     expect(Object.keys(record!).sort()).toEqual([
-      'action', 'admission', 'cacheObservation', 'durationMs', 'extract', 'judgeInputTokens', 'resultBytes', 'toolName',
+      'action', 'admission', 'cacheObservation', 'durationMs', 'extract', 'judgeInputTokens', 'pluginVersion',
+      'resultBytes', 'toolName',
     ])
     expect(record).toEqual({
+      pluginVersion: PLUGIN_VERSION,
       toolName: 'bash',
       resultBytes: Buffer.byteLength(LONG_BODY, 'utf8'),
       admission: 'yes',
@@ -334,7 +336,7 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
     })
   })
 
-  it('没发任何模型请求的记录同样七项齐全，两个观测字段是「没有观测」的取值', async () => {
+  it('没发任何模型请求的记录同样八项齐全，两个观测字段是「没有观测」的取值', async () => {
     const path = join(tempRoot(), 'debug.jsonl')
     const fixture = await mounted({ summarize: false, debug: true, debugPath: path })
     fixture.ctx.tools.register(textTool('bash', SHORT_BODY))

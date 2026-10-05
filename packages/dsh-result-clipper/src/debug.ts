@@ -6,7 +6,8 @@
  * `not-shorter`、`failed` 自 03，`read-back` 自 04，`admission-no` 与「准入结论」字段自 06，`uncertain`、
  * `failed-window` 与 `rejected` 自 07。本票（08）补齐规格列出的另两个字段——`缓存观测`（前缀缓存命中）与
  * `判断器输入 token 数`（准入判断那次请求的输入规模）——并给干跑记录加一个 `dryRun` 标记。票 26 加入
- * `rule-summary-off`（规则摘要关闭且这次没声明提取目标）。
+ * `rule-summary-off`（规则摘要关闭且这次没声明提取目标）。0.1.4 起每条记录（含挂载决策记录）带 `pluginVersion`：
+ * 日志按追加写、跨版本混在一个文件里，没有这个字段就无法把观测归属到当时在跑的构建。
  *
  * 同一个文件里还有一条**挂载决策记录**（`kind: 'mount'`，见 {@link MountRecord}）：每次装载写在最前面，
  * 记下目标工具各自走的是接管还是遮蔽。它是"真单关是否生效"的唯一观测点。
@@ -14,9 +15,34 @@
  * @module
  */
 
+import { readFileSync } from 'node:fs'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+
+/**
+ * 写出这些记录的插件版本：本包 `package.json` 的 `version`，读不到时为 `unknown`。
+ *
+ * 日志按追加写，同一个文件里混着多个版本的记录，而取值的词表是**累加**的——`not-candidate` 这类取值哪个版本都会
+ * 写，所以事后靠字段和取值反推构建是不可靠的（本机真实日志就这样考古过一次：想知道哪些观测属于当时在跑的版本，
+ * 只能靠提交时间与文案改版去猜）。版本现读而不是抄成常量：抄一份就会和 `package.json` 漂移，而漂移的版本号比
+ * 没有版本号更糟。
+ */
+export const PLUGIN_VERSION: string = readPluginVersion()
+
+/**
+ * 读这个包自己的版本号。
+ * @returns `package.json` 的 `version`；文件缺失、解析失败或字段不是字符串时为 `unknown`（诊断字段缺一个不得影响写盘）。
+ */
+function readPluginVersion(): string {
+  try {
+    const parsed = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: unknown }
+    return typeof parsed.version === 'string' ? parsed.version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
 
 /** `unmodified` 的透传原因。新增取值随引入它的机制一起加到这里。 */
 export type UnmodifiedReason =
@@ -47,6 +73,8 @@ export type DebugOutcome =
 
 /** 一行 debug JSONL。 */
 export type DebugRecord = DebugOutcome & {
+  /** 写下这条记录的插件版本（{@link PLUGIN_VERSION}）；日志跨版本追加，靠它把记录归属到构建。 */
+  pluginVersion: string
   /** 工具名。 */
   toolName: string
   /** 结果大小：文本块的 UTF-8 字节数（图片等非文本块不计入）。 */
@@ -110,6 +138,8 @@ export type MountMode = 'takeover' | 'shadow' | 'absent'
  */
 export type MountRecord = {
   readonly kind: 'mount'
+  /** 写下这条记录的插件版本（{@link PLUGIN_VERSION}）；与结果记录同一用途。 */
+  readonly pluginVersion: string
   /** `process.platform`：接管计划按平台不同，看诊断时先看这个。 */
   readonly platform: string
   /** 工具名 → 走的路。缺键表示那个工具不在本次接管计划里，也没有被遮蔽。 */

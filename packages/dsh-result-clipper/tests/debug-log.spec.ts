@@ -62,6 +62,9 @@ function readRecords(path: string): unknown[] {
   return readFileSync(path, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line) as unknown)
 }
 
+/** 本包 `package.json` 的版本号：记录里的 `pluginVersion` 必须与它一致（不是抄来的常量）。 */
+const packageVersion = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
+
 describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => {
   it('一条工具结果写一行，字段是工具名、结果大小、准入结论、调用耗时、两个观测字段与 summary-off', async () => {
     const root = tempRoot()
@@ -77,6 +80,7 @@ describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => 
     const records = readRecords(path)
     expect(records).toHaveLength(1)
     expect(records[0]).toEqual({
+      pluginVersion: packageVersion,
       toolName: 'bash',
       resultBytes: Buffer.byteLength(body, 'utf8'),
       admission: 'not-applicable',
@@ -223,8 +227,8 @@ describe('票 02 第 5 条：记录不含原文、摘要正文、提示词与凭
     expect(raw).not.toContain('sk-credential')
     const [record] = readRecords(path) as [Record<string, unknown>]
     expect(Object.keys(record).sort()).toEqual([
-      'action', 'admission', 'cacheObservation', 'durationMs', 'extract', 'judgeInputTokens', 'reason', 'resultBytes',
-      'toolName',
+      'action', 'admission', 'cacheObservation', 'durationMs', 'extract', 'judgeInputTokens', 'pluginVersion',
+      'reason', 'resultBytes', 'toolName',
     ])
   })
 })

@@ -73,6 +73,7 @@ import type { Config } from './config.ts'
 import {
   appendDebugRecord,
   measureContent,
+  PLUGIN_VERSION,
   type AdmissionVerdict,
   type DebugOutcome,
   type DebugRecord,
@@ -512,6 +513,7 @@ async function record(
   const path = config.debugPath.get()
   if (path === '') return
   const line: DebugRecord = {
+    pluginVersion: PLUGIN_VERSION,
     toolName,
     resultBytes: measureContent(result.content),
     admission: applied.admission,

@@ -26,7 +26,7 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import * as bashTool from '@deepseek-ai/dsh-tool-bash'
 import * as webTool from '@deepseek-ai/dsh-tool-web'
 // 挂载决策的取值与 debug 记录同源：这里交出去的记录直接就是写进日志的那一行。
-import type { MountMode, MountRecord } from './debug.ts'
+import { PLUGIN_VERSION, type MountMode, type MountRecord } from './debug.ts'
 
 /** 标在已被本模块扩展过的定义上，避免同一次装载里重复补参数或重复包 execute。 */
 const EXTENDED = Symbol('dsh-result-clipper:extract')
@@ -306,6 +306,6 @@ export function installExtractArg(
       agent.ctx.tools.register(extendedDefinition(native, name))
       modes[name] = 'shadow'
     }
-    if (first) report?.({ kind: 'mount', platform: process.platform, tools: modes })
+    if (first) report?.({ kind: 'mount', pluginVersion: PLUGIN_VERSION, platform: process.platform, tools: modes })
   })
 }
