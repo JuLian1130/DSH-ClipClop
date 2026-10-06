@@ -15,13 +15,17 @@ import { Context } from '@deepseek-ai/cordis'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { Config, PLUGIN_VERSION } from '../src/index.ts'
 import type { MountRecord } from '../src/index.ts'
 import {
   EXTRACT_DESCRIPTION,
+  WHOLE_RESULT,
   extractGoalOf,
   extractRule,
+  isWholeResult,
   wantsExactText,
   extendedDefinition,
   extendInPlace,
@@ -165,6 +169,97 @@ describe('声明逐字原文时按原文透传（不发摘要请求）', () => {
   })
 })
 
+describe('isWholeResult：要整份结果的唯一写法', () => {
+  it.each([
+    [WHOLE_RESULT, true],
+    ['whole_result', true],
+    ['Whole_Result', true],
+    // 反例：这些是**目标**（结果会被缩成这几个词），不是"要整份"。
+    ['whole file', false],
+    ['everything', false],
+    ['full text', false],
+    ['WHOLE_RESULT please', false],
+  ])('%s → %s', (goal, expected) => {
+    expect(isWholeResult(goal)).toBe(expected)
+  })
+})
+
+describe('哨兵 WHOLE_RESULT：显式要整份就按原文透传', () => {
+  it('候选结果：一个请求都不发、结果逐字不变、记 whole-result、不发提醒', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const notices: AppendedNotice[] = []
+    const result = await fixture.ctx.tools.execute(
+      exec('bash', undefined, { command: 'ls', extract: WHOLE_RESULT }, 's1', notices),
+    )
+
+    expect(route.requests).toHaveLength(0)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(notices).toHaveLength(0)
+    expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
+      .toMatchObject({ action: 'unmodified', reason: 'whole-result', extract: true })
+  })
+
+  it('规则摘要开着也一样：哨兵不是"没声明"，不走通用摘要那条退路', async () => {
+    const { fixture, route } = await mounted({ ruleSummary: true })
+    fixture.ctx.tools.register(textTool('read', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('read', undefined, { file_path: 'a.ts', extract: 'whole_result' }))
+
+    expect(route.requests).toHaveLength(0)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+  })
+
+  it('低于摘要下限的哨兵仍记 not-candidate：哨兵不改变候选判定', async () => {
+    const { fixture, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', 'x'.repeat(10)))
+    await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'ls', extract: WHOLE_RESULT }))
+
+    expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
+      .toMatchObject({ action: 'unmodified', reason: 'not-candidate' })
+  })
+})
+
+describe('必填参数漏填：照默认处理，同时提醒一次', () => {
+  it('默认（规则摘要关）：结果原样透传、记 rule-summary-off，并追加一条带解法的提醒', async () => {
+    const { fixture, route, path } = await mounted({ ruleSummary: false })
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const notices: AppendedNotice[] = []
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+
+    expect(route.requests).toHaveLength(0)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    // 同一会话同类提醒只发一次。
+    expect(notices).toHaveLength(1)
+    expect(textOf(notices[0]!.message.content)).toContain(WHOLE_RESULT)
+    expect(textOf(notices[0]!.message.content)).toContain('extract')
+    expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
+      .toMatchObject({ action: 'unmodified', reason: 'rule-summary-off', extract: false })
+  })
+
+  it('规则摘要开着时照旧摘要，但提醒照发（漏填是模型侧的错误，与开关无关）', async () => {
+    const { fixture, route } = await mounted({ ruleSummary: true })
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const notices: AppendedNotice[] = []
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+
+    expect(route.requests).toHaveLength(1)
+    expect(textOf(result.content)).toContain(SHORT_SUMMARY)
+    expect(notices).toHaveLength(1)
+  })
+
+  it('低于摘要下限时不提醒：不是候选的结果本来就不该有人填参数', async () => {
+    const { fixture, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', 'x'.repeat(10)))
+    const notices: AppendedNotice[] = []
+    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+
+    expect(notices).toHaveLength(0)
+    expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
+      .toMatchObject({ action: 'unmodified', reason: 'not-candidate' })
+  })
+})
+
 describe('extractRule：目标进规则正文，且不再提 keep', () => {
   it('含目标原文，且说明"原样"也可以只贴片段', () => {
     const rule = extractRule('只要 redis 段的两个值')
@@ -221,10 +316,11 @@ describe('extendedDefinition：补参数、追加说明、执行时摘掉 extrac
     } as unknown as ToolDefinition
   }
 
-  it('参数表多出 extract，原有参数与说明都保留', () => {
+  it('参数表多出 extract 并把它标为必填，原有参数与说明都保留', () => {
     const native = textTool('read', LONG_BODY)
     const extended = extendedDefinition(native, 'read')
     expect(Object.keys(extended.parameters.properties ?? {})).toContain('extract')
+    expect(extended.parameters.required).toEqual(['extract'])
     expect(extended.parameters).not.toBe(native.parameters)
     expect(extended.description).toContain(native.description)
     expect(extended.description).toContain(READ_GUIDANCE)
@@ -236,7 +332,17 @@ describe('extendedDefinition：补参数、追加说明、执行时摘掉 extrac
     const native = textTool('read', LONG_BODY)
     const once = extendedDefinition(native, 'read')
     expect(extendedDefinition(once, 'read')).toBe(once)
-    expect(once.description.split('extract is optional')).toHaveLength(2)
+    expect(once.description.split(READ_GUIDANCE)).toHaveLength(2)
+  })
+
+  it('原生已有的必填项照旧保留：必填表是追加，不是顶替', () => {
+    const native = defineContentToolFixture({
+      name: 'read',
+      description: 'read',
+      parameters: { file_path: { type: 'string', required: true } },
+      async execute(): Promise<ContentBlock[]> { return [{ type: 'text', text: LONG_BODY }] },
+    })
+    expect(extendedDefinition(native, 'read').parameters.required).toEqual(['file_path', 'extract'])
   })
 
   it('执行体把 extract 摘掉后委托原生', async () => {

@@ -17,8 +17,15 @@ import type { ContentBlock, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { PostToolDecision } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
-import { composeEntry } from '../src/entry.ts'
-import { requestModelText } from '../src/summary.ts'
+import { ENTRY_RESERVE, composeEntry } from '../src/entry.ts'
+import {
+  SUMMARY_CEILING_TOKENS,
+  SUMMARY_FLOOR_TOKENS,
+  parseSummaryOutput,
+  requestModelText,
+  salvageSummary,
+  summarizeBudget,
+} from '../src/summary.ts'
 import { DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
@@ -426,5 +433,86 @@ describe('票 26：规则摘要关闭（`ruleSummary`）时只在传了 extract 
 
     expect(route.requests).toHaveLength(1)
     expect(records(path).at(-1)?.action).toBe('summarized')
+  })
+})
+
+describe('票 40：输出预算随输入放大（撞满预算就透传，不算失败）', () => {
+  it('预算 = 输入估算的八分之一，夹在下限与上限之间', () => {
+    expect(summarizeBudget(0)).toBe(SUMMARY_FLOOR_TOKENS)
+    // 4,096 估算单位以下与放大前逐字相同：预算就是下限。
+    expect(summarizeBudget(4096)).toBe(SUMMARY_FLOOR_TOKENS)
+    expect(summarizeBudget(8192)).toBe(1024)
+    expect(summarizeBudget(1_000_000)).toBe(SUMMARY_CEILING_TOKENS)
+  })
+
+  it('上限由「摘要 + 入口说明留在旧结果裁剪器阈值以内」反推（改上限必须重新检查这条）', () => {
+    expect(SUMMARY_CEILING_TOKENS * 4 + ENTRY_RESERVE).toBeLessThanOrEqual(8192)
+  })
+
+  it('请求带上算出来的预算：原文更大的一发预算更大，且请求本身照发', async () => {
+    const { fixture, route } = await mounted()
+    fixture.ctx.tools.register(textTool('read', 'x'.repeat(40_000)))
+    await fixture.ctx.tools.execute(exec('read', undefined, { extract: '这个文件在做什么' }))
+
+    expect(route.requests).toHaveLength(1)
+    // 40,000 字符 ≈ 10,004 估算单位（每块 4 字符/token 加块开销），八分之一 = 1251。
+    expect(route.requests[0]?.maxTokens).toBe(summarizeBudget(10_004))
+    expect(route.requests[0]?.maxTokens).toBeGreaterThan(SUMMARY_FLOOR_TOKENS)
+  })
+
+  it('终止原因是 max-tokens 时按原文透传、记 truncated：切了一半的正文不当摘要', async () => {
+    // 这条答复的形状**刚好能被抢救**（开头是 summarize 外壳、引号已闭合），所以它同时钉住「截断优先于抢救」。
+    const half = '{"action":"summarize","summary":"region.ts lines 180-339 verbatim:\\n\\n180:   signal?: AbortSignal,'
+    const { fixture, route, path } = await mounted({}, [{ text: half, finish: 'max-tokens' }])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '只说这个函数做什么' }))
+
+    expect(route.requests).toHaveLength(1)
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({
+      action: 'unmodified', reason: 'truncated', extract: true,
+    }))
+  })
+})
+
+describe('票 40：外壳不完整时抢救摘要正文', () => {
+  it('正文写完、只少一个收尾 `}`：抢救出摘要并照常替换（不再记 failed）', async () => {
+    const summary = 'Lines 100-229 of sdk.snapshot.ts: ends fileURLToPath helper (100-101).'
+    const { fixture, path } = await mounted({}, [{ text: `{"action":"summarize","summary":"${summary}"` }])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '这个快照文件里有什么' }))
+
+    expect(textOf(result.content)).toContain(summary)
+    expect(textOf(result.content)).toContain(fixture.spill!.refs[0]!.locator)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'summarized' }))
+  })
+
+  it('引号没闭合时不抢救：正文确实被切过，按原文透传并记 failed', async () => {
+    const { fixture, path } = await mounted({}, [{ text: '{"action":"summarize","summary":"cut off here' }])
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: '这个文件在做什么' }))
+
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({
+      action: 'unmodified', reason: 'failed',
+    }))
+  })
+
+  it('salvageSummary 只认那一种形状', () => {
+    const whole = '{"action":"summarize","summary":"a summary"}'
+    expect(parseSummaryOutput(whole)).toEqual({ action: 'summarize', summary: 'a summary' })
+    // 严格解析能成功时抢救根本不该被问到；这里钉的是"完整 JSON 也能被抢救成同一条结论"。
+    expect(salvageSummary(whole)).toEqual({ action: 'summarize', summary: 'a summary' })
+    // 少了收尾 `}`：抢救。
+    expect(salvageSummary('{"action":"summarize","summary":"a summary"'))
+      .toEqual({ action: 'summarize', summary: 'a summary' })
+    // 引号没闭合：那是被截断的正文，不抢救。
+    expect(salvageSummary('{"action":"summarize","summary":"a summ')).toBeUndefined()
+    // 别的动作或别的形状一律不猜。
+    expect(salvageSummary('{"action":"keep"}')).toBeUndefined()
+    expect(salvageSummary('{"privacyVerdict":"safe","action":"summarize","summary":"x"')).toBeUndefined()
+    expect(salvageSummary('Sorry, I cannot do that.')).toBeUndefined()
+    // 空正文不算结论。
+    expect(salvageSummary('{"action":"summarize","summary":""')).toBeUndefined()
   })
 })

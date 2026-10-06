@@ -10,9 +10,14 @@
 
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 
-/** 一段脚本化答复：文本（可带用量）、抛错、以带稳定错误码的终止错误块收场，或挂到请求的 signal 中止。 */
+/** 一段脚本化答复：文本（可带用量与终止原因）、抛错、以带稳定错误码的终止错误块收场，或挂到请求的 signal 中止。 */
 export type FakeReply =
-  | { readonly text: string; readonly usage?: TokenUsage }
+  | {
+    readonly text: string
+    readonly usage?: TokenUsage
+    /** 终止原因；`max-tokens` 表示这次输出撞满了请求给出的输出预算（票 40 的截断路径）。默认 `stop`。 */
+    readonly finish?: 'max-tokens'
+  }
   | { readonly error: string }
   /** 走 DSH 的终止错误块（真实现的适配器选择与 setup 失败就是这条路），`code` 是稳定机器码。 */
   | { readonly failure: { readonly code: string; readonly message?: string } }
@@ -101,7 +106,7 @@ export class FakeRoute {
     // 用量块照 DSH 的流协议排在终止块之前（适配器在 finish 前报告 usage）；没给就整块不发，
     // 「底层没报告用量」这条路径因此与「报告了 0」在夹具里是可分开的。
     if (reply.usage !== undefined) yield { type: 'usage', usage: reply.usage }
-    yield { type: 'finish', reason: { kind: 'stop' } }
+    yield { type: 'finish', reason: reply.finish === 'max-tokens' ? { kind: 'max-tokens' } : { kind: 'stop' } }
   }
 }
 

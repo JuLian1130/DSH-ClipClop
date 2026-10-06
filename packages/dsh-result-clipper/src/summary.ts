@@ -11,7 +11,8 @@
  * （`extract`）时输出契约里没有 `keep`**（{@link SHELL_SUMMARIZE_ONLY}）：那条路径上"不摘要"只有一种合法来源，
  * 就是结果长度低于摘要下限、程序自己透传。
  *
- * 失败一律以 `undefined` 交回调用点（模型不可用、超时、空结果、非法结果），由调用点按「原文透传」处理。
+ * 失败一律以 `undefined` 交回调用点（模型不可用、超时、撞满输出预算被截断、空结果、非法结果），由调用点按
+ * 「原文透传」处理；`SummaryOutcome.failure` 区分触发透传的原因（其中 `truncated` 意味着这次预算不够用）。
  * 这一层不抛：`tools/post-execute` 抛错会把工具调用变成错误结果。
  *
  * @module
@@ -27,9 +28,43 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, LlmRuntime, TokenUsage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_SUMMARY_RULE } from './rules.ts'
+import { ENTRY_RESERVE } from './entry.ts'
 
-/** 摘要输出上限（固定常量，不可配）：输出 512 token。 */
-export const SUMMARY_MAX_TOKENS = 512
+/**
+ * 摘要输出预算的下限（token）：原文不大时模型也不需要更多。
+ *
+ * 准入请求固定用它——它的输出只有一两个字段。摘要与隐私请求按 {@link summarizeBudget} 随输入大小放大。
+ */
+export const SUMMARY_FLOOR_TOKENS = 512
+
+/** 摘要输出预算与输入估算大小的比例：八分之一（见 {@link summarizeBudget}）。 */
+const SUMMARY_BUDGET_RATIO = 8
+
+/** 旧结果裁剪器的默认阈值（字符）：插件不读它的配置，这里按默认值算摘要正文的字符上界。 */
+const PRUNER_THRESHOLD_CHARS = 8192
+
+/**
+ * 摘要输出预算的上限（token）。
+ *
+ * 由「摘要 + 入口说明必须留在旧结果裁剪器阈值以内」这条设计约束反推（设计文档「长度约束」）：减去入口说明的
+ * 预留上界，再按最保守的 4 字符/token 折算。放宽这条上限要重新检查那条约束。
+ */
+export const SUMMARY_CEILING_TOKENS = Math.floor((PRUNER_THRESHOLD_CHARS - ENTRY_RESERVE) / 4)
+
+/**
+ * 一次摘要请求的输出预算：原文估算大小的八分之一，夹在 [下限, 上限] 之间。
+ *
+ * 为什么随原文放大：固定 512 对 4,096 估算单位的结果是八分之一、对 12,800 单位的 `read` 只有二十五分之一，
+ * 后者越容易撞满预算，而撞满的代价是最大那条结果反过来整条透传——正是插件要避免的那种回合。实测（exp9）
+ * 43 条摘要把 461,279 字符压到 45,052 字符（约 10%），八分之一给这条常态留了余量；原文在 4,096 估算单位
+ * 以下时预算仍是下限 512，与放大前逐字相同。
+ * @param inputTokens - 这次请求要处理的输入估算大小（估算器单位）。
+ * @returns 这次请求的 `maxTokens`。
+ */
+export function summarizeBudget(inputTokens: number): number {
+  const scaled = Math.ceil(inputTokens / SUMMARY_BUDGET_RATIO)
+  return Math.min(SUMMARY_CEILING_TOKENS, Math.max(SUMMARY_FLOOR_TOKENS, scaled))
+}
 
 /** 摘要模型请求的超时（固定常量，不可配）：20s。 */
 export const SUMMARY_TIMEOUT_MS = 20_000
@@ -169,6 +204,36 @@ export function parseSummaryOutput(text: string): SummaryAction | undefined {
   return parseAction(action, summary)
 }
 
+/** `summarize` 输出的固定开头：抢救只认它，别的形状一律不猜。 */
+const SALVAGE_PREFIX = /^\s*\{\s*"action"\s*:\s*"summarize"\s*,\s*"summary"\s*:\s*"/
+
+/** 闭好引号、其后只允许再有一个可选的 `}`：正文写完、外壳没写完的那种收尾。 */
+const SALVAGE_TAIL = /^([\s\S]*)"\s*\}?\s*$/
+
+/**
+ * 从**外壳不完整**的输出里抢救摘要正文（票 40 ④）。
+ *
+ * 实测那批解析失败里有一条内容已经写完、只少一个收尾 `}`（795 字符，`{"action":"summarize","summary":"…。"`），
+ * 严格解析把它整条丢掉、结果按 `failed` 透传。抢救只认「`summarize` 的固定开头 + 引号已闭合」这一种形状：
+ * 引号没闭合说明正文确实被切过，不抢救（那条路在 {@link requestModelText} 里已经是 `truncated`）。抢救结果照常
+ * 走长度比较，所以退化成极短正文的那一侧由 `not-shorter` 兜住。
+ * @param text - 模型输出的正文。
+ * @returns 抢救出的结论；形状不符或正文不是合法 JSON 字符串时为 `undefined`。
+ */
+export function salvageSummary(text: string): SummaryAction | undefined {
+  const prefix = SALVAGE_PREFIX.exec(text)
+  if (prefix === null) return undefined
+  const tail = SALVAGE_TAIL.exec(text.slice(prefix[0].length))
+  if (tail === null) return undefined
+  let summary: unknown
+  try {
+    summary = JSON.parse(`"${tail[1] ?? ''}"`)
+  } catch {
+    return undefined
+  }
+  return typeof summary === 'string' && summary !== '' ? { action: 'summarize', summary } : undefined
+}
+
 /**
  * 解析输出里的 `action` / `summary` 两个字段。摘要请求与隐私模式的合并请求（`safe` 分支）共用它。
  * @param action - 输出里的动作字段。
@@ -183,10 +248,12 @@ export function parseAction(action: unknown, summary: unknown): SummaryAction | 
 }
 
 /**
- * 一次模型请求的失败分类：**本地窗口不足**与其余失败分开（规格「契约 · 结果取值」要求窗口不足与普通失败
- * 不同值）。只有底层明确报告上下文超窗时才取 `failed-window`；超时、不可用、错误结束等一律 `failed`。
+ * 一次模型请求的失败分类：**本地窗口不足**、**输出撞满预算被截断**与其余失败分开（规格「契约 · 结果取值」
+ * 要求窗口不足与普通失败不同值；截断是"模型想说但没说完"，与"这次请求没做成"是两回事）。只有底层明确报告
+ * 上下文超窗时才取 `failed-window`，只有终止原因是 `max-tokens` 时才取 `truncated`；超时、不可用、错误结束等
+ * 一律 `failed`。
  */
-export type ModelRequestFailure = 'failed' | 'failed-window'
+export type ModelRequestFailure = 'failed' | 'failed-window' | 'truncated'
 
 /**
  * 一次模型请求的用量观测。三类输入 token 按 DSH 口径**各自独立计数**（未缓存的 `inputTokens`、缓存读、
@@ -207,14 +274,16 @@ export type ModelTextResult =
   | { readonly ok: false; readonly failure: ModelRequestFailure }
 
 /**
- * 一次摘要请求的收场：解析出的结论与这次请求的用量。两者各自可为空——结论非法与底层没报告用量都不是失败
- * 的同义词，所以不合并。
+ * 一次摘要请求的收场：解析出的结论、这次请求的用量与失败分类。三者各自可为空——结论非法与底层没报告用量
+ * 都不是失败的同义词，所以不合并；`action` 为空时 `failure` 必不为空（它是原因）。
  */
 export interface SummaryOutcome {
-  /** 解析出的结论；调用失败或非法结果时为 `undefined`。 */
+  /** 解析出的结论；调用失败、输出被截断或结论非法时为 `undefined`。 */
   readonly action: SummaryAction | undefined
   /** 这次请求的用量；底层没报告时为 `undefined`。 */
   readonly usage: ModelCallUsage | undefined
+  /** `action` 为空时的原因；成功解析出结论时为 `undefined`。 */
+  readonly failure: ModelRequestFailure | undefined
 }
 
 /**
@@ -266,6 +335,9 @@ async function attemptModelText(
   }
   const finish = assembler.finish
   if (finish.kind === 'aborted') return { result: { ok: false, failure: 'failed' }, code: undefined }
+  // 撞满 `maxTokens`：正文必然残缺（实测截在行号或转义序列中间），所以它不是"输出格式不对"，而是"这次预算不够"。
+  // 调用点据此按原文透传，并且不做抢救——把切了一半的正文当摘要交回会把答案切掉。
+  if (finish.kind === 'max-tokens') return { result: { ok: false, failure: 'truncated' }, code: undefined }
   if (finish.kind === 'error') {
     return {
       result: { ok: false, failure: classifyFailure(finish.failure.code, finish.failure.message) },
@@ -306,7 +378,8 @@ function classifyFailure(code: string | undefined, detail: string): ModelRequest
  * @param model - 摘要 route 的 model id。
  * @param effort - 这次请求的推理档位；`undefined` 表示不带该字段（不推理、或该 route 的档位表判定不可用）。
  * @param prompt - {@link composeSummaryPrompt} 的产物。
- * @returns 解析出的结论与这次请求的用量；任何失败都是空结论。
+ * @param maxTokens - 这次请求的输出预算；调用点按 {@link summarizeBudget} 从输入大小算出。
+ * @returns 解析出的结论、这次请求的用量与失败分类；输出被截断时结论为空、分类为 `truncated`。
  */
 export async function requestSummary(
   llm: LlmRuntime,
@@ -314,20 +387,23 @@ export async function requestSummary(
   model: string,
   effort: string | undefined,
   prompt: string,
+  maxTokens: number,
 ): Promise<SummaryOutcome> {
   const options: GenerateOptions = {
     provider,
     model,
     ...effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) },
     temperature: 0,
-    maxTokens: SUMMARY_MAX_TOKENS,
+    maxTokens,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
   const result = await requestModelText(llm, options)
-  return result.ok
-    ? { action: parseSummaryOutput(result.text), usage: result.usage }
-    : { action: undefined, usage: undefined }
+  if (!result.ok) return { action: undefined, usage: undefined, failure: result.failure }
+  // 严格解析不成立时抢救一次：只覆盖"正文写完、外壳没写完"这一种形状。被预算截断的那条路在上面已经是
+  // `truncated`、走不到这里，所以抢救不会把切了一半的正文当摘要交回。
+  const action = parseSummaryOutput(result.text) ?? salvageSummary(result.text)
+  return { action, usage: result.usage, failure: action === undefined ? 'failed' : undefined }
 }
 
 /**

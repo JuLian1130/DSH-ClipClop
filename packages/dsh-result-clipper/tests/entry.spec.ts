@@ -16,7 +16,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Config } from '../src/index.ts'
-import { composeEntry } from '../src/entry.ts'
+import { ENTRY_RESERVE, composeEntry } from '../src/entry.ts'
+import { SUMMARY_CEILING_TOKENS, SUMMARY_FLOOR_TOKENS } from '../src/summary.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { FakeRoute } from './support/route.ts'
@@ -145,13 +146,15 @@ describe('票 04 第 3、4 条：入口说明的形状与位置', () => {
     expect(content.endsWith('）')).toBe(true)
   })
 
-  it('摘要输出受固定的 512 token 上限约束（总长留在 8192 字符阈值内）', async () => {
+  it('摘要输出预算受「总长留在 8192 字符阈值内」约束（下限 512，上限由这条约束反推）', async () => {
     const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
 
-    // 总长这一半由固定的输出上限兑现：正文最多 512 token（≈2048 字符）加入口说明，远低于裁剪器阈值 8192。
-    expect(route.requests[0]?.maxTokens).toBe(512)
+    // 这段正文低于 4,096 估算单位，所以预算是下限，与放大之前逐字相同。
+    expect(route.requests[0]?.maxTokens).toBe(SUMMARY_FLOOR_TOKENS)
+    // 上限一侧：正文按最保守的 4 字符/token 折算，加入口说明的预留上界仍在裁剪器阈值以内。
+    expect(SUMMARY_CEILING_TOKENS * 4 + ENTRY_RESERVE).toBeLessThanOrEqual(8192)
   })
 })
 

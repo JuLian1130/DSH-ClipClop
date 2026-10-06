@@ -37,8 +37,11 @@ class ScriptedAdapter extends LlmAdapter {
 
   #mainCalls = 0
 
-  /** @param summary - 摘要请求回的说明正文。 */
-  constructor(private readonly summary: string) {
+  /**
+   * @param summary - 摘要请求回的说明正文。
+   * @param toolArguments - 脚本里那次工具调用的参数 JSON。
+   */
+  constructor(private readonly summary: string, private readonly toolArguments: string) {
     super()
   }
 
@@ -73,8 +76,8 @@ class ScriptedAdapter extends LlmAdapter {
     if (this.#mainCalls === 1) {
       const id = ToolCallId('scripted-bash')
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-      yield { type: 'tool-call-delta', index: 0, id, name: TOOL, argumentsDelta: '{}' }
-      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: TOOL, arguments: '{}' } }
+      yield { type: 'tool-call-delta', index: 0, id, name: TOOL, argumentsDelta: this.toolArguments }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: TOOL, arguments: this.toolArguments } }
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
     }
@@ -126,17 +129,20 @@ export interface LoopFixture {
  * @param config - 被测插件的配置。
  * @param body - `bash` 工具返回的正文。
  * @param summary - 摘要请求回的说明正文。
+ * @param toolArguments - 脚本里那次工具调用的参数 JSON；默认 `{}`。`extract` 是必填参数，所以想走摘要那条
+ *   路的用例要在这里把它写出来（不写就是"漏填"，会多出一条会话提醒）。
  * @returns 夹具；turn 已收尾。
  */
 export async function runLoop(
   config: Schemastery.TypeS<typeof Config>,
   body: string,
   summary: string,
+  toolArguments = '{}',
 ): Promise<LoopFixture> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(TokenMeter)
-  const adapter = new ScriptedAdapter(summary)
+  const adapter = new ScriptedAdapter(summary, toolArguments)
   ctx.llm.registerAdapter(['mock'], adapter)
   const spill = new FakeSpill()
   ctx.provide('spillStore', spill as never)

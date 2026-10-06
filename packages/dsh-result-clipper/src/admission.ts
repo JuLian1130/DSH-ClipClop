@@ -16,7 +16,7 @@
 
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, requestModelText } from './summary.ts'
+import { SUMMARY_FLOOR_TOKENS, SUMMARY_TIMEOUT_MS, requestModelText } from './summary.ts'
 import type { ModelCallUsage } from './summary.ts'
 import { DEFAULT_ADMISSION_RULE } from './rules.ts'
 
@@ -82,7 +82,7 @@ export async function requestAdmission(
     model,
     ...effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) },
     temperature: 0,
-    maxTokens: SUMMARY_MAX_TOKENS,
+    maxTokens: SUMMARY_FLOOR_TOKENS,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }

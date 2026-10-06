@@ -90,8 +90,16 @@ import {
   requestPrivacy,
   type ReminderLedger,
 } from './privacy.ts'
-import { composeSummaryPrompt, describeCall, composeRequestPrefix, requestSummary, type ModelCallUsage, type SummaryAction } from './summary.ts'
-import { extractEnabled, extractGoalOf, extractRule, installExtractArg, wantsExactText } from './extract.ts'
+import {
+  composeSummaryPrompt,
+  describeCall,
+  composeRequestPrefix,
+  requestSummary,
+  summarizeBudget,
+  type ModelCallUsage,
+  type SummaryAction,
+} from './summary.ts'
+import { extractEnabled, extractGoalOf, extractRule, installExtractArg, isWholeResult, wantsExactText } from './extract.ts'
 
 export * from './config.ts'
 export * from './debug.ts'
@@ -212,7 +220,12 @@ async function process(
   const dryRun = dryRunInEffect(config)
   // 主模型这次调用有没有声明提取目标：它由两个开关共同决定（`extractEnabled`），关闭时传了也不认——否则
   // 「关闭」只是不宣传而不是不生效。取法只认 `arguments.extract` 上的非空字符串。
-  const goal = extractEnabled(config) ? extractGoalOf(exec) : undefined
+  const required = extractEnabled(config)
+  const goal = required ? extractGoalOf(exec) : undefined
+  // 投给提示词的"目标"：哨兵与逐字要求不是摘要目标——哨兵的意思是"不要摘要"，逐字要求这条路我们不会采信摘要
+  // 正文，两者都按「没有提取目标」投，免得让摘要器去完成一个自相矛盾的任务（隐私闸门的判定与摘要是同一次请求，
+  // 判定必须先做，所以这条路真的会把提示词发出去）。
+  const promptGoal = goal !== undefined && (isWholeResult(goal) || wantsExactText(goal)) ? undefined : goal
   const observation: Observation = { cacheReadTokens: 0, judgeInputTokens: null }
   const settle = (applied: Applied): Processed => ({ ...applied, observation, extract: goal !== undefined })
   const unchanged = (reason: UnmodifiedReason, admission: AdmissionVerdict = 'not-applicable'): Processed =>
@@ -222,6 +235,14 @@ async function process(
   const exactText = (): Processed => {
     if (!dryRun) notifyFailure(reminders, exec.agent?.session, 'exact-text')
     return unchanged('exact-text')
+  }
+  // `extract` 是必填参数，哨兵 `WHOLE_RESULT` 是"要整份结果"的唯一写法：显式要整份就按原文透传、不发摘要请求，
+  // 也不再受规则摘要开关影响（开关管的是"没声明时怎么办"，不是"声明了整份还摘要"）。
+  const wholeResult = (): Processed => unchanged('whole-result')
+  // 漏填或空串：必填字段漏填是模型侧的错误，提醒一次让它下次填上。提醒不改变这条路怎么走——怎么走仍由规则摘要
+  // 开关决定（见下面 `rule-summary-off` 那条判定），这里只负责让模型知道。
+  const remindMissingExtract = (): void => {
+    if (!dryRun) notifyFailure(reminders, exec.agent?.session, 'extract-missing')
   }
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文；它也不是本次要判断的工具内容。
   if (decision.kind === 'block') return unchanged('not-candidate')
@@ -236,7 +257,7 @@ async function process(
       visible,
       [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],
     )
-    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation, goal, efforts)
+    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation, promptGoal, efforts)
     // 干跑只预报「本应拦截」，交回的仍是下游决策——模型可见内容一个字都不变。
     if (judgement.kind === 'block') {
       return settle({
@@ -252,7 +273,9 @@ async function process(
     if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
     const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
     if (verdict.kind === 'skip') return unchanged('not-candidate')
+    if (goal !== undefined && isWholeResult(goal)) return wholeResult()
     if (goal !== undefined && wantsExactText(goal)) return exactText()
+    if (required && goal === undefined) remindMissingExtract()
     // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储、不进 memo。
     if (judgement.action.action === 'keep') return unchanged('kept')
     return settle(await replace(
@@ -265,7 +288,10 @@ async function process(
   if (exec.name === 'read' && isReadBack(readback, exec)) return unchanged('read-back')
   const verdict = candidateOf(exec.name, result, config.minInlineTokens.get(), config.maxSummarizeTokens.get())
   if (verdict.kind === 'skip') return unchanged('not-candidate')
+  if (goal !== undefined && isWholeResult(goal)) return wholeResult()
   if (goal !== undefined && wantsExactText(goal)) return exactText()
+  // 没声明提取目标：必填字段漏填（或空串手写），先提醒一次；随后照旧按规则摘要开关处理。
+  if (required && goal === undefined) remindMissingExtract()
   // 规则摘要关闭（`ruleSummary`）且这次没声明提取目标：候选结果直接透传，这条取值就是该对照实验的计数。
   // 放在候选判定之后：不是候选的结果仍记 `not-candidate`，`rule-summary-off` 才恰好是"本该摘要却没摘"的那批。
   if (goal === undefined && !config.ruleSummary.get()) return unchanged('rule-summary-off')
@@ -314,9 +340,15 @@ async function process(
       // 声明了提取目标时输出契约里没有 `keep`：那条路径上只有"长度低于摘要下限"才透传，且由程序自己透传。
       goal === undefined,
     ),
+    // 输出预算随这次正文的估算大小放大（下限 512，上限由入口说明的长度约束反推）：撞满预算的结果会整条透传，
+    // 而那正是最大的一条结果最不该付出的代价。
+    summarizeBudget(verdict.estimated),
   )
   noteUsage(observation, outcome.usage)
-  if (outcome.action === undefined) return unchanged('failed', admission)
+  // 输出被预算截断与"这次请求没做成"分开记：都是原文透传，但前者说明预算不够、后者说明模型/route 出了问题。
+  if (outcome.action === undefined) {
+    return unchanged(outcome.failure === 'truncated' ? 'truncated' : 'failed', admission)
+  }
   if (outcome.action.action === 'keep') return unchanged('kept', admission)
   // 带目标的摘要不进 memo：见上面查找处的注释（键里没有目标）。
   if (!dryRun && goal === undefined) noteMemo(memo, exec, verdict.text, outcome.action.summary)
@@ -358,7 +390,8 @@ type PrivacyJudgement =
  * @param projection - 模型即将看到的完整文本投影。
  * @param dryRun - 干跑：请求照发，但不 append 会话事件。
  * @param observation - 这条结果的模型请求观测累计。
- * @param goal - 主模型这次声明的提取目标；没声明时为 `undefined`（此时请求与关闭该参数之前逐字相同）。
+ * @param goal - 投给这次请求的提取目标（{@link process} 已把哨兵与逐字要求折成 `undefined`）；没声明时为
+ *   `undefined`（此时请求与关闭该参数之前逐字相同）。
  * @param efforts - 档位读数：把配置里的值换成这次请求实际要发的档位。
  * @returns 这次判断的结论。
  */
@@ -384,6 +417,8 @@ async function judgePrivacy(
     llm, provider, model,
     await efforts.choose(provider, model, config.privacyReasoningEffort.get()),
     composePrivacyPrompt(config.privacyPrompt.get(), projection, goal),
+    // 这一次请求的输入是整条投影，输出里除摘要还有判定字段，所以预算同样按输入放大（估算口径：4 字符/token）。
+    summarizeBudget(Math.ceil(projection.length / 4)),
   )
   noteUsage(observation, called.usage)
   const answer = called.result

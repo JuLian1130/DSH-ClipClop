@@ -31,16 +31,35 @@ import { PLUGIN_VERSION, type MountMode, type MountRecord } from './debug.ts'
 /** 标在已被本模块扩展过的定义上，避免同一次装载里重复补参数或重复包 execute。 */
 const EXTENDED = Symbol('dsh-result-clipper:extract')
 
+/**
+ * 「要整份结果」的唯一写法。
+ *
+ * 肯定式（断言"我要整份"）且与调用形状无关（整读、窗口读、命令输出上都成立），所以它既不像
+ * `NO_EXTRACT` 那样读起来像个勾选框、也不像 `FULL_CONTENT` 那样只在整读上顺口。
+ */
+export const WHOLE_RESULT = 'WHOLE_RESULT'
+
 /** `extract` 参数的说明；三类工具共用。 */
 export const EXTRACT_DESCRIPTION = [
   'What you need the result reduced to, when you want a conclusion, a filter, or an aggregation',
   'rather than the complete output (for example "every line containing ERROR, with its timestamp").',
-  'Leave it empty when you need the complete output verbatim. Small results pass through unchanged.',
+  // 必填与唯一跳过写法（票 40）：`extract` 从此必填，空值在机制上仍等于"没声明"、但不再出现在模型可见文本里。
+  // 实测（exp9 的 E 臂）候选表态率 0% → 91.9%，所以默认值由一个必填字段给出，而不是靠文案劝说。
+  `Always write something here: write ${WHOLE_RESULT} when you need the complete output unchanged,`,
   // 反例：实测（exp9）模型会用 `whole file` 这类说法表达"要整份"，而它按契约是**目标**，整份结果因此被缩成
-  // 那两三个词（8 条候选里 7 条被摘要，其中 3 条模型立刻回头又读一次）。空值才是"要整份"。
-  'Writing "whole file", "everything" or "full text" is not how you say that — any other wording counts',
-  'as a goal, and the result is reduced to it.',
+  // 那两三个词（8 条候选里 7 条被摘要，其中 3 条模型立刻回头又读一次）。
+  'otherwise write the goal. Anything else you write is a goal the result is reduced to — so "whole file",',
+  '"everything" or "full text" are not how you say it. Small results pass through unchanged either way.',
 ].join(' ')
+
+/**
+ * 目标是不是「要整份结果」的哨兵（大小写不敏感；`extractGoalOf` 已去掉首尾空白）。
+ * @param goal - 主模型写的提取目标。
+ * @returns 是哨兵时为真。
+ */
+export function isWholeResult(goal: string): boolean {
+  return goal.toUpperCase() === WHOLE_RESULT
+}
 
 /**
  * 逐字原文的说法（大小写不敏感）。
@@ -66,31 +85,30 @@ export function wantsExactText(goal: string): boolean {
 /** `read` 的工具说明追加段：把"范围读"与"声明提取目标"两条路的边界写清楚。 */
 export const READ_GUIDANCE = [
   'When you know which lines you need (you counted them, or grep/glob gave you the line numbers) and you need',
-  'that text verbatim, pass offset/limit and read that range — do not pass extract.',
+  `that text verbatim, pass offset/limit and read that range, with extract set to ${WHOLE_RESULT}.`,
   'When you need a conclusion, a filter, or an aggregation from a large file, or you do not know where in the',
-  'file the answer is, pass extract with exactly the information you need back.',
-  'extract is optional and costs you nothing when it does not apply: a small result is returned unchanged, and',
-  'for a large one the full text stays available at a path you can read later. Write only the information you',
-  'need in extract — never restate or change the task there.',
+  'file the answer is, write exactly that in extract.',
+  `extract is always required: ${WHOLE_RESULT} means you need the whole result. A small result is returned`,
+  'unchanged either way, and for a large one the full text stays available at a path you can read later. Write',
+  'only the information you need in extract — never restate or change the task there.',
 ].join(' ')
 
 /** shell 类工具的说明追加段；`bash` 与 Windows 上的 `pwsh` 共用。 */
 export const SHELL_GUIDANCE = [
-  'When you need a conclusion, a filter, or an aggregation from a large command output, pass extract with',
-  'exactly the information you need back. When you need the complete output verbatim, do not pass extract.',
-  'extract is optional and costs you nothing when it does not apply: a small output is returned unchanged, and',
-  'for a large one the full text stays available at a path you can read later. Write only the information you',
-  'need in extract — never restate or change the task there.',
+  'When you need a conclusion, a filter, or an aggregation from a large command output, write exactly that in',
+  `extract; when you need the complete output unchanged, write ${WHOLE_RESULT}.`,
+  'extract is always required. A small output is returned unchanged either way, and for a large one the full',
+  'text stays available at a path you can read later. Write only the information you need in extract — never',
+  'restate or change the task there.',
 ].join(' ')
 
 /** `web_fetch` 的工具说明追加段。 */
 export const WEB_FETCH_GUIDANCE = [
-  'When you need a conclusion or a few specific facts from a large page, pass extract with exactly the',
-  'information you need back (for example "the release date and the version number"). When you need the page',
-  'text verbatim, do not pass extract.',
-  'extract is optional and costs you nothing when it does not apply: a small page is returned unchanged, and',
-  'for a large one the full text stays available at a path you can read later. Write only the information you',
-  'need in extract — never restate or change the task there.',
+  'When you need a conclusion or a few specific facts from a large page, write exactly that in extract (for',
+  `example "the release date and the version number"); when you need the page text unchanged, write ${WHOLE_RESULT}.`,
+  'extract is always required. A small page is returned unchanged either way, and for a large one the full text',
+  'stays available at a path you can read later. Write only the information you need in extract — never restate',
+  'or change the task there.',
 ].join(' ')
 
 /** 各目标工具自己的说明追加段。两个 shell 名字共用同一段：它们只是同一件事在不同平台上的注册名。 */
@@ -155,6 +173,9 @@ export function extendedDefinition(native: ToolDefinition, name: string): ToolDe
     parameters: {
       ...parameters,
       type: parameters.type ?? 'object',
+      // 必填只是**模型可见的 schema 提示**：DSH 的 `tools.register` 只校验 `output.schema`，模型参数不由注册表
+      // 统一校验，所以漏填不会变成工具调用失败（那会是另一种实验，见 `.scratch/dsh-result-clipper/exp9`）。
+      required: [...requiredFields(parameters), 'extract'],
       properties: {
         ...(parameters.properties ?? {}),
         extract: { type: 'string', description: EXTRACT_DESCRIPTION },
@@ -187,6 +208,8 @@ export function extendInPlace(definition: ToolDefinition, name: string): void {
   definition.parameters = {
     ...parameters,
     type: parameters.type ?? 'object',
+    // 与 `extendedDefinition` 同一处改动：必填是模型可见提示，不产生强制力。
+    required: [...requiredFields(parameters), 'extract'],
     properties: {
       ...(parameters.properties ?? {}),
       extract: { type: 'string', description: EXTRACT_DESCRIPTION },
@@ -194,6 +217,19 @@ export function extendInPlace(definition: ToolDefinition, name: string): void {
   }
   definition.execute = async (args, exec) => nativeExecute(stripExtract(args), exec)
   markExtended(definition)
+}
+
+/**
+ * 原生定义里已经声明的必填参数名。
+ *
+ * 注册表那一层的 `parameters` 只有 `Record<string, unknown>` 这个类型，所以这里自己收窄一次：**必须保留**原生
+ * 的必填项（例如 `read` 的 `file_path`），不能拿 `['extract']` 把它们顶掉。
+ * @param parameters - 原生定义的参数 schema。
+ * @returns 已声明的必填字段名；没声明或形状不对时为空数组。
+ */
+function requiredFields(parameters: Record<string, unknown>): readonly string[] {
+  const declared = parameters.required
+  return Array.isArray(declared) ? declared.filter((name): name is string => typeof name === 'string') : []
 }
 
 /** 摘掉 `extract`，其余参数原样。 */

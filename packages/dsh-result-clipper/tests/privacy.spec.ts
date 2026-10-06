@@ -21,6 +21,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { Config } from '../src/index.ts'
 import { composeEntry } from '../src/entry.ts'
 import { DEFAULT_PRIVACY_RULE } from '../src/rules.ts'
+import { WHOLE_RESULT } from '../src/extract.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { AppendedNotice, HostFixture } from './support/host.ts'
 import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
@@ -394,6 +395,23 @@ describe('隐私模式与提取目标：同一份隐私规则，带目标时按�
     expect(requestText(route.requests[0]!)).toContain(SHORT_BODY)
     expect(textOf(result.content)).toBe(SHORT_BODY)
     expect(records(path).at(-1)).toEqual(expect.objectContaining({ reason: 'not-candidate' }))
+  })
+
+  it('哨兵 WHOLE_RESULT：判定照做（闸门先于一切），但提示词里既没有哨兵也没有目标那一段，结果按原文透传', async () => {
+    const { fixture, route, path } = await mounted()
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { extract: WHOLE_RESULT }))
+
+    expect(route.requests).toHaveLength(1)
+    const text = requestText(route.requests[0]!)
+    expect(text).toContain('privacyVerdict')
+    expect(text).not.toContain(WHOLE_RESULT)
+    expect(text).not.toContain('提取目标')
+    // 显式要整份：连判定随附的摘要也不采用。
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(records(path).at(-1)).toEqual(expect.objectContaining({
+      action: 'unmodified', reason: 'whole-result', extract: true,
+    }))
   })
 
   it('规则摘要关闭不影响隐私这一路：照旧判定并用那一次请求的摘要替换正文', async () => {

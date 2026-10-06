@@ -9,13 +9,13 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 
 | 收场 | 什么时候 | 模型请求 | 取值 |
 | --- | --- | --- | --- |
-| **不走模型，透传原文** | 摘要总开关关；没声明 `extract` 且规则摘要关；没进候选（非目标工具 / 含图片 / 低于下限 / 达到上限）；`read` 按入口读回 | 0 | `summary-off` / `rule-summary-off` / `not-candidate` / `read-back` |
-| **走了模型，没产出摘要，透传原文** | 摘要模型返回「保留全文」（不带 `extract` 时契约里才提供它）；隐私判 `uncertain`；请求失败 / 非法输出 / 窗口不足 | 1 | `kept` / `uncertain` / `failed` / `failed-window` |
+| **不走模型，透传原文** | 摘要总开关关；没声明 `extract` 且规则摘要关；声明了哨兵 `WHOLE_RESULT`；声明了逐字正文的目标；没进候选（非目标工具 / 含图片 / 低于下限 / 达到上限）；`read` 按入口读回 | 0 | `summary-off` / `rule-summary-off` / `whole-result` / `exact-text` / `not-candidate` / `read-back` |
+| **走了模型，没产出摘要，透传原文** | 摘要模型返回「保留全文」（不带 `extract` 时契约里才提供它）；隐私判 `uncertain`；请求失败 / 非法输出 / 窗口不足；**输出撞满预算被截断** | 1 | `kept` / `uncertain` / `failed` / `failed-window` / `truncated` |
 | **产出了摘要，仍透传原文** | 摘要（含入口说明）不比原文短；存不进去（没有 spill 后端 / 写入失败 / 没有会话归属） | 1 | `not-shorter` / `failed` |
 | **产出了摘要，替换正文** | 隐私判 `safe` + `summarize`（两个摘要开关都管不到它）；声明了 `extract` 且模型给了短说明；没声明 `extract`、规则摘要开、模型给了短说明 | 1 | `summarized` |
 | **不走模型，直接返回摘要** | memo 命中（摘要提示词路、没声明 `extract`、隐私关闭、同一工具同一正文本会话摘过） | 0 | `summarized` |
 
-四点补充：① 第一行的四种情况都要求**隐私闸门没对这一条生效**——隐私路上「没进候选 / 按入口读回」发生在判定之后，那时已经有 1 次请求；② `failed` 也可能零请求（摘要 route 没配出来）；③ 隐私判 `sensitive`（或 `block` 策略下的失效）**不是透传**：交回固定拒绝文案，记 `rejected`；④ **出厂默认只摘要主模型主动请求的那些结果**（「自动摘要大内容」默认不勾），所以默认部署下第二行与第三行基本不出现、第四行只来自主动请求。隐私开着时 `web_fetch` 默认不进隐私路，照常走摘要提示词路。
+四点补充：① 第一行的六种情况都要求**隐私闸门没对这一条生效**——隐私路上「没进候选 / 按入口读回」发生在判定之后，那时已经有 1 次请求；② `failed` 也可能零请求（摘要 route 没配出来）；③ 隐私判 `sensitive`（或 `block` 策略下的失效）**不是透传**：交回固定拒绝文案，记 `rejected`；④ **出厂默认只摘要主模型主动请求的那些结果**（「自动摘要大内容」默认不勾），所以默认部署下第二行与第三行基本不出现、第四行只来自主动请求。隐私开着时 `web_fetch` 默认不进隐私路，照常走摘要提示词路。
 
 每一步的完整顺序、例外与口径见 §1～§4。
 
@@ -65,6 +65,8 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | 4 | 请求失败 / 非法输出 | `failed` / `failed-window`（放行）或 `rejected` | 窗口不足单列 |
 | 5 | `read` 且按入口读回 | `read-back` | 判定已完成 |
 | 6 | 没进候选（非目标工具 / 含图片 / 低于下限 / 达上限） | `not-candidate` | 判定已完成 |
+| 6b | 声明了哨兵 `WHOLE_RESULT` | `whole-result` | 不采用这次判定随附的摘要；提示词里既无哨兵也无目标那一段 |
+| 6c | 目标要求逐字正文 | `exact-text` | 同上，并追加一条指向 `offset/limit` 的提醒 |
 | 7 | `safe` + `action: keep` | `kept` | 正文逐字不变、不写存储 |
 | 8 | `safe` + `action: summarize` | `summarized` / `not-shorter` / `failed` | 见 §1.4 |
 
@@ -78,15 +80,18 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | 1 | 摘要总开关关着 | `summary-off` | 0 |
 | 2 | `read` 且按入口读回 | `read-back` | 0 |
 | 3 | 没进候选（同 §1.1 第 6 步） | `not-candidate` | 0 |
-| 4 | 没声明 `extract` **且** 规则摘要开关关着 | `rule-summary-off` | 0 |
+| 3b | 声明了哨兵 `WHOLE_RESULT` | `whole-result` | 0 |
+| 3c | 目标要求逐字正文 | `exact-text` | 0 |
+| 4 | 没声明 `extract`（漏填或空串）**且** 规则摘要开关关着 | `rule-summary-off` | 0（附一条 `extract-missing` 会话提醒） |
 | 5 | 没声明 `extract` 且 memo 命中 | `summarized` / `not-shorter` / `failed` | 0（复用旧摘要） |
 | 6 | 摘要 route 没配出来 / 没有 `llm` 服务 | `failed` | 0～1（准入可能已发过） |
 | 7 | 准入（开着且没声明 `extract`）判 `no` | `admission-no` | 1 |
 | 8 | 摘要模型返回 `keep` | `kept` | 1 |
 | 9 | 摘要请求失败 / 非法输出 | `failed` | 1 |
+| 9b | 输出撞满预算（终止原因 `max-tokens`） | `truncated` | 1 |
 | 10 | 摘要模型返回 `summarize` | `summarized` / `not-shorter` / `failed` | 1 |
 
-声明了 `extract` 的调用跳过准入（第 7 步）、跳过 memo（第 5 步），规则正文换成目标（§4.3）。
+声明了 `extract` 的调用跳过准入（第 7 步）、跳过 memo（第 5 步），规则正文换成目标（§4.3）。第 5 步与第 9 步里的"非法输出"指严格解析不成立；**内容写完、只少收尾 `}`** 的输出会被抢救成摘要（§4.8），引号没闭合的那一类不抢救。`extract` 是必填参数，第 4 步的前提在真实运行里意味着"模型漏填"（照默认处理并提醒一次，见 §4.9）。
 
 ### 1.3 「替换」本身（`replace`）
 
@@ -125,7 +130,8 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | PTC 子派发 | 不介入 | 0 |
 | 下游决策已是 `block` | `not-candidate` | 0 |
 | 摘要提示词路 + 摘要总开关关 | `summary-off` | 0 |
-| 摘要提示词路 + 没声明 `extract` + 规则摘要关 | `rule-summary-off` | 0 |
+| 摘要提示词路 + 声明了哨兵 `WHOLE_RESULT` / 逐字正文目标 | `whole-result` / `exact-text` | 0 |
+| 摘要提示词路 + 没声明 `extract` + 规则摘要关 | `rule-summary-off` | 0（附一条 `extract-missing` 提醒） |
 | 摘要提示词路 + route 没配出来（准入关闭时） | `failed` | 0 |
 | 摘要提示词路 + 没进候选（非目标工具 / 含图片 / 低于下限 / 达上限） | `not-candidate` | 0 |
 | 摘要提示词路 + `read` 按入口读回 | `read-back` | 0 |
@@ -144,6 +150,7 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | 摘要模型返回 `keep` | `kept`（契约里提供 `keep` 时才有；见 §4.3） |
 | 隐私路判 `uncertain` | `uncertain`（放行侧；`block` 策略下是拦截） |
 | 请求失败 / 非法输出 / 超窗 | `failed` / `failed-window`（放行侧） |
+| 输出撞满预算被截断 | `truncated`（放行侧，不做抢救） |
 | 隐私路判 `safe` 但没有摘要可换（没进候选、按入口读回） | `not-candidate` / `read-back` |
 
 ### 2.4 什么时候产出了摘要但透传原文
@@ -176,10 +183,13 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | `kept` | 摘要模型要求保留全文 | 契约里提供 `keep` 时 |
 | `not-shorter` | 摘要不比原文短 | 拿到过一段摘要 |
 | `uncertain` | 隐私未判定，按策略放行 | 隐私路 |
+| `exact-text` | 目标要求逐字正文，摘要给不出逐字保证，按原文透传 | 声明了逐字目标且进了候选 |
+| `whole-result` | 目标是哨兵 `WHOLE_RESULT`：显式要整份结果 | 进了候选 |
+| `truncated` | 输出撞满预算被截断（终止原因 `max-tokens`），按原文透传 | 摘要与隐私请求都可能 |
 | `failed` | 失败（请求失败 / 非法输出 / route 未配 / 存储不可用） | 两条路都可能 |
 | `failed-window` | 本地窗口不足，按策略放行 | 隐私路 |
 
-判断结果（`kept` / `not-shorter` / `not-candidate` / 两个关闭）与故障（`failed*`）必须是不同取值，不得合并。
+判断结果（`kept` / `not-shorter` / `not-candidate` / `exact-text` / `whole-result` / 两个关闭）与故障（`failed*` / `truncated`）必须是不同取值，不得合并；**预算不够（`truncated`）与请求失败（`failed`）也不是同一件事**。
 
 ## 4. 容易搞错的口径
 
@@ -190,7 +200,7 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 摘要提示词那条路：
 
 - `summarize` 关 → 那条路不发请求也不替换（`summary-off`），也不给工具挂 `extract`。
-- `ruleSummary` 关 → 那条路上没声明 `extract` 的候选结果透传（`rule-summary-off`）。
+- `ruleSummary` 关 → 那条路上没声明 `extract` 的候选结果透传（`rule-summary-off`）；`extract` 是必填参数，所以这条同时就是"模型漏填"的计数，并伴随一条 `extract-missing` 会话提醒（§4.9）。
 
 （修正前的实现让隐私路也要求 `summarize`，与本节冲突，票 26 已改。）
 
@@ -226,12 +236,30 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 `maxSummarizeTokens` 只约束 `bash`/`pwsh`/`web_fetch`；`read` 不设插件上界（`read` 工具自身按 `readMaxBytes`
 封顶，spill 硬编码豁免 `read`）。
 
+### 4.8 输出预算、截断与抢救
+
+摘要请求的输出预算是 `clamp(输入估算 / 8, 512, 1984)`（准入请求固定用下限 512；隐私请求按投影大小用同一把尺子）。
+终止原因为 `max-tokens` 时这条输出必然残缺，按原文透传并记 `truncated`，**不做抢救**——把切了一半的正文当
+摘要交回会把答案切掉。只有"严格解析不成立、但输出以 `{"action":"summarize","summary":"` 开头且引号已闭合"
+（正文写完、外壳没写完）才抢救，抢救正文照常走长度比较。上限 1,984 由「摘要 + 入口说明留在旧结果裁剪器阈值
+以内」反推（设计文档「长度约束」），改上限要重新检查那条。
+
+### 4.9 `extract` 必填，`WHOLE_RESULT` 是"要整份"的唯一写法
+
+参数说明与三条工具说明都要求每次调用都写 `extract`；要整份结果只有一种写法——哨兵 `WHOLE_RESULT`（大小写
+不敏感），它按原文透传、不发摘要请求，也不受规则摘要开关影响。必填与哨兵都只是**模型可见的提示**（DSH 的
+`tools.register` 只校验 `output.schema`，模型参数不由注册表统一校验），所以漏填不会变成工具调用失败：漏填或
+空串照默认处理，并追加一条 `extract-missing` 会话提醒（同会话同类一条）。**低于摘要下限的结果不提醒**——那不是
+候选，本来就不该有人填参数。
+
 ## 5. 改这里的表要同步什么
 
 | 改了什么 | 同步对象 |
 | --- | --- |
 | 判定顺序、某个出口的条件 | `packages/dsh-result-clipper/src/index.ts`（`process` / `replace`）；本文 §1 |
 | 新增/删除取值 | `src/debug.ts`（`UnmodifiedReason`）、本文 §3、`README.zh.md` 的 debug 一段 |
+| 输出预算 / 上限 / 抢救与截断的边界 | `src/summary.ts`（`summarizeBudget` / `SUMMARY_CEILING_TOKENS` / `salvageSummary`）、设计文档「长度约束」与「摘要」、本文 §4.8 |
+| `extract` 的必填性、哨兵与跳过写法 | `src/extract.ts`（`EXTRACT_DESCRIPTION` / 三段说明 / `isWholeResult`）、`src/privacy.ts`（`ReminderReason`）、本文 §4.9 |
 | 开关语义 | `src/config.ts`、`src/client/card.tsx` 与 `src/client/locales.ts`（中英）、README 的配置一节 |
 | 提示词契约（外壳、schema、动作集合） | `src/summary.ts` / `src/privacy.ts` / `src/extract.ts`、本文 §4.3 |
 

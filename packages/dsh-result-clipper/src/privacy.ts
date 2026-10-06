@@ -25,7 +25,7 @@
 
 import { boundContextSummary, createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed, GenerateOptions, LlmRuntime, UserMessage } from '@deepseek-ai/dsh-llm'
-import { SUMMARY_MAX_TOKENS, SUMMARY_TIMEOUT_MS, parseAction, requestModelText } from './summary.ts'
+import { SUMMARY_TIMEOUT_MS, parseAction, requestModelText } from './summary.ts'
 import type { ModelCallUsage, ModelRequestFailure, SummaryAction } from './summary.ts'
 import { DEFAULT_PRIVACY_RULE } from './rules.ts'
 
@@ -152,6 +152,7 @@ export interface PrivacyCall {
  * @param model - 隐私 route 的 model id。
  * @param effort - 这次请求的推理档位；`undefined` 表示不带该字段（不推理、或该 route 的档位表判定不可用）。
  * @param prompt - {@link composePrivacyPrompt} 的产物。
+ * @param maxTokens - 这次请求的输出预算；调用点按 {@link summarizeBudget} 从投影大小算出。
  * @returns 解析出的结论与这次请求的用量；任何失败按 {@link ModelRequestFailure} 交回。
  */
 export async function requestPrivacy(
@@ -160,17 +161,19 @@ export async function requestPrivacy(
   model: string,
   effort: string | undefined,
   prompt: string,
+  maxTokens: number,
 ): Promise<PrivacyCall> {
   const options: GenerateOptions = {
     provider,
     model,
     ...effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) },
     temperature: 0,
-    maxTokens: SUMMARY_MAX_TOKENS,
+    maxTokens,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
     signal: AbortSignal.timeout(SUMMARY_TIMEOUT_MS),
   }
   const result = await requestModelText(llm, options)
+  // 判定与摘要是同一次请求：输出被截断时判定本身也不可信，所以整条按失败交回（调用点按失败策略处理）。
   if (!result.ok) return { result: { ok: false, failure: result.failure }, usage: undefined }
   const parsed = parsePrivacyOutput(result.text)
   return { result: parsed ?? { ok: false, failure: 'failed' }, usage: result.usage }
@@ -189,8 +192,11 @@ export function composeBlockedFeedback(toolName: string): string {
   ].join('\n')
 }
 
-/** 运行期失效放行的原因；与该次结果的 debug 取值一一对应（`exact-text` 见 `extract.ts` 的 `wantsExactText`）。 */
-export type ReminderReason = 'uncertain' | 'failed' | 'failed-window' | 'exact-text'
+/**
+ * 需要给主模型一条会话提醒的原因。除 `exact-text` / `extract-missing` 外都与该次结果的 debug 取值同名
+ * （`exact-text` 见 `extract.ts`，`extract-missing` 是**必填参数漏填**：结果照默认处理，但模型必须知道下次要填）。
+ */
+export type ReminderReason = 'uncertain' | 'failed' | 'failed-window' | 'exact-text' | 'extract-missing'
 
 /** 各类失效各自的提醒文案：互不相同，且不含任何正文。 */
 const REMINDER_TEXT: Record<ReminderReason, string> = {
@@ -200,6 +206,9 @@ const REMINDER_TEXT: Record<ReminderReason, string> = {
   // 摘要器只能改写，给不出逐字保证，所以这次声明逐字时直接放行原文；提醒把该用的那条路写出来。
   'exact-text': '刚才那次调用声明的是逐字原文，摘要会改写正文，所以已按原文透传。'
     + '需要逐字时请改用 offset/limit 读那个区间，不要声明提取目标。',
+  // 参数名在这里必须写出来：提醒唯一的作用就是让模型下次把那个字段填上（它不在页面文案的约束范围内）。
+  'extract-missing': '刚才那次调用漏填了 extract，这次按默认处理了。下次必须填：要缩减就写清你要什么，'
+    + '要整份结果就写 WHOLE_RESULT。',
 }
 
 /** 按会话分开的「已提醒原因」台账：同一会话内每类原因至多一条。 */

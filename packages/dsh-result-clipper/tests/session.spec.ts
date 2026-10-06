@@ -28,13 +28,20 @@ const BODY = 'x'.repeat(5000)
 /** 摘要模型回的短说明。 */
 const SUMMARY = '这是一段短说明'
 
+/** 脚本里那次工具调用的参数：`extract` 是必填参数，写出来才不会触发「漏填」提醒。 */
+const GOAL_ARGS = JSON.stringify({ extract: '这段正文在说什么' })
+
 /**
  * 跑一个 turn 并登记收场。
  * @param config - 被测插件的配置。
+ * @param toolArguments - 脚本里那次工具调用的参数 JSON；走摘要那条路的臂要写出必填的 `extract`。
  * @returns 夹具。
  */
-async function tracked(config: Schemastery.TypeS<typeof Config>): Promise<LoopFixture> {
-  const fixture = await runLoop(config, BODY, SUMMARY)
+async function tracked(
+  config: Schemastery.TypeS<typeof Config>,
+  toolArguments = '{}',
+): Promise<LoopFixture> {
+  const fixture = await runLoop(config, BODY, SUMMARY, toolArguments)
   open.push(fixture)
   return fixture
 }
@@ -69,8 +76,10 @@ function assistantContent(fixture: LoopFixture): readonly (readonly ContentBlock
 
 describe('票 03 第 10 条：替换后的落盘内容被 token 计量器读到', () => {
   it('会话里落盘的是摘要 + 入口说明，且计量器的表面读数按它计价（阴性对照：关闭摘要时按原文计价）', async () => {
-    const on = await tracked({ summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock' })
-    const off = await tracked({ summarize: false })
+    // 两臂的工具调用参数逐字相同（差额必须只来自那条结果）：`extract` 是必填参数，两臂都写出来。
+    // 摘要关掉的那一臂不认它（`summarize` 关着 = 参数不生效），所以它照样按原文计价。
+    const on = await tracked({ summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock' }, GOAL_ARGS)
+    const off = await tracked({ summarize: false }, GOAL_ARGS)
 
     expect(toolResultText(on)).toBe(SUMMARY + composeEntry(on.spill.refs[0]!, 'bash'))
     expect(toolResultText(off)).toBe(BODY)

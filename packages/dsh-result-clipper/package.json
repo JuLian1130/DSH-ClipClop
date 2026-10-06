@@ -1,6 +1,6 @@
 {
   "name": "@dsh-clipclop/dsh-result-clipper",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "把进入模型的工具结果改写成与当前任务相关的短说明并留下原结果入口；另提供可选的本地隐私闸门。两项能力默认关闭。",
   "type": "module",
