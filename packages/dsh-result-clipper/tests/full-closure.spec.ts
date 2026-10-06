@@ -359,7 +359,8 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
 describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段恢复默认', () => {
   /** 每个字段的 schema 默认（与 `design.md`「配置面与设置座位」的可配清单一一对应）。 */
   const defaults: Record<keyof LiveConfig, unknown> = {
-    summarize: false,
+    // 摘要默认开启（票 42）：默认只摘要主模型主动请求摘要的那些结果。
+    summarize: true,
     privacyGate: false,
     admissionJudge: false,
     debug: false,
@@ -385,7 +386,7 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
 
   /** 每个字段的显式覆盖值：布尔取反、数字换值、字符串非空、策略取另一支。 */
   const overrides: Record<keyof LiveConfig, unknown> = {
-    summarize: true,
+    summarize: false,
     privacyGate: true,
     admissionJudge: true,
     debug: true,

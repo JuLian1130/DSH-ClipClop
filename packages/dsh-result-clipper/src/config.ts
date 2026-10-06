@@ -3,9 +3,10 @@
  *
  * 全部字段都 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
- * 字段的默认值即规格「配置项」的首版默认：两项能力关闭、`web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
+ * 字段的默认值即规格「配置项」的当前默认：**摘要能力开启**（默认只摘要主模型主动请求摘要的调用）、隐私闸门关闭、
+ * `web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
  * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
- * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（默认只摘要主模型主动请求摘要的调用，`ruleSummary`）、debug 关闭且不
+ * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（`ruleSummary`）、debug 关闭且不
  * 自动改用临时路径、干跑关闭。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
@@ -28,14 +29,17 @@ import type { Volatile } from '@deepseek-ai/cordis'
  */
 export interface Config {
   /**
-   * 摘要能力开关，默认关闭（用户故事 1）。开着才会覆盖三类目标工具并给他们带上可选参数 `extract`。
+   * 摘要能力开关，**默认开启**。开着才会覆盖三类目标工具并给他们带上可选参数 `extract`。
+   *
+   * 默认只摘要"主模型主动请求摘要"的调用（`ruleSummary` 关着）；没有配 route 时请求不发、结果原样透传，
+   * 所以默认开启不会替用户把正文发到任何地方——发不发由 route 是否配出来决定。
    *
    * 它管的是**摘要提示词那条路**：关掉时那条路不发请求也不替换，取值记 `summary-off`。**隐私闸门不受它影响**——
    * 隐私是同一次请求里既判定又给摘要的独立一路（见 `index.ts` 的「隐私这条路自成一路」）。
    */
   summarize?: Volatile<boolean>
   /**
-   * 摘要提示词的摘要开关，**默认关闭**。
+   * 摘要提示词的摘要开关，**默认关闭**（页面上的「自动摘要大内容」）。
    *
    * 默认只摘要"主模型主动请求摘要"的调用（`extract`）；打开它才会对没请求摘要的候选结果也按摘要提示词试一次，
    * 取值记 `rule-summary-off`（关着且没声明 `extract` 的那批）。用途是量出「`extract` 为空时按摘要提示词摘要」
@@ -106,7 +110,7 @@ const effort = () => z.string().default('').volatile()
 
 /** 配置 schema：字段全部可选并在装载时解析成默认值。 */
 export const Config = z.object({
-  summarize: z.boolean().default(false).volatile(),
+  summarize: z.boolean().default(true).volatile(),
   ruleSummary: z.boolean().default(false).volatile(),
   privacyGate: z.boolean().default(false).volatile(),
   webFetchPrivacyGate: z.boolean().default(false).volatile(),

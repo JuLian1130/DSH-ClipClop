@@ -1,7 +1,8 @@
 /**
  * 票 02 第 1、2 条：插件入口与配置契约。
  *
- * 判据要对上票面「两个能力默认关闭」与「设置页保存即生效」的 host 半：四个字段都是 volatile 引用，装载后按
+ * 判据要对上配置契约（摘要默认开启、隐私闸门默认关闭）与「设置页保存即生效」的 host 半：字段都是 volatile
+ * 引用，装载后按
  * `.get()` 读到的就是当前值——这正是「不需要重启」的实现方式。观察面是 `fiber.config`（装载期解析结果），
  * 不是包内函数。
  *
@@ -48,10 +49,11 @@ describe('插件入口', () => {
 })
 
 describe('配置契约', () => {
-  it('默认配置合法且可装载，两个能力与 debug、干跑都默认关闭、路径为空，route/阈值/提示词取首版默认', async () => {
+  it('默认配置合法且可装载：摘要默认开启，隐私闸门与 debug、干跑默认关闭，路径为空，route/阈值/提示词取默认', async () => {
     const { fiber, error } = await load({})
     expect(error).toBeUndefined()
-    expect(fiber.config?.summarize.get()).toBe(false)
+    // 摘要默认开启；默认只摘要主模型主动请求摘要的那些结果（下面的 ruleSummary 关着）。
+    expect(fiber.config?.summarize.get()).toBe(true)
     expect(fiber.config?.privacyGate.get()).toBe(false)
     // 规则摘要默认关闭：默认只摘要主模型主动请求摘要的调用（提取路径不受它影响）。
     expect(fiber.config?.ruleSummary.get()).toBe(false)

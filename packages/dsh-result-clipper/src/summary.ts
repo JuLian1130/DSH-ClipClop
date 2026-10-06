@@ -34,8 +34,11 @@ import { ENTRY_RESERVE } from './entry.ts'
  * 摘要输出预算的下限（token）：原文不大时模型也不需要更多。
  *
  * 准入请求固定用它——它的输出只有一两个字段。摘要与隐私请求按 {@link summarizeBudget} 随输入大小放大。
+ *
+ * 为什么是 1,024 而不是更小：exp10 的包内探针采到的 10 次"撞满预算"里，模型已经写出 1,153–2,205 字符
+ * （约 350–630 token）才被砍掉，其中 6 次的正文估算落在这个下限上——**绑定约束是下限，不是那条比例**。
  */
-export const SUMMARY_FLOOR_TOKENS = 512
+export const SUMMARY_FLOOR_TOKENS = 1024
 
 /** 摘要输出预算与输入估算大小的比例：八分之一（见 {@link summarizeBudget}）。 */
 const SUMMARY_BUDGET_RATIO = 8
@@ -54,10 +57,10 @@ export const SUMMARY_CEILING_TOKENS = Math.floor((PRUNER_THRESHOLD_CHARS - ENTRY
 /**
  * 一次摘要请求的输出预算：原文估算大小的八分之一，夹在 [下限, 上限] 之间。
  *
- * 为什么随原文放大：固定 512 对 4,096 估算单位的结果是八分之一、对 12,800 单位的 `read` 只有二十五分之一，
- * 后者越容易撞满预算，而撞满的代价是最大那条结果反过来整条透传——正是插件要避免的那种回合。实测（exp9）
- * 43 条摘要把 461,279 字符压到 45,052 字符（约 10%），八分之一给这条常态留了余量；原文在 4,096 估算单位
- * 以下时预算仍是下限 512，与放大前逐字相同。
+ * 为什么随原文放大：固定预算对 4,096 估算单位的结果是一回事、对 12,800 单位的 `read` 是另一回事，后者越容易
+ * 撞满，而撞满的代价是最大那条结果反过来整条透传——正是插件要避免的那种回合。实测（exp9）43 条摘要把
+ * 461,279 字符压到 45,052 字符（约 10%），八分之一给这条常态留了余量；原文在 8,192 估算单位以下时预算就是
+ * 下限（1,024）。
  * @param inputTokens - 这次请求要处理的输入估算大小（估算器单位）。
  * @returns 这次请求的 `maxTokens`。
  */
@@ -66,8 +69,14 @@ export function summarizeBudget(inputTokens: number): number {
   return Math.min(SUMMARY_CEILING_TOKENS, Math.max(SUMMARY_FLOOR_TOKENS, scaled))
 }
 
-/** 摘要模型请求的超时（固定常量，不可配）：20s。 */
-export const SUMMARY_TIMEOUT_MS = 20_000
+/**
+ * 摘要模型请求的超时（固定常量，不可配）：45s。三个角色共用——摘要、准入判断、隐私判定。
+ *
+ * 为什么从 20s 抬到这里：exp10 的包内探针采到的两次"请求被中止"精确落在 20,015ms 与 20,047ms，而当时只写出了
+ * 193 字符——时间耗在首 token 之前（大结果的提示词可以到 12k token）。超时按失败策略透传原文，代价是白花一次
+ * 调用 + 结果整条进上下文。
+ */
+export const SUMMARY_TIMEOUT_MS = 45_000
 
 /** 摘要候选的正文在提示词里的分隔标记；模型只该把它之间的内容当作数据。 */
 const BODY_OPEN = '<<<TOOL_RESULT>>>'

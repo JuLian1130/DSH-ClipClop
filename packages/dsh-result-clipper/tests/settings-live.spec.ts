@@ -76,15 +76,15 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
     expect(readFileSync(second, 'utf8').trimEnd().split('\n')).toHaveLength(1)
   })
 
-  it('两个能力开关默认关闭，写入 summarize=true 后引用立刻为真（保存即生效的引用侧）', async () => {
+  it('摘要默认开启、隐私闸门默认关闭，写入后引用立刻变（保存即生效的引用侧）', async () => {
     const fixture = await booted({})
-    expect(fixture.config.summarize.get()).toBe(false)
+    expect(fixture.config.summarize.get()).toBe(true)
     expect(fixture.config.privacyGate.get()).toBe(false)
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [
-      { op: 'set', path: ['summarize'], value: true },
+      { op: 'set', path: ['summarize'], value: false },
       { op: 'set', path: ['privacyGate'], value: true },
     ])
-    expect(fixture.config.summarize.get()).toBe(true)
+    expect(fixture.config.summarize.get()).toBe(false)
     expect(fixture.config.privacyGate.get()).toBe(true)
   })
 
