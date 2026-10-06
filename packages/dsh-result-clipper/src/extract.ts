@@ -82,30 +82,55 @@ export function wantsExactText(goal: string): boolean {
   return EXACT_TEXT.test(goal)
 }
 
-/** `read` 的工具说明追加段：把"范围读"与"声明提取目标"两条路的边界写清楚。 */
+/**
+ * `read` 的工具说明追加段：先说"要什么"是默认、整读是例外，再把范围读与必填/哨兵的边界写清楚。
+ *
+ * 劝说的位置与例子是有意的（0.1.6，票 48）：只写"必填 + 哨兵"而不写"通常该写目标"时，模型面对必填字段会
+ * 一律填哨兵——同口径实测里哨兵率 82.5%，而带这层劝说的版本是 27.9%。整读的代价句则是把实测结论直接写进
+ * 提示词：整读的正文会在后续每一步的请求里重发。
+ */
 export const READ_GUIDANCE = [
-  'When you know which lines you need (you counted them, or grep/glob gave you the line numbers) and you need',
-  `that text verbatim, pass offset/limit and read that range, with extract set to ${WHOLE_RESULT}.`,
-  'When you need a conclusion, a filter, or an aggregation from a large file, or you do not know where in the',
-  'file the answer is, write exactly that in extract.',
-  `extract is always required: ${WHOLE_RESULT} means you need the whole result. A small result is returned`,
-  'unchanged either way, and for a large one the full text stays available at a path you can read later. Write',
-  'only the information you need in extract — never restate or change the task there.',
+  "Pass extract with the information you want back, unless you truly need the file's text itself.",
+  'What you want back is usually one line — a conclusion, a filter, an aggregation, or a question this file can',
+  'answer — and the file is read in full on the other side, so you do not need to know where in it the answer is.',
+  `If the only honest answer is "all of it", write ${WHOLE_RESULT}.`,
+  'A broad goal is fine ("how does this file handle X, and what makes it fail"), and so is asking several things at',
+  'once; say what shape you want back — a value, a yes or no, the exact lines with their numbers.',
+  'When you already know which lines you need, pass offset/limit and read that range; write the goal if you only',
+  'need part of that range.',
+  'A whole-file read stays in context for the rest of the session — it is the most expensive thing you can ask for,',
+  'so prefer a goal unless you really will use the whole file.',
+  `extract is always required: ${WHOLE_RESULT} means you need the whole result unchanged. A small result is`,
+  'returned unchanged either way, and read has no size ceiling — a read with a goal is never refused for being too',
+  'large, and the full text of a replaced one stays available at a path you can read later. Write only what you want',
+  'back in extract — never restate or change the task there.',
 ].join(' ')
 
-/** shell 类工具的说明追加段；`bash` 与 Windows 上的 `pwsh` 共用。 */
+/**
+ * shell 类工具的说明追加段；`bash` 与 Windows 上的 `pwsh` 共用。
+ *
+ * 与 `read` 同形：先给"写目标"的形状例子与整读的代价，再写必填与哨兵。命令输出往往一次几十 KB，这段劝说的
+ * 收益与 `read` 同源。
+ */
 export const SHELL_GUIDANCE = [
   'When you need a conclusion, a filter, or an aggregation from a large command output, write exactly that in',
   `extract; when you need the complete output unchanged, write ${WHOLE_RESULT}.`,
+  'A broad goal is fine, and so is asking several things at once; say what shape you want back — a value, a yes or',
+  'no, the exact lines with their numbers.',
+  'A command whose output stays in context for the rest of the session is the most expensive thing you can ask for —',
+  'prefer a goal unless you really will use all of it.',
   'extract is always required. A small output is returned unchanged either way, and for a large one the full',
   'text stays available at a path you can read later. Write only the information you need in extract — never',
   'restate or change the task there.',
 ].join(' ')
 
-/** `web_fetch` 的工具说明追加段。 */
+/** `web_fetch` 的工具说明追加段；与 `read`/shell 同形（形状例子 + 整读代价 + 必填与哨兵）。 */
 export const WEB_FETCH_GUIDANCE = [
   'When you need a conclusion or a few specific facts from a large page, write exactly that in extract (for',
   `example "the release date and the version number"); when you need the page text unchanged, write ${WHOLE_RESULT}.`,
+  'A broad goal is fine, and so is asking several things at once.',
+  'A page that stays in context for the rest of the session is the most expensive thing you can ask for — prefer a',
+  'goal unless you really will use the whole page.',
   'extract is always required. A small page is returned unchanged either way, and for a large one the full text',
   'stays available at a path you can read later. Write only the information you need in extract — never restate',
   'or change the task there.',
