@@ -10,10 +10,10 @@ const decoratorSyntax = /^\s*@[A-Za-z_$][\w$]*/m
  * 不降级的话，导入该模块会以 `SyntaxError: Invalid or unexpected token` 在测试期炸掉（构建产物由
  * `tsc` 直出，不受影响）。
  *
- * 这份实现是宿主 `vitest.shared.ts` 里 `standardDecoratorPlugin()` 的拷贝，不是引用（宿主那份不在
- * 本仓的依赖里）。**有意的差异**：宿主还会给编译合成的 `__esDecorate(` 行加 v8 忽略注释——那是给它
- * 自己的覆盖率统计用的，而本仓没有任何覆盖率配置，照抄只会多一段不生效的死代码。哪天本包开了
- * 覆盖率，就把那段补回来。两份同名函数对比即可看出漂移，漂移了以宿主为准。
+ * 这份实现对照宿主 `vitest.shared.ts` 的 `standardDecoratorPlugin()`（本包函数另起了名字，不叫这个），
+ * 是拷贝而不是引用——宿主那份不在本仓的依赖里。相对宿主**有意少两处**：编译合成的 `__esDecorate(`
+ * 行上的 v8 忽略注释（本仓没有任何覆盖率配置，照抄只会多一段不生效的死代码）、以及 `.tsx` 的 jsx
+ * 选项（本包没有 tsx 源）。哪天本包开了覆盖率或加了 tsx 源，就把对应那处补回来。
  */
 function standardDecorators() {
   return {

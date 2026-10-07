@@ -31,7 +31,7 @@
 
 ### 远程面
 
-`providers(): readonly string[]`，`@Remote` 标记，浏览器经 `ctx.remote.systemOne.providers()` 读到条目 id——这条远程路径已随本包交付，用它的是第二步的客户端那一半。这是唯一的远程例外：`ask` 不在远程面上，业务插件的判断在本进程里做。
+`providers(): readonly string[]`，`@Remote` 标记，浏览器经 `ctx.remote.systemOne.providers()` 读到条目 id——这条远程路径已随本包交付，用它的是第二步的客户端那一半。**第一步没有测试覆盖它**：`ctx.remote` 由 typert 网关提供，不在本包的测试组合里（那里的测试都用 `new Context()`），它的实际验证落在第二步的客户端那一半。这是唯一的远程例外：`ask` 不在远程面上，业务插件的判断在本进程里做。
 
 ### provider 作者面
 
@@ -46,11 +46,11 @@
 
 三种题型（是非 / 闭集单选 / 有序量表）是两套外部规范的同一种语义：jev 的 Noul、OpenAI 的 predicate 都是是非题。答案带概率而不是生成文本：是非题的 `probability` 必带，choice/score 的分布是 provider 的自报项，缺席表示没报分布、不是均匀分布。题面与答案都按 id 组织（`Record<id, …>`）：消费者按稳定 id 取答案，顺序在契约层没有用，各家规范要的 name 数组由 provider 自己转。
 
-失败语义：**provider 级失败抛错**（端点不可达、凭据不对）；**provider 少答某题不算失败**——该题在 `answers` 里缺席，另加一条 `Warning`。消费者必须处理缺席。
+失败语义：**provider 级失败抛错**（端点不可达、凭据不对）；**单题级的答失败或漏答都不算整次失败**——该题在 `answers` 里缺席，另加一条 `Warning`（`Warning.questionId` 可选，因为警告也可能针对整次调用，例如输入被截断）。消费者必须处理缺席。
 
 ## 已裁决的取舍
 
-- **测试期的装饰器转译**：`@Remote` 让 Vite 的解析器读不了 `src/service.ts`，测试要 import 就必须先把标准装饰器降级。`packages/dsh-system-one/vitest.config.ts` 里那份转译是宿主 `vitest.shared.ts` 同名函数的拷贝，有意的差异（宿主多一段覆盖率用的替换）与漂移判据写在那个文件里。
+- **测试期的装饰器转译**：`@Remote` 让 Vite 的解析器读不了 `src/service.ts`，测试要 import 就必须先把标准装饰器降级。`packages/dsh-system-one/vitest.config.ts` 里那份转译对照的是宿主的 `standardDecoratorPlugin()`（本包函数不叫这个名），相对宿主有意少两处：合成的 `__esDecorate(` 行上的 v8 忽略注释（本仓没有覆盖率配置）、`.tsx` 的 jsx 选项（本包没有 tsx 源）。两处差异与补齐条件写在该文件里。
 - **不提供「按题型取答案」的类型映射**：没有消费者需要，需要时再按实际用法加。
 - **第二步的 `mock`** 会是一种 provider 类型（第一步的 provider 面只有 `evaluate`，还没有 `kind` 这个配置字段），不出现在默认条目列表里。
 
@@ -62,4 +62,5 @@
 
 - `pnpm --dir packages/dsh-system-one run typecheck` 同时覆盖 `src` 与 `tests`。
 - 5 条行为测试：`ask` 交回答案与耗时、未注册 `target` 的报错点名 id、同名注册抛错、`providers()` 顺序、注册随注册方 fiber 释放。
+- 跨包声明合并：`tests/declaration-merge.spec.ts` 在临时目录里搭一个真实消费者包跑 `tsc`，并带反向对照（不 import 本包时同一个用法必须编译失败）与插件面断言（`ctx.systemOne.providers()` 取不到）。
 - **尚未实测**：按真实 profile 装载这条 bundle 行——第一步的测试都用 `new Context()`，装载路径不在任何门禁里。第二步开工前补一次真实装载。
