@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "lib",
+    "rootDir": "src",
+    // 契约里出现 AbortSignal，构建配置需要显式带上 node 的类型。
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}

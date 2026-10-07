@@ -1,0 +1,5 @@
+# 本包提供的行：装载决策模型注册表（`ctx.systemOne`）。
+# id 供后续层按名覆盖或禁用；name 用包名，交 Node 解析到安装副本。
+- insert:
+    - id: dsh-system-one
+      name: '@dsh-clipclop/dsh-system-one'
