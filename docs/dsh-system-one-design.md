@@ -31,7 +31,7 @@
 
 ### 远程面
 
-`providers(): readonly string[]`，`@Remote` 标记，浏览器经 `ctx.remote.systemOne.providers()` 读到条目 id。这是唯一的远程例外：`ask` 不在远程面上，业务插件的判断在本进程里做。
+`providers(): readonly string[]`，`@Remote` 标记，浏览器经 `ctx.remote.systemOne.providers()` 读到条目 id——这条远程路径已随本包交付，用它的是第二步的客户端那一半。这是唯一的远程例外：`ask` 不在远程面上，业务插件的判断在本进程里做。
 
 ### provider 作者面
 
@@ -46,7 +46,7 @@
 
 三种题型（是非 / 闭集单选 / 有序量表）是两套外部规范的同一种语义：jev 的 Noul、OpenAI 的 predicate 都是是非题。答案带概率而不是生成文本：是非题的 `probability` 必带，choice/score 的分布是 provider 的自报项，缺席表示没报分布、不是均匀分布。题面与答案都按 id 组织（`Record<id, …>`）：消费者按稳定 id 取答案，顺序在契约层没有用，各家规范要的 name 数组由 provider 自己转。
 
-失败语义：**provider 级失败抛错**（端点不可达、凭据不对）；**单题的问题不算失败**——该题在 `answers` 里缺席，另加一条 `Warning`。消费者必须处理缺席。
+失败语义：**provider 级失败抛错**（端点不可达、凭据不对）；**provider 少答某题不算失败**——该题在 `answers` 里缺席，另加一条 `Warning`。消费者必须处理缺席。
 
 ## 已裁决的取舍
 
