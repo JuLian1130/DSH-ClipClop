@@ -18,14 +18,13 @@ export { SystemOneProvider, type ProviderRequest, type ProviderResponse } from '
 export { SystemOneService } from './service.ts'
 export type {
   Answer,
-  AnswerFor,
   AskRequest,
   AskResult,
   BooleanAnswer,
   ChoiceAnswer,
-  JudgeUsage,
-  JudgeWarning,
   JsonValue,
   Question,
   ScoreAnswer,
+  Usage,
+  Warning,
 } from './types.ts'

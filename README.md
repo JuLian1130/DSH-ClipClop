@@ -4,7 +4,7 @@
 
 ## 构建与测试
 
-两个包（`packages/dsh-navigator`、`packages/dsh-reasoning-pruner`）同处一个 pnpm workspace，根上一条命令覆盖两边：
+各包（`packages/*`）同处一个 pnpm workspace，根上一条命令覆盖全部：
 
 ```bash
 pnpm install            # 装依赖并各跑一次 prepare（= build）

@@ -58,24 +58,15 @@ export interface ScoreAnswer extends Confidence {
 
 export type Answer = BooleanAnswer | ChoiceAnswer | ScoreAnswer
 
-/** 题型到答案的映射，供 provider 实现与消费者收窄类型。 */
-export type AnswerFor<Q extends Question> = Q extends { readonly type: 'boolean' }
-  ? BooleanAnswer
-  : Q extends { readonly type: 'choice' }
-    ? ChoiceAnswer
-    : Q extends { readonly type: 'score' }
-      ? ScoreAnswer
-      : never
-
 /** provider 对某题的非致命说明，例如它的输入被截断过。 */
-export interface JudgeWarning {
+export interface Warning {
   readonly type: string
   readonly message?: string
   readonly questionId?: string
 }
 
 /** 一次判断消耗的 token。 */
-export interface JudgeUsage {
+export interface Usage {
   readonly inputTokens?: number
   readonly outputTokens?: number
 }
@@ -95,8 +86,8 @@ export interface AskRequest {
 export interface AskResult {
   /** 每题一条。provider 没答的题**不在这里出现**，消费者必须处理缺席。 */
   readonly answers: Readonly<Record<string, Answer>>
-  readonly warnings?: readonly JudgeWarning[]
-  readonly usage?: JudgeUsage
+  readonly warnings?: readonly Warning[]
+  readonly usage?: Usage
   /** 服务侧测得的整次调用耗时。 */
   readonly latencyMs?: number
   /** provider 实际发起的请求数：分片与重试由 provider 决定，只有它知道这个数。 */

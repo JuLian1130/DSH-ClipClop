@@ -4,8 +4,13 @@ import type { SystemOneProvider } from './provider.ts'
 import type { AskRequest, AskResult } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
+  /**
+   * 插件面只有注册与提问。`providers()` **不在这里**：它是给设置页列候选项的只读投影，只走
+   * `@Remote` 那条远程路径。它一旦出现在插件面上，业务插件就能「拿列表挑一个」，把「用哪个条目」
+   * 变回隐式默认——而这件事只由调用方自己的配置回答。
+   */
   interface Context {
-    systemOne: SystemOneService
+    systemOne: Pick<SystemOneService, 'register' | 'ask'>
   }
 }
 
@@ -20,12 +25,6 @@ export class SystemOneService extends TypertRemoteService {
 
   constructor(ctx: Context) {
     super(ctx, 'systemOne')
-  }
-
-  /** 已注册的条目 id，用于报错时说明现状。 */
-  private registered(): string {
-    const ids = [...this.entries.keys()]
-    return ids.length === 0 ? 'none registered' : `registered: ${ids.join(', ')}`
   }
 
   /**
@@ -52,11 +51,11 @@ export class SystemOneService extends TypertRemoteService {
    * 已注册的条目 id，按注册顺序。
    *
    * 这是给设置页列候选项用的只读投影，**不是选择机制**：消费者不按它挑 provider，用哪个由自己的
-   * 配置决定。
+   * 配置决定。插件面据此把它挡在 `Context['systemOne']` 之外，只留远程这一条路径。
    * @returns 条目 id 的副本。
    */
   @Remote
-  providers(): string[] {
+  providers(): readonly string[] {
     return [...this.entries.keys()]
   }
 
@@ -69,15 +68,15 @@ export class SystemOneService extends TypertRemoteService {
   async ask(request: AskRequest): Promise<AskResult> {
     const provider = this.entries.get(request.target)
     if (provider === undefined) {
-      throw new Error(`system-one: no provider registered as "${request.target}" (${this.registered()})`)
+      const ids = this.providers()
+      const known = ids.length === 0 ? 'none' : ids.join(', ')
+      throw new Error(`system-one: no provider registered as "${request.target}" (registered: ${known})`)
     }
+    // provider 只该看到 `ProviderRequest`。解构出去而不是列一张字段表：`AskRequest` 以后加字段时，
+    // 服务这里不会把它静默丢掉。
+    const { target: _target, ...providerRequest } = request
     const started = Date.now()
-    const response = await provider.evaluate({
-      state: request.state,
-      questions: request.questions,
-      signal: request.signal,
-      timeoutMs: request.timeoutMs,
-    })
+    const response = await provider.evaluate(providerRequest)
     return { ...response, latencyMs: Date.now() - started }
   }
 }

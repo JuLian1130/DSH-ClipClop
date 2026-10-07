@@ -35,6 +35,15 @@ async function mount(): Promise<Context> {
   return ctx
 }
 
+/**
+ * 读服务上的只读投影 `providers()`。
+ *
+ * 插件面（`Context['systemOne']`）故意只声明 register/ask，所以断言它得越过那一面直接看服务实例。
+ */
+function providerIds(ctx: Context): readonly string[] {
+  return (ctx.systemOne as SystemOne.SystemOneService).providers()
+}
+
 describe('ctx.systemOne', () => {
   it('把题面交给 target 指名的条目，并把答案与耗时交回', async () => {
     const ctx = await mount()
@@ -71,7 +80,7 @@ describe('ctx.systemOne', () => {
     ctx.systemOne.register('a', new StubProvider())
     ctx.systemOne.register('b', new StubProvider())
 
-    expect(ctx.systemOne.providers()).toEqual(['a', 'b'])
+    expect(providerIds(ctx)).toEqual(['a', 'b'])
   })
 
   it('注册随注册方的 fiber 卸载而释放', async () => {
@@ -83,10 +92,10 @@ describe('ctx.systemOne', () => {
         fiber.systemOne.register('stub', new StubProvider())
       },
     })
-    expect(ctx.systemOne.providers()).toEqual(['stub'])
+    expect(providerIds(ctx)).toEqual(['stub'])
 
     await owner.dispose()
 
-    expect(ctx.systemOne.providers()).toEqual([])
+    expect(providerIds(ctx)).toEqual([])
   })
 })
