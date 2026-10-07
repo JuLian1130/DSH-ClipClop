@@ -8,13 +8,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { SystemOneService } from './service.ts'
 
-export const name = 'system-one'
+export const name = 'dsh-system-one'
 
 export function apply(ctx: Context): void {
   ctx.plugin(SystemOneService)
 }
 
-export { SystemOneProvider, type ProviderRequest, type ProviderResponse } from './provider.ts'
+export { SystemOneProvider, type ProviderRequest } from './provider.ts'
 export { SystemOneService } from './service.ts'
 export type {
   Answer,
@@ -23,6 +23,7 @@ export type {
   BooleanAnswer,
   ChoiceAnswer,
   JsonValue,
+  ProviderResponse,
   Question,
   ScoreAnswer,
   Usage,

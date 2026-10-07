@@ -1,13 +1,14 @@
-import type { Context, Disposable } from '@deepseek-ai/cordis'
-import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Service, type Context, type Disposable } from '@deepseek-ai/cordis'
 import type { SystemOneProvider } from './provider.ts'
 import type { AskRequest, AskResult } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   /**
-   * 插件面只有注册与提问。`providers()` **不在这里**：它是给设置页列候选项的只读投影，只走
-   * `@Remote` 那条远程路径。它一旦出现在插件面上，业务插件就能「拿列表挑一个」，把「用哪个条目」
-   * 变回隐式默认——而这件事只由调用方自己的配置回答。
+   * 插件面只有注册与提问。`providers()` **不在这里**：它一旦出现在插件面上，业务插件最省事的写法
+   * 就是「拿列表挑一个」，把「用哪个条目」变回隐式默认——而这件事只由调用方自己的配置回答。
+   *
+   * 这是**名义**约束、不是边界：`SystemOneService` 本身是导出的，一次转型就能拿到 `providers()`。
+   * 它挡的是顺手用法，不是刻意绕过。
    */
   interface Context {
     systemOne: Pick<SystemOneService, 'register' | 'ask'>
@@ -20,7 +21,7 @@ declare module '@deepseek-ai/cordis' {
  * 服务里**没有**「当前 provider」这类全局状态。用哪一个由调用方（业务插件）在自己的配置里选，
  * 每次 `ask` 都点名 `target`——所以同一条目被谁用过、配错了该看哪个插件的设置，都有唯一答案。
  */
-export class SystemOneService extends TypertRemoteService {
+export class SystemOneService extends Service {
   private readonly entries = new Map<string, SystemOneProvider>()
 
   constructor(ctx: Context) {
@@ -48,13 +49,13 @@ export class SystemOneService extends TypertRemoteService {
   }
 
   /**
-   * 已注册的条目 id，按注册顺序。
+   * 已注册的条目 id，按注册顺序。它是给设置页列候选项用的只读投影，**不是选择机制**。
    *
-   * 这是给设置页列候选项用的只读投影，**不是选择机制**：消费者不按它挑 provider，用哪个由自己的
-   * 配置决定。插件面据此把它挡在 `Context['systemOne']` 之外，只留远程这一条路径。
+   * 投影到浏览器（`ctx.remote.systemOne.providers()`）要跟客户端半一起落地：typert 的远程面要求随包
+   * 交付生成产物，而眼下没有消费它的客户端。在那之前它只有两个用处——`ask()` 报错时说明现状，
+   * 以及测试断言注册顺序。
    * @returns 条目 id 的副本。
    */
-  @Remote
   providers(): readonly string[] {
     return [...this.entries.keys()]
   }
@@ -62,7 +63,7 @@ export class SystemOneService extends TypertRemoteService {
   /**
    * 把一批题交给 `target` 指名的条目。
    * @param request - 条目 id、状态与题面。
-   * @returns provider 的答案，外加服务侧测得的耗时。
+   * @returns provider 的回答，外加服务侧测得的耗时。
    * @throws `target` 没有对应注册时抛错，消息里点名该 id 与当前已注册的 id。
    */
   async ask(request: AskRequest): Promise<AskResult> {
@@ -72,8 +73,8 @@ export class SystemOneService extends TypertRemoteService {
       const known = ids.length === 0 ? 'none' : ids.join(', ')
       throw new Error(`system-one: no provider registered as "${request.target}" (registered: ${known})`)
     }
-    // provider 只该看到 `ProviderRequest`。解构出去而不是列一张字段表：`AskRequest` 以后加字段时，
-    // 服务这里不会把它静默丢掉。
+    // provider 只该看到 `ProviderRequest`。摘掉 `target` 而不是把 `request` 直接传过去：`Omit` 只是类型，
+    // 运行时真正少掉那一项靠的是这次解构。
     const { target: _target, ...providerRequest } = request
     const started = Date.now()
     const response = await provider.evaluate(providerRequest)

@@ -1,8 +1,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import * as SystemOne from '../src/index.ts'
-import { SystemOneProvider, type ProviderRequest, type ProviderResponse } from '../src/provider.ts'
-import type { Answer, Question } from '../src/types.ts'
+import { SystemOneProvider, type ProviderRequest } from '../src/provider.ts'
+import type { Answer, ProviderResponse, Question } from '../src/types.ts'
 
 const QUESTIONS: Record<string, Question> = {
   'turn.continue': { type: 'boolean', instructions: '本轮是否应该继续？' },
@@ -57,6 +57,20 @@ describe('ctx.systemOne', () => {
     expect(provider.calls[0]?.questions).toEqual(QUESTIONS)
     expect(result.answers).toEqual(ANSWERS)
     expect(typeof result.latencyMs).toBe('number')
+  })
+
+  it('provider 漏答的题从 answers 缺席，warnings 原样交回', async () => {
+    const ctx = await mount()
+    const scripted: ProviderResponse = {
+      answers: { 'turn.continue': { type: 'boolean', probability: 0.8 } },
+      warnings: [{ type: 'truncated', questionId: 'turn.route', message: '输入被截断' }],
+    }
+    ctx.systemOne.register('stub', new StubProvider(scripted))
+
+    const result = await ctx.systemOne.ask({ target: 'stub', state: null, questions: QUESTIONS })
+
+    expect(Object.keys(result.answers)).toEqual(['turn.continue'])
+    expect(result.warnings).toEqual(scripted.warnings)
   })
 
   it('target 没有注册时抛错，并点名该 id 与已注册的 id', async () => {

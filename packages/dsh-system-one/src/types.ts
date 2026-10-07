@@ -85,16 +85,24 @@ export interface AskRequest {
   readonly timeoutMs?: number
 }
 
-/** 一次 `ask` 的结果。 */
-export interface AskResult {
+/**
+ * provider 的回答。分片与重试由 provider 自己决定，服务不介入。
+ *
+ * 一次 `ask` 的结果就是在它之上加一项耗时，所以两者写成继承、不各抄一遍字段。
+ */
+export interface ProviderResponse {
   /** 每题一条。provider 没答的题**不在这里出现**，消费者必须处理缺席。 */
   readonly answers: Readonly<Record<string, Answer>>
   readonly warnings?: readonly Warning[]
   readonly usage?: Usage
-  /** 服务侧测得的整次调用耗时。 */
-  readonly latencyMs?: number
   /** provider 实际发起的请求数：分片与重试由 provider 决定，只有它知道这个数。 */
   readonly requests?: number
   /** provider 实际回答所用的模型：调用方只点名条目 id，条目指向哪个模型由 provider 的配置决定。 */
   readonly modelId?: string
+}
+
+/** 一次 `ask` 的结果：provider 的回答，加上服务侧测得的耗时。 */
+export interface AskResult extends ProviderResponse {
+  /** 服务侧测得的整次调用耗时。 */
+  readonly latencyMs?: number
 }

@@ -1,16 +1,7 @@
-import type { Answer, AskRequest, Usage, Warning } from './types.ts'
+import type { AskRequest, ProviderResponse } from './types.ts'
 
 /** 交给 provider 的那部分请求：没有 `target`，服务已经按它解析过了。 */
 export type ProviderRequest = Omit<AskRequest, 'target'>
-
-/** provider 的回答。分片与重试由 provider 自己决定，服务不介入。 */
-export interface ProviderResponse {
-  readonly answers: Readonly<Record<string, Answer>>
-  readonly warnings?: readonly Warning[]
-  readonly usage?: Usage
-  readonly requests?: number
-  readonly modelId?: string
-}
 
 /**
  * 一个决策模型条目在服务里的实现。

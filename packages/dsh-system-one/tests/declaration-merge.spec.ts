@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
  *
  * 这件事**包内 typecheck 与包内测试都看不见**——只有在另一个包里 import 本包、且两边解析到同一份
  * cordis 时才成立。所以本文件在临时目录里搭一个真实消费者包跑 `tsc`，并配一个反向对照证明这个检查
- * 真会红；`.scratch/probes/` 里那份同名探针按构造进不了任何门禁，已被本文件取代。
+ * 真会红。
  *
  * 需要构建产物（消费者读的是 `lib/index.d.ts`）：先跑 `pnpm --dir packages/dsh-system-one run build`。
  */
@@ -45,7 +45,7 @@ export const asked: Promise<unknown> = ctx.systemOne.ask({ target: 'x', state: n
 /** 反向对照：拿掉类型 import，同一个用法必须编译不过。 */
 const ASK_WITHOUT_IMPORT = ASK.replace(IMPORT_PACKAGE, '')
 
-/** 插件面收窄：`providers()` 只走远程面，从 `ctx.systemOne` 上取不到。 */
+/** 插件面收窄成 register/ask：`providers()` 在服务类上，从 `ctx.systemOne` 上取不到。 */
 const PROVIDERS = `${IMPORT_PACKAGE}import type { Context } from '@deepseek-ai/cordis'
 
 declare const ctx: Context
@@ -63,7 +63,6 @@ beforeAll(() => {
   mkdirSync(join(fixture, 'src'), { recursive: true })
   const deps = [
     ['@deepseek-ai', 'cordis'],
-    ['@deepseek-ai', 'dsh-typert-protocol'],
     ['@dsh-clipclop', 'dsh-system-one'],
   ] as const
   for (const [scope, name] of deps) {
@@ -99,7 +98,7 @@ describe('跨包声明合并（真实消费者包 + 真实 tsc）', () => {
     expect(output).toContain('systemOne')
   })
 
-  it('插件面上取不到 providers()，它只在远程面上', { timeout: 30_000 }, () => {
+  it('插件面上取不到 providers()', { timeout: 30_000 }, () => {
     const { ok, output } = typecheck(PROVIDERS)
     expect(ok).toBe(false)
     expect(output).toContain('providers')
