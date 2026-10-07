@@ -103,6 +103,6 @@ export interface ProviderResponse {
 
 /** 一次 `ask` 的结果：provider 的回答，加上服务侧测得的耗时。 */
 export interface AskResult extends ProviderResponse {
-  /** 服务侧测得的整次调用耗时。 */
-  readonly latencyMs?: number
+  /** 服务侧测得的整次调用耗时。`ask()` 每次都填，所以是必填项。 */
+  readonly latencyMs: number
 }
