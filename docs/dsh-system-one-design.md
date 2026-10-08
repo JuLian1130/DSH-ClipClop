@@ -64,6 +64,7 @@
 - **决策端点的模型边界**：`/v1/systemone` 要求服务端是**生成模型**、且带 chat template 与 tokenizer；SequenceClassification、RewardModel、`--enable-mis`、diffusion、LoRA adapter 一律按名拒绝。决策检查点（jev／laya 一类）靠 checkpoint 自带的 `decision_config.json` 走原生 readout，没有它就走通用渲染路径——仍能出答案，只是保真度不同，接一个具体 checkpoint 时要实测走的是哪条。
 - **SGLang 的 `/v1/decisions` 不做**：它对我们这个契约是 `/v1/systemone` 的子集，而且在我们在意的部分是更窄的那个——答案没有 `confidence`、选项上限 26（systemone 允许 255）、choice 与 score 的最小长度更严。它多出来的只有三样：`temperature`（只缩放选项概率）、`prompt_format_version`、`return_prompt_token_ids`，都是调参与复现性用途，契约里没有位置；其中唯一有语义的 `temperature` 对决策检查点也不该由调用方定——checkpoint 自带的那份 `decision_config.json` 里写着，`/v1/systemone` 会自动沿用。
 - **`OpenAI decisions` 指 OpenAI 的 Decisions API**（`POST /v1/decisions`，题型 `predicate`／`choice`／`score`），不是 SGLang 的同名端点：两家路径相同而载荷互不兼容——题目标识 `name` 对 `id`、答案数组对映射、概率 `[{value, probability}]` 对 `{名字: float}`。SGLang 那个不做，所以「当前范围」的 provider 列表里不会有同名项。
+- **拒答（refusal）走 `Warning`，不新增答案类型**：有的规范（如 OpenAI Decisions API）会让某一题返回 `type: "refusal"`——模型拒绝回答这一题，没有判断结果，也不带 `probability`／`choice`／`score`／`confidence`。它按我们的口径落成两件事：该题从 `answers` 缺席，provider 另报一条带 `questionId` 的 `Warning`；未具名的整次拒答算 provider 级失败、抛错。契约因此不需要新增答案类型——`Warning.questionId` 就是为这种情况留的。拒答只有 provider 看得到（响应里那一项写着 refusal），服务拿不到，所以它只能由 provider 自报，这正是「服务不合成警告」那条的用例。
 
 ## 当前范围与非目标
 
