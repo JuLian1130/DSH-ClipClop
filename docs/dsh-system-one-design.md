@@ -59,10 +59,13 @@
 - **服务不合成警告**：`warnings` 是 provider 的自报项，服务只透传。漏答的保证只有「该题不在 `answers` 里」这一条；为漏答补写一条服务自造的警告，要在契约里新增一个警告类型，而 provider 自己已解释过原因时还会与它并存，换到的只是「消费者不必自己 diff」。
 - **保留可选 `confidence`**：两套外部规范都返回它，业务插件可能按它设阈值。契约只透传，不用它做任何判断。
 - **第二步的 `mock`** 会是一种 provider 类型（第一步的 provider 面只有 `evaluate`，还没有 `kind` 这个配置字段），不出现在默认条目列表里。
+- **`/v1/systemone` 归入 `systemone` kind，不为 SGLang 新增类型**：SGLang 在 System One 规范上加的三样东西都有默认值或只影响响应——`images` 与 `chat_template_kwargs` 默认空，`x_label_mass` 只是答案里多一个字段；它只按名拒绝 `/v1/decisions` 专有的三个字段（`temperature`、`prompt_format_version`、`return_prompt_token_ids`）。所以**符合规范的请求体原样可用**，同一个 kind 换 `baseUrl` 就覆盖 TypeSafe、OpenCode Zen 与 SGLang。
+- **`/v1/score` 不做**：它是打分原语（`query` + `items` + `label_token_ids` → scores 矩阵），不是决策协议——用它就得由 provider 自己渲染题面、套 chat template、并对答案 label 做分词校验，而这些正是 `/v1/systemone` 在服务端替我们做完的事。它独家服务的那批模型（`*ForSequenceClassification`、`*ForRewardModel`）题面在训练时焊死、`is_generation` 为假，进不了决策端点，各自另有专用门面（`/v1/classify`、`/v1/rerank`），所以它对决策用途零覆盖。
+- **决策端点的模型边界**：`/v1/systemone` 要求服务端是**生成模型**、且带 chat template 与 tokenizer；SequenceClassification、RewardModel、`--enable-mis`、diffusion、LoRA adapter 一律按名拒绝。决策检查点（jev／laya 一类）靠 checkpoint 自带的 `decision_config.json` 走原生 readout，没有它就走通用渲染路径——仍能出答案，只是保真度不同，接一个具体 checkpoint 时要实测走的是哪条。
 
 ## 当前范围与非目标
 
-第一步只交付契约与注册表。provider 实现（TypeSafe / System One、通用 HTTP、OpenAI decisions、mock）、设置页与远程面在第二步。其余非目标见上面「做什么、不做什么」。
+第一步只交付契约与注册表。provider 实现（`systemone`、通用 HTTP、OpenAI decisions、mock）、设置页与远程面在第二步。其余非目标见上面「做什么、不做什么」。
 
 ## 验收要点
 
