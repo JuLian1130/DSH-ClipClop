@@ -154,7 +154,7 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     expect(textOf(replaced.content)).toContain(SUMMARY)
   })
 
-  it('不 append 会话事件：隐私未判定放行时干跑不提醒；关掉干跑后同一条失效照常提醒一条', async () => {
+  it('不交回附加上下文：隐私未判定放行时干跑不提醒；关掉干跑后同一条失效照常提醒一条', async () => {
     const path = join(tempRoot(), 'debug.jsonl')
     const notices: AppendedNotice[] = []
     const fixture = await mounted({
@@ -165,20 +165,22 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
 
     expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(result.additionalContexts ?? []).toHaveLength(0)
     expect(notices).toHaveLength(0)
     expect(readRecords(path)).toEqual([
       expect.objectContaining({ action: 'unmodified', reason: 'uncertain', dryRun: true }),
     ])
 
-    // 阳性对照：同一份夹具只把干跑关掉，这次放行就带走一条会话提醒。
+    // 阳性对照：同一份夹具只把干跑关掉，这次放行就带走一条提醒。
     const realNotices: AppendedNotice[] = []
     const real = await mounted({
       summarize: true, privacyGate: true, privacyConfirmedLocal: true,
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: join(tempRoot(), 'real.jsonl'),
     }, new FakeRoute([{ text: UNCERTAIN }]))
     real.ctx.tools.register(textTool('bash', LONG_BODY))
-    await real.ctx.tools.execute(exec('bash', undefined, {}, 's1', realNotices))
-    expect(realNotices).toHaveLength(1)
+    const realResult = await real.ctx.tools.execute(exec('bash', undefined, {}, 's1', realNotices))
+    expect(realResult.additionalContexts).toHaveLength(1)
+    expect(realNotices).toHaveLength(0)
   })
 
   it('不调用存储：干跑一次 saveText 都不发；关掉干跑后同一条结果写一次', async () => {
@@ -235,13 +237,14 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
       routeProvider: 'local', routeModel: 'qwen', debug: true, debugPath: path, dryRun: true,
     }, new FakeRoute([{ text: UNCERTAIN }]))
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
-    expect(notices).toHaveLength(0)
+    const dry = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    expect(dry.additionalContexts ?? []).toHaveLength(0)
 
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['dryRun'], value: false }])
-    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    const real = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
     // 干跑没把「未判定」记进提醒台账，所以真实运行这次仍拿得到一条；若干跑记了台账，这里会是 0 条。
-    expect(notices).toHaveLength(1)
+    expect(real.additionalContexts).toHaveLength(1)
+    expect(notices).toHaveLength(0)
   })
 })
 

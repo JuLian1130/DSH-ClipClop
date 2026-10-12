@@ -35,6 +35,7 @@ import {
 } from '../src/extract.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { AppendedNotice, HostFixture } from './support/host.ts'
+import { REMINDER_MARKER } from '../src/privacy.ts'
 import { runLoop } from './support/loop.ts'
 import type { LoopFixture } from './support/loop.ts'
 import { FakeRoute, requestText } from './support/route.ts'
@@ -122,7 +123,7 @@ describe('wantsExactText：只认明确针对文本的逐字要求', () => {
 })
 
 describe('声明逐字原文时按原文透传（不发摘要请求）', () => {
-  it('候选结果：结果逐字不变、记 exact-text、同类提醒只发一次', async () => {
+  it('候选结果：结果逐字不变、记 exact-text、同类提醒只交回一次', async () => {
     const { fixture, route, path } = await mounted()
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const notices: AppendedNotice[] = []
@@ -136,22 +137,25 @@ describe('声明逐字原文时按原文透传（不发摘要请求）', () => {
     expect(route.requests).toHaveLength(0)
     expect(textOf(first.content)).toBe(LONG_BODY)
     expect(textOf(second.content)).toBe(LONG_BODY)
-    expect(notices).toHaveLength(1)
-    expect(textOf(notices[0]!.message.content)).toContain('offset/limit')
+    expect(first.additionalContexts).toHaveLength(1)
+    expect(second.additionalContexts ?? []).toHaveLength(0)
+    expect(textOf(first.additionalContexts![0]!.content)).toContain('offset/limit')
+    expect(notices).toHaveLength(0)
     const records = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line) as unknown)
     expect(records.at(-1)).toMatchObject({ action: 'unmodified', reason: 'exact-text', extract: true })
     expect(records.at(-2)).toMatchObject({ action: 'unmodified', reason: 'exact-text' })
   })
 
-  it('低于摘要下限时不认这条规则：仍记 not-candidate、不发提醒', async () => {
+  it('低于摘要下限时不认这条规则：仍记 not-candidate、不交回提醒', async () => {
     const { fixture, route, path } = await mounted()
     fixture.ctx.tools.register(textTool('bash', 'x'.repeat(100)))
     const notices: AppendedNotice[] = []
-    await fixture.ctx.tools.execute(
+    const result = await fixture.ctx.tools.execute(
       exec('bash', undefined, { command: 'ls', extract: 'verbatim please' }, 's1', notices),
     )
 
     expect(route.requests).toHaveLength(0)
+    expect(result.additionalContexts ?? []).toHaveLength(0)
     expect(notices).toHaveLength(0)
     expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
       .toMatchObject({ action: 'unmodified', reason: 'not-candidate' })
@@ -220,24 +224,28 @@ describe('哨兵 WHOLE_RESULT：显式要整份就按原文透传', () => {
 })
 
 describe('必填参数漏填：照默认处理，同时提醒一次', () => {
-  it('默认（规则摘要关）：结果原样透传、记 rule-summary-off，并追加一条带解法的提醒', async () => {
+  it('默认（规则摘要关）：结果原样透传、记 rule-summary-off，并交回一条带解法的提醒', async () => {
     const { fixture, route, path } = await mounted({ ruleSummary: false })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const notices: AppendedNotice[] = []
-    const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
-    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    const first = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    const second = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
 
     expect(route.requests).toHaveLength(0)
-    expect(textOf(result.content)).toBe(LONG_BODY)
-    // 同一会话同类提醒只发一次。
-    expect(notices).toHaveLength(1)
-    expect(textOf(notices[0]!.message.content)).toContain(WHOLE_RESULT)
-    expect(textOf(notices[0]!.message.content)).toContain('extract')
+    expect(textOf(first.content)).toBe(LONG_BODY)
+    // 同一会话同类提醒只交回一次。
+    expect(first.additionalContexts).toHaveLength(1)
+    expect(second.additionalContexts ?? []).toHaveLength(0)
+    const text = textOf(first.additionalContexts![0]!.content)
+    expect(text).toContain(WHOLE_RESULT)
+    expect(text).toContain('extract')
+    expect(text.startsWith(REMINDER_MARKER)).toBe(true)
+    expect(notices).toHaveLength(0)
     expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
       .toMatchObject({ action: 'unmodified', reason: 'rule-summary-off', extract: false })
   })
 
-  it('规则摘要开着时照旧摘要，但提醒照发（漏填是模型侧的错误，与开关无关）', async () => {
+  it('规则摘要开着时照旧摘要，但提醒照交回（漏填是模型侧的错误，与开关无关）', async () => {
     const { fixture, route } = await mounted({ ruleSummary: true })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const notices: AppendedNotice[] = []
@@ -245,18 +253,30 @@ describe('必填参数漏填：照默认处理，同时提醒一次', () => {
 
     expect(route.requests).toHaveLength(1)
     expect(textOf(result.content)).toContain(SHORT_SUMMARY)
-    expect(notices).toHaveLength(1)
+    expect(result.additionalContexts).toHaveLength(1)
+    expect(notices).toHaveLength(0)
   })
 
   it('低于摘要下限时不提醒：不是候选的结果本来就不该有人填参数', async () => {
     const { fixture, path } = await mounted()
     fixture.ctx.tools.register(textTool('bash', 'x'.repeat(10)))
-    const notices: AppendedNotice[] = []
-    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
 
-    expect(notices).toHaveLength(0)
+    expect(result.additionalContexts ?? []).toHaveLength(0)
     expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
       .toMatchObject({ action: 'unmodified', reason: 'not-candidate' })
+  })
+
+  it('填过一次之后名额放回：同一个会话里再漏填，仍会得到一条提醒', async () => {
+    const { fixture } = await mounted({ ruleSummary: false })
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const missed = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
+    const filled = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'ls', extract: '只要标题' }, 's1'))
+    const missedAgain = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
+
+    expect(missed.additionalContexts).toHaveLength(1)
+    expect(filled.additionalContexts ?? []).toHaveLength(0)
+    expect(missedAgain.additionalContexts).toHaveLength(1)
   })
 })
 

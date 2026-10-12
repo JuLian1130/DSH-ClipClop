@@ -2,7 +2,7 @@
  * 票 07：隐私闸门。
  *
  * 观察面只有四个：**假 route 收到的请求**（条数、判断对象、走了哪条 route、是否关推理）、**工具执行的最终正文**
- * （透传了什么 / 被拦成了什么）、**debug JSONL 的结果取值**、**工具执行 append 的会话事件**（失效提醒）。
+ * （透传了什么 / 被拦成了什么）、**debug JSONL 的结果取值**、**工具结果交回的附加上下文**（失效提醒）。
  *
  * 每条「不发请求 / 原文透传」的断言都配阳性对照（同一份夹具换一段脚本、换一个开关或确认位），证明那条路径
  * 本来会发请求、本来会替换。装载顺序用受控的 prepend 监听器搭：它截断下游投影，插件后注册即位于外层。
@@ -21,6 +21,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { Config } from '../src/index.ts'
 import { composeEntry } from '../src/entry.ts'
 import { DEFAULT_PRIVACY_RULE } from '../src/rules.ts'
+import { REMINDER_MARKER } from '../src/privacy.ts'
 import { WHOLE_RESULT } from '../src/extract.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { AppendedNotice, HostFixture } from './support/host.ts'
@@ -566,7 +567,7 @@ describe('票 07 第 7 条：隐私模式只发一次请求且覆盖完整文本
 })
 
 describe('票 07 第 8 条：失效可见性', () => {
-  it('同一会话内三类原因各提醒一条、文案互不相同、来源不是真实用户；同类不再重复', async () => {
+  it('同一会话内三类原因各交回一条附加上下文、文案互不相同、来源不是真实用户；同类不再重复', async () => {
     const notices: AppendedNotice[] = []
     const { fixture } = await mounted({}, [
       { text: UNCERTAIN },
@@ -575,30 +576,34 @@ describe('票 07 第 8 条：失效可见性', () => {
       { text: UNCERTAIN },
     ])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const results: ToolExecutionResult[] = []
     for (let index = 0; index < 4; index++) {
-      await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+      results.push(await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices)))
     }
+    const contexts = results.flatMap(result => [...result.additionalContexts ?? []])
 
-    expect(notices).toHaveLength(3)
-    const texts = notices.map(notice => textOf(notice.message.content))
+    expect(contexts).toHaveLength(3)
+    const texts = contexts.map(context => textOf(context.content))
     expect(new Set(texts).size).toBe(3)
     expect(texts.some(text => text.includes('未能判定'))).toBe(true)
     expect(texts.some(text => text.includes('判断') && text.includes('失败'))).toBe(true)
     expect(texts.some(text => text.includes('窗口'))).toBe(true)
-    for (const notice of notices) {
-      expect(notice.type).toBe('user/message')
-      expect(notice.message.source.kind).not.toBe('user')
-      expect(notice.opts).toEqual({ surfaceOp: 'append' })
+    for (const context of contexts) {
+      expect(context.source.kind).not.toBe('user')
+      expect(textOf(context.content).startsWith(REMINDER_MARKER)).toBe(true)
     }
+    // 提醒随结果交回给循环，插件自己不再 append 会话事件。
+    expect(notices).toHaveLength(0)
   })
 
-  it('失败策略为 block 时不发会话提醒（拦截本身在对话里可见）', async () => {
+  it('失败策略为 block 时不交回提醒（拦截本身在对话里可见）', async () => {
     const notices: AppendedNotice[] = []
     const { fixture } = await mounted({ failurePolicy: 'block' }, [{ text: UNCERTAIN }])
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
 
     expect(result.isError).toBe(true)
+    expect(result.additionalContexts ?? []).toHaveLength(0)
     expect(notices).toHaveLength(0)
   })
 
@@ -613,16 +618,16 @@ describe('票 07 第 8 条：失效可见性', () => {
     const notices: AppendedNotice[] = []
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
 
-    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    const first = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
     expect(route.requests).toHaveLength(1)
-    expect(notices).toHaveLength(1)
+    expect(first.additionalContexts).toHaveLength(1)
 
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['privacyGate'], value: false }])
     expect(fixture.config.privacyGate.get()).toBe(false)
     // 摘要能力也关着，所以这一条结果既不发请求、也不再提醒（取值回到 summary-off）。
-    await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    const second = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
     expect(route.requests).toHaveLength(1)
-    expect(notices).toHaveLength(1)
+    expect(second.additionalContexts ?? []).toHaveLength(0)
   })
 })
 

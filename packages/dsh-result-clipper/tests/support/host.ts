@@ -81,7 +81,7 @@ export interface AppendedNotice {
  * @param parent - 父派发 token；不给就是模型直连调用。
  * @param args - 工具参数；默认空对象，需要时可放入哨兵值检验「记录不泄漏它们」。
  * @param session - 会话 id；默认 `s1`。换一个 id 即模拟 fork／重启后的新会话。
- * @param notices - 给出时收集这次调用 append 的会话事件（票 07 的会话提醒）；不给则吞掉。
+ * @param notices - 给出时收集这次调用 append 的会话事件；提醒改走附加上下文后，用例用它做「插件不再自己 append」的阴性断言。
  * @returns 可交给 `ctx.tools.execute` 的 exec。
  */
 export function exec(

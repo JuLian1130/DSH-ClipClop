@@ -86,9 +86,11 @@ import { lookupMemo, noteMemo, type SummaryMemo } from './memo.ts'
 import {
   composeBlockedFeedback,
   composePrivacyPrompt,
-  notifyFailure,
+  forgetReminder,
+  reminderMessage,
   requestPrivacy,
   type ReminderLedger,
+  type ReminderReason,
 } from './privacy.ts'
 import {
   composeSummaryPrompt,
@@ -150,10 +152,23 @@ export function apply(ctx: Context, config: Required<Config>): void {
         admission: 'not-applicable',
         observation: { cacheReadTokens: 0, judgeInputTokens: null },
         extract: false,
+        additionalContexts: [],
       }))
     await record(config, exec.name, result, startedAt, applied)
-    return applied.decision
+    return withReminders(applied.decision, applied.additionalContexts)
   }, { prepend: true })
+}
+
+/**
+ * 把本次要交回的提醒作为**附加上下文**挂在决策上：Agent 循环在该结果提交后、下一步边界把它追加成 user 消息
+ * （`CONTEXT.md` 的「附加上下文」）。没有提醒时原样交回下游决策。
+ * @param decision - 下游决策。
+ * @param reminders - 本次要交回的提醒，可能为空。
+ * @returns 带上附加上下文的决策。
+ */
+function withReminders(decision: PostToolDecision, reminders: readonly UserMessage[]): PostToolDecision {
+  if (reminders.length === 0) return decision
+  return { ...decision, additionalContexts: [...decision.additionalContexts ?? [], ...reminders] }
 }
 
 /** 一次处理交回的判定：工具决策、结果取值与准入结论。 */
@@ -168,6 +183,8 @@ interface Processed extends Applied {
   readonly observation: Observation
   /** 这次调用有没有声明提取目标；debug 记录只记这个布尔，不记目标正文。 */
   readonly extract: boolean
+  /** 本次要交回的提醒，作为附加上下文挂在决策上；没有时为空的数组。 */
+  readonly additionalContexts: readonly UserMessage[]
 }
 
 /** 这条结果发出的模型请求的观测累计，即 debug 的「缓存观测」与「判断器输入 token 数」两个字段。 */
@@ -227,13 +244,24 @@ async function process(
   // 判定必须先做，所以这条路真的会把提示词发出去）。
   const promptGoal = goal !== undefined && (isWholeResult(goal) || wantsExactText(goal)) ? undefined : goal
   const observation: Observation = { cacheReadTokens: 0, judgeInputTokens: null }
-  const settle = (applied: Applied): Processed => ({ ...applied, observation, extract: goal !== undefined })
+  /** 本次要交回的提醒；`settle` 在返回时读它，所以提醒必须在本条路径返回之前取。 */
+  const remindersOut: UserMessage[] = []
+  const remind = (reason: ReminderReason): void => {
+    if (dryRun) return
+    const message = reminderMessage(reminders, exec.agent?.session, reason)
+    if (message !== undefined) remindersOut.push(message)
+  }
+  // 这次把 extract 填上了：放回「漏填」的名额——同类只提醒一次是为了不刷屏，不是永久豁免。
+  if (required && goal !== undefined) forgetReminder(reminders, exec.agent?.session, 'extract-missing')
+  const settle = (applied: Applied): Processed => ({
+    ...applied, observation, extract: goal !== undefined, additionalContexts: remindersOut,
+  })
   const unchanged = (reason: UnmodifiedReason, admission: AdmissionVerdict = 'not-applicable'): Processed =>
     settle({ decision, outcome: { action: 'unmodified', reason }, admission })
   // 声明逐字原文时按原文透传：摘要器只能改写，给不出逐字保证（exp9 实测 6 条候选里 4 条被改写、模型随即
   // 又读一次同一文件）。放在候选判定之后，所以低于下限的结果仍记 `not-candidate`。
   const exactText = (): Processed => {
-    if (!dryRun) notifyFailure(reminders, exec.agent?.session, 'exact-text')
+    remind('exact-text')
     return unchanged('exact-text')
   }
   // `extract` 是必填参数，哨兵 `WHOLE_RESULT` 是"要整份结果"的唯一写法：显式要整份就按原文透传、不发摘要请求，
@@ -241,9 +269,6 @@ async function process(
   const wholeResult = (): Processed => unchanged('whole-result')
   // 漏填或空串：必填字段漏填是模型侧的错误，提醒一次让它下次填上。提醒不改变这条路怎么走——怎么走仍由规则摘要
   // 开关决定（见下面 `rule-summary-off` 那条判定），这里只负责让模型知道。
-  const remindMissingExtract = (): void => {
-    if (!dryRun) notifyFailure(reminders, exec.agent?.session, 'extract-missing')
-  }
   // 下游策略拒绝时模型看到的是那段反馈、不是可摘要的工具正文；它也不是本次要判断的工具内容。
   if (decision.kind === 'block') return unchanged('not-candidate')
 
@@ -257,7 +282,7 @@ async function process(
       visible,
       [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],
     )
-    const judgement = await judgePrivacy(ctx, config, reminders, exec, projection, dryRun, observation, promptGoal, efforts)
+    const judgement = await judgePrivacy(ctx, config, remind, projection, dryRun, observation, promptGoal, efforts)
     // 干跑只预报「本应拦截」，交回的仍是下游决策——模型可见内容一个字都不变。
     if (judgement.kind === 'block') {
       return settle({
@@ -275,7 +300,7 @@ async function process(
     if (verdict.kind === 'skip') return unchanged('not-candidate')
     if (goal !== undefined && isWholeResult(goal)) return wholeResult()
     if (goal !== undefined && wantsExactText(goal)) return exactText()
-    if (required && goal === undefined) remindMissingExtract()
+    if (required && goal === undefined) remind('extract-missing')
     // `keep` 是信号而非复述：正文逐字不变，模型输出里的任何正文都不被采用，也不写存储、不进 memo。
     if (judgement.action.action === 'keep') return unchanged('kept')
     return settle(await replace(
@@ -291,7 +316,7 @@ async function process(
   if (goal !== undefined && isWholeResult(goal)) return wholeResult()
   if (goal !== undefined && wantsExactText(goal)) return exactText()
   // 没声明提取目标：必填字段漏填（或空串手写），先提醒一次；随后照旧按规则摘要开关处理。
-  if (required && goal === undefined) remindMissingExtract()
+  if (required && goal === undefined) remind('extract-missing')
   // 规则摘要关闭（`ruleSummary`）且这次没声明提取目标：候选结果直接透传，这条取值就是该对照实验的计数。
   // 放在候选判定之后：不是候选的结果仍记 `not-candidate`，`rule-summary-off` 才恰好是"本该摘要却没摘"的那批。
   if (goal === undefined && !config.ruleSummary.get()) return unchanged('rule-summary-off')
@@ -380,15 +405,14 @@ type PrivacyJudgement =
  * 对一个标准工具结果的模型可见投影做一次隐私判断。
  *
  * **配置失败**（隐私 route 未确认为本地、没有 `llm` 服务或 route 没配出来）按失败策略处理：它的可见面是配置项
- * 与卡片常驻警告（静态配置状态），因此不另发会话提醒。**运行期失效**（未能判定 / 判断失败 / 窗口不足）在按
+ * 与卡片常驻警告（静态配置状态），因此不另发提醒。**运行期失效**（未能判定 / 判断失败 / 窗口不足）在按
  * `passthrough` 放行时各提醒一条，`block` 策略下不发提醒（拦截本身在对话里可见）；干跑下两者都不发生——
- * 提醒既不 append 也不进台账，否则会改变随后真实运行的提醒去重。
+ * 提醒既不交回也不进台账，否则会改变随后真实运行的提醒去重。
  * @param ctx - 插件的 context。
  * @param config - 解析后的配置。
- * @param reminders - 本进程内各会话的失效提醒台账。
- * @param exec - 工具执行（取会话归属）。
+ * @param remind - 取一条本次要交回的提醒（附加上下文）；干跑、同类已提醒过或没有会话归属时不产出。
  * @param projection - 模型即将看到的完整文本投影。
- * @param dryRun - 干跑：请求照发，但不 append 会话事件。
+ * @param dryRun - 干跑：请求照发，但不产出提醒。
  * @param observation - 这条结果的模型请求观测累计。
  * @param goal - 投给这次请求的提取目标（{@link process} 已把哨兵与逐字要求折成 `undefined`）；没声明时为
  *   `undefined`（此时请求与关闭该参数之前逐字相同）。
@@ -398,8 +422,7 @@ type PrivacyJudgement =
 async function judgePrivacy(
   ctx: Context,
   config: Required<Config>,
-  reminders: ReminderLedger,
-  exec: ToolExecution,
+  remind: (reason: ReminderReason) => void,
   projection: string,
   dryRun: boolean,
   observation: Observation,
@@ -425,7 +448,7 @@ async function judgePrivacy(
   if (!answer.ok) {
     if (blocked) return { kind: 'block' }
     const reason: UnmodifiedReason = answer.failure === 'failed-window' ? 'failed-window' : 'failed'
-    if (!dryRun) notifyFailure(reminders, exec.agent?.session, reason)
+    remind(reason)
     return { kind: 'passthrough', reason }
   }
   // 判定敏感在任何失败策略下都拦截。
@@ -433,7 +456,7 @@ async function judgePrivacy(
   if (answer.verdict === 'uncertain') {
     if (blocked) return { kind: 'block' }
     // `uncertain` 连带取消摘要：既不摘要也不拦截，按失败策略放行原文。
-    if (!dryRun) notifyFailure(reminders, exec.agent?.session, 'uncertain')
+    remind('uncertain')
     return { kind: 'passthrough', reason: 'uncertain' }
   }
   return { kind: 'safe', action: answer.action }

@@ -1,5 +1,5 @@
 /**
- * 隐私闸门：一次同时给出隐私结论与摘要字段的本地请求、固定拒绝文案，以及运行期失效的会话提醒。
+ * 隐私闸门：一次同时给出隐私结论与摘要字段的本地请求、固定拒绝文案，以及运行期失效的提醒（作为附加上下文交回）。
  *
  * **一次请求**：隐私模式不经过准入判断，直接把模型即将看到的**完整文本投影**（下游处理后的正文与附加上下文）
  * 交给所选 route，返回 `privacyVerdict`、`action` 与 `summary` 三个字段（设计文档「隐私闸门」的合并请求条）。
@@ -198,6 +198,12 @@ export function composeBlockedFeedback(toolName: string): string {
  */
 export type ReminderReason = 'uncertain' | 'failed' | 'failed-window' | 'exact-text' | 'extract-missing'
 
+/**
+ * 提醒正文的来源前缀。提醒以附加上下文交回，模型侧看不到消息的 `source`（合成用户消息与真实用户消息在请求里
+ * 形状相同），只能靠正文分辨它不是用户发言。
+ */
+export const REMINDER_MARKER = '[dsh-result-clipper] '
+
 /** 各类失效各自的提醒文案：互不相同，且不含任何正文。 */
 const REMINDER_TEXT: Record<ReminderReason, string> = {
   uncertain: '隐私闸门未能判定刚才那条工具结果是否涉及隐私，已按失败策略放行原文。',
@@ -216,31 +222,49 @@ const REMINDER_TEXT: Record<ReminderReason, string> = {
 /** 按会话分开的「已提醒原因」台账：同一会话内每类原因至多一条。 */
 export type ReminderLedger = Map<string, Set<ReminderReason>>
 
-/** 会话语义里本模块用到的两处：归属 id 与追加一条消息。 */
+/** 会话语义里本模块用到的唯一一处：提醒台账的归属 id。 */
 export interface ReminderSession {
   readonly header: { readonly id: string }
-  append(type: 'user/message', data: UserMessage, opts: { readonly surfaceOp: 'append' }): unknown
 }
 
 /**
- * 按「同一会话内每类原因至多一条」追加提醒；已提醒过或没有会话归属时什么也不做。
+ * 取这次该交回的提醒；同一会话同类原因已提醒过、或没有会话归属时返回 `undefined`。
+ *
+ * 提醒是**附加上下文**：调用方把它挂在这次工具结果的决策上，由 Agent 循环在该结果提交后、下一步边界追加成
+ * user 消息（`CONTEXT.md` 的「附加上下文」）。它不伪装成真实用户消息——`source.kind` 不是 `user`。
  * @param ledger - 本进程内各会话的提醒台账。
  * @param session - 这次工具执行的会话；没有会话归属时为 `undefined`。
- * @param reason - 这次失效的原因（未判定 / 判断失败 / 窗口不足）。
+ * @param reason - 这次失效的原因（未判定 / 判断失败 / 窗口不足 / 逐字要求 / 漏填必填参数）。
+ * @returns 要交回的提醒；这次不该发时为 `undefined`。
  */
-export function notifyFailure(
+export function reminderMessage(
+  ledger: ReminderLedger,
+  session: ReminderSession | undefined,
+  reason: ReminderReason,
+): UserMessage | undefined {
+  if (session === undefined) return undefined
+  const notified = ledger.get(session.header.id) ?? new Set<ReminderReason>()
+  if (notified.has(reason)) return undefined
+  notified.add(reason)
+  ledger.set(session.header.id, notified)
+  const text = REMINDER_MARKER + REMINDER_TEXT[reason]
+  return createUserMessage({
+    content: [{ type: 'text', text }],
+    source: { kind: 'dsh-result-clipper', form: 'notice', summary: boundContextSummary(text) },
+  })
+}
+
+/**
+ * 放回一条原因的名额：主模型按上一条提醒做对了一次，之后再犯就是新的一次失误，值得重新提醒。
+ * @param ledger - 本进程内各会话的提醒台账。
+ * @param session - 这次工具执行的会话；没有会话归属时什么也不做。
+ * @param reason - 要放回的原因。
+ */
+export function forgetReminder(
   ledger: ReminderLedger,
   session: ReminderSession | undefined,
   reason: ReminderReason,
 ): void {
   if (session === undefined) return
-  const notified = ledger.get(session.header.id) ?? new Set<ReminderReason>()
-  if (notified.has(reason)) return
-  notified.add(reason)
-  ledger.set(session.header.id, notified)
-  const text = REMINDER_TEXT[reason]
-  session.append('user/message', createUserMessage({
-    content: [{ type: 'text', text }],
-    source: { kind: 'dsh-result-clipper', form: 'notice', summary: boundContextSummary(text) },
-  }), { surfaceOp: 'append' })
+  ledger.get(session.header.id)?.delete(reason)
 }

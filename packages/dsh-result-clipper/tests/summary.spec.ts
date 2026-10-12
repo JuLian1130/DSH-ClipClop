@@ -116,7 +116,7 @@ describe('票 03：目标工具的长文本结果被改写成短说明、只替�
     ])
   })
 
-  it('只替换 content：下游附加上下文原样保留', async () => {
+  it('只替换 content：下游附加上下文原样保留，本插件自己的提醒接在其后', async () => {
     const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     const attached = createUserMessage({ content: [{ type: 'text', text: 'attached context' }], source: { kind: 'user' } })
@@ -127,7 +127,12 @@ describe('票 03：目标工具的长文本结果被改写成短说明、只替�
 
     expect(route.requests).toHaveLength(1)
     expect(result.content).toEqual([{ type: 'text', text: replacedText(fixture) }])
-    expect(result.additionalContexts).toEqual([attached])
+    expect(result.additionalContexts).toEqual([
+      attached,
+      expect.objectContaining({
+        source: expect.objectContaining({ kind: 'dsh-result-clipper', form: 'notice' }),
+      }),
+    ])
   })
 })
 
