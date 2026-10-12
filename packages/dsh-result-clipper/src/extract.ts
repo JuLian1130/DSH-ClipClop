@@ -124,16 +124,27 @@ export const SHELL_GUIDANCE = [
   'restate or change the task there.',
 ].join(' ')
 
-/** `web_fetch` 的工具说明追加段；与 `read`/shell 同形（形状例子 + 整读代价 + 必填与哨兵）。 */
+/**
+ * `web_fetch` 的工具说明追加段：句式与 `read` 对齐——"除非确实要页面本身"的强默认在前、`WHOLE_RESULT` 兜底、
+ * 整页最贵的代价句、必填与哨兵。
+ *
+ * 原先是"需要结论时就写目标；需要整页时写哨兵"的条件并列。改成 `read` 那套是有意的（0.1.7）：`read` 上
+ * "必填 + 哨兵"单独上线时哨兵率 82.5%，配这层劝说的版本是 27.9%，收益来自把"要什么"放回默认位置。网页**没有**
+ * 范围读，所以 `read` 的 `offset/limit` 那句不适用。本段没有 `web_fetch` 自己的实测数据——调用量还没到能测的
+ * 程度，这是一次按 `read` 结论外推的文案改动。
+ */
 export const WEB_FETCH_GUIDANCE = [
-  'When you need a conclusion or a few specific facts from a large page, write exactly that in extract (for',
-  `example "the release date and the version number"); when you need the page text unchanged, write ${WHOLE_RESULT}.`,
+  "Pass extract with the information you want back, unless you truly need the page's text itself.",
+  'What you want back is usually a conclusion or a few specific facts (for example "the release date and the',
+  'version number") — the page is fetched and read in full on the other side, so you do not need to know where in',
+  'it the answer is.',
+  `If the only honest answer is "all of it", write ${WHOLE_RESULT}.`,
   'A broad goal is fine, and so is asking several things at once.',
   'A page that stays in context for the rest of the session is the most expensive thing you can ask for — prefer a',
   'goal unless you really will use the whole page.',
-  'extract is always required. A small page is returned unchanged either way, and for a large one the full text',
-  'stays available at a path you can read later. Write only the information you need in extract — never restate',
-  'or change the task there.',
+  `extract is always required: ${WHOLE_RESULT} means you need the whole result unchanged. A small page is`,
+  'returned unchanged either way, and for a large one the full text stays available at a path you can read later.',
+  'Write only the information you need in extract — never restate or change the task there.',
 ].join(' ')
 
 /** 各目标工具自己的说明追加段。两个 shell 名字共用同一段：它们只是同一件事在不同平台上的注册名。 */
