@@ -627,6 +627,7 @@ describe('票 07 第 8 条：失效可见性', () => {
     const second = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
     expect(route.requests).toHaveLength(1)
     expect(second.additionalContexts ?? []).toHaveLength(0)
+    expect(notices).toHaveLength(0)
   })
 })
 

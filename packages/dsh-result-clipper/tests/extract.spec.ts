@@ -259,9 +259,11 @@ describe('必填参数漏填：照默认处理，同时提醒一次', () => {
   it('低于摘要下限时不提醒：不是候选的结果本来就不该有人填参数', async () => {
     const { fixture, path } = await mounted()
     fixture.ctx.tools.register(textTool('bash', 'x'.repeat(10)))
-    const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
+    const notices: AppendedNotice[] = []
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
 
     expect(result.additionalContexts ?? []).toHaveLength(0)
+    expect(notices).toHaveLength(0)
     expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
       .toMatchObject({ action: 'unmodified', reason: 'not-candidate' })
   })
@@ -269,13 +271,15 @@ describe('必填参数漏填：照默认处理，同时提醒一次', () => {
   it('填过一次之后名额放回：同一个会话里再漏填，仍会得到一条提醒', async () => {
     const { fixture } = await mounted({ ruleSummary: false })
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    const missed = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
-    const filled = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'ls', extract: '只要标题' }, 's1'))
-    const missedAgain = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
+    const notices: AppendedNotice[] = []
+    const missed = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
+    const filled = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'ls', extract: '只要标题' }, 's1', notices))
+    const missedAgain = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1', notices))
 
     expect(missed.additionalContexts).toHaveLength(1)
     expect(filled.additionalContexts ?? []).toHaveLength(0)
     expect(missedAgain.additionalContexts).toHaveLength(1)
+    expect(notices).toHaveLength(0)
   })
 })
 
