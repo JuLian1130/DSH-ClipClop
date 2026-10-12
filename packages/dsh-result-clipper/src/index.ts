@@ -86,7 +86,7 @@ import { lookupMemo, noteMemo, type SummaryMemo } from './memo.ts'
 import {
   composeBlockedFeedback,
   composePrivacyPrompt,
-  forgetReminder,
+  forgetExtractMissingReminder,
   reminderMessage,
   requestPrivacy,
   type ReminderLedger,
@@ -253,7 +253,7 @@ async function process(
   }
   // 这次把 extract 填上了：放回「漏填」的名额——同类只提醒一次是为了不刷屏，不是永久豁免。
   // 放回名额也是台账写入，所以与 `remind` 一样受干跑约束：干跑不能改变随后真实运行的提醒次序。
-  if (!dryRun && required && goal !== undefined) forgetReminder(reminders, exec.agent?.session, 'extract-missing')
+  if (!dryRun && required && goal !== undefined) forgetExtractMissingReminder(reminders, exec.agent?.session)
   const settle = (applied: Applied): Processed => ({
     ...applied, observation, extract: goal !== undefined, additionalContexts: remindersOut,
   })

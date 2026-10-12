@@ -255,16 +255,14 @@ export function reminderMessage(
 }
 
 /**
- * 放回一条原因的名额：主模型按上一条提醒做对了一次，之后再犯就是新的一次失误，值得重新提醒。
+ * 放回「漏填 `extract`」的名额：主模型按上一条提醒做对了一次，之后再犯就是新的一次失误，值得重新提醒。
  * @param ledger - 本进程内各会话的提醒台账。
  * @param session - 这次工具执行的会话；没有会话归属时什么也不做。
- * @param reason - 要放回的原因。
  */
-export function forgetReminder(
+export function forgetExtractMissingReminder(
   ledger: ReminderLedger,
   session: ReminderSession | undefined,
-  reason: ReminderReason,
 ): void {
   if (session === undefined) return
-  ledger.get(session.header.id)?.delete(reason)
+  ledger.get(session.header.id)?.delete('extract-missing')
 }
