@@ -6,7 +6,7 @@
  * 照旧直接 `next()`；其余普通派发先 `await next()` 让下游（含 spill）跑完，再按候选范围决定是否改写模型可见
  * 投影。只有三类目标工具、文本结果、长度在 [`minInlineTokens`, `maxSummarizeTokens`) 区间内（`read` 无上界）
  * 才发摘要请求；候选之外的、`bash`/`web_fetch` 超上限的、失败的、模型要求 `keep` 的、摘要没变短的、按入口
- * 读回的，一律原样透传。替换只改 `content`，`additionalContexts` 原样保留（ADR 0003）。
+ * 读回的，一律原样透传。替换只改 `content`；下游已有的 `additionalContexts` 保留原顺序与来源，插件自己的提醒追加在它们之后（ADR 0003，票 13 修订）。
  *
  * 被替换的正文先写进 spill 存储，把 `locator` 与取回方法作为入口说明接在摘要正文之后（兜底段：先让模型读到
  * 摘要，并能看出这是摘要、够用就不必再读）；长度比较计入入口
