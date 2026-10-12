@@ -21,7 +21,6 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { Config } from '../src/index.ts'
 import { composeEntry } from '../src/entry.ts'
 import { DEFAULT_PRIVACY_RULE } from '../src/rules.ts'
-import { REMINDER_MARKER } from '../src/privacy.ts'
 import { WHOLE_RESULT } from '../src/extract.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { AppendedNotice, HostFixture } from './support/host.ts'
@@ -590,7 +589,7 @@ describe('票 07 第 8 条：失效可见性', () => {
     expect(texts.some(text => text.includes('窗口'))).toBe(true)
     for (const context of contexts) {
       expect(context.source.kind).not.toBe('user')
-      expect(textOf(context.content).startsWith(REMINDER_MARKER)).toBe(true)
+      expect(textOf(context.content).startsWith('[dsh-result-clipper] ')).toBe(true)
     }
     // 提醒随结果交回给循环，插件自己不再 append 会话事件。
     expect(notices).toHaveLength(0)

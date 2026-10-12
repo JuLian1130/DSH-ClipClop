@@ -212,7 +212,7 @@ function dryRunInEffect(config: Required<Config>): boolean {
  * 隐私关闭时按原顺序走准入与 memo。
  *
  * 干跑只改两件事：交回的决策永远是下游决策（`dryRun ? decision : …`），以及所有写状态的动作（`saveText`、
- * 读回台账、memo、会话提醒）都不发生；判定与模型请求照常，所以记录里的取值是真实预报。
+ * 读回台账、memo、提醒台账——包括交回提醒与放回名额）都不发生；判定与模型请求照常，所以记录里的取值是真实预报。
  * @param ctx - 插件的 context。
  * @param config - 解析后的配置。
  * @param readback - 本进程内各会话写出的入口台账。
@@ -252,7 +252,8 @@ async function process(
     if (message !== undefined) remindersOut.push(message)
   }
   // 这次把 extract 填上了：放回「漏填」的名额——同类只提醒一次是为了不刷屏，不是永久豁免。
-  if (required && goal !== undefined) forgetReminder(reminders, exec.agent?.session, 'extract-missing')
+  // 放回名额也是台账写入，所以与 `remind` 一样受干跑约束：干跑不能改变随后真实运行的提醒次序。
+  if (!dryRun && required && goal !== undefined) forgetReminder(reminders, exec.agent?.session, 'extract-missing')
   const settle = (applied: Applied): Processed => ({
     ...applied, observation, extract: goal !== undefined, additionalContexts: remindersOut,
   })

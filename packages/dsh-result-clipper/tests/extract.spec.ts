@@ -35,7 +35,6 @@ import {
 } from '../src/extract.ts'
 import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { AppendedNotice, HostFixture } from './support/host.ts'
-import { REMINDER_MARKER } from '../src/privacy.ts'
 import { runLoop } from './support/loop.ts'
 import type { LoopFixture } from './support/loop.ts'
 import { FakeRoute, requestText } from './support/route.ts'
@@ -239,7 +238,7 @@ describe('必填参数漏填：照默认处理，同时提醒一次', () => {
     const text = textOf(first.additionalContexts![0]!.content)
     expect(text).toContain(WHOLE_RESULT)
     expect(text).toContain('extract')
-    expect(text.startsWith(REMINDER_MARKER)).toBe(true)
+    expect(text.startsWith('[dsh-result-clipper] ')).toBe(true)
     expect(notices).toHaveLength(0)
     expect(JSON.parse(readFileSync(path, 'utf8').trim().split('\n').at(-1)!) as unknown)
       .toMatchObject({ action: 'unmodified', reason: 'rule-summary-off', extract: false })

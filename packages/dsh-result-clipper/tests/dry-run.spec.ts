@@ -246,6 +246,30 @@ describe('票 08 第 2 条：干跑走完整流水线但不产生副作用', () 
     expect(real.additionalContexts).toHaveLength(1)
     expect(notices).toHaveLength(0)
   })
+
+  it('干跑不放回漏填名额：干跑里把 extract 填对，关掉干跑后同一次漏填仍不重复提醒', async () => {
+    const path = join(tempRoot(), 'debug.jsonl')
+    const fixture = await booted(
+      {
+        summarize: true, ruleSummary: false, routeProvider: 'local', routeModel: 'qwen',
+        debug: true, debugPath: path,
+      },
+      new FakeRoute([{ text: SUMMARY_REPLY }]),
+    )
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+
+    const missed = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
+    expect(missed.additionalContexts).toHaveLength(1)
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['dryRun'], value: true }])
+    const filled = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'ls', extract: '只要标题' }, 's1'))
+    expect(filled.additionalContexts ?? []).toHaveLength(0)
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['dryRun'], value: false }])
+    const missedAgain = await fixture.ctx.tools.execute(exec('bash', undefined, {}, 's1'))
+    // 放回名额也是台账写入，干跑不该做：真做了，这里会再得到一条。
+    expect(missedAgain.additionalContexts ?? []).toHaveLength(0)
+  })
 })
 
 describe('票 08 第 3 条：干跑在 debug 日志里写出本应发生什么', () => {

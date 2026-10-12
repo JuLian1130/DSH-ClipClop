@@ -202,7 +202,7 @@ export type ReminderReason = 'uncertain' | 'failed' | 'failed-window' | 'exact-t
  * 提醒正文的来源前缀。提醒以附加上下文交回，模型侧看不到消息的 `source`（合成用户消息与真实用户消息在请求里
  * 形状相同），只能靠正文分辨它不是用户发言。
  */
-export const REMINDER_MARKER = '[dsh-result-clipper] '
+const REMINDER_MARKER = '[dsh-result-clipper] '
 
 /** 各类失效各自的提醒文案：互不相同，且不含任何正文。 */
 const REMINDER_TEXT: Record<ReminderReason, string> = {
