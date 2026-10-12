@@ -283,7 +283,7 @@ async function process(
       visible,
       [...result.additionalContexts ?? [], ...decision.additionalContexts ?? []],
     )
-    const judgement = await judgePrivacy(ctx, config, remind, projection, dryRun, observation, promptGoal, efforts)
+    const judgement = await judgePrivacy(ctx, config, remind, projection, observation, promptGoal, efforts)
     // 干跑只预报「本应拦截」，交回的仍是下游决策——模型可见内容一个字都不变。
     if (judgement.kind === 'block') {
       return settle({
@@ -413,7 +413,6 @@ type PrivacyJudgement =
  * @param config - 解析后的配置。
  * @param remind - 取一条本次要交回的提醒（附加上下文）；干跑、同类已提醒过或没有会话归属时不产出。
  * @param projection - 模型即将看到的完整文本投影。
- * @param dryRun - 干跑：请求照发，但不产出提醒。
  * @param observation - 这条结果的模型请求观测累计。
  * @param goal - 投给这次请求的提取目标（{@link process} 已把哨兵与逐字要求折成 `undefined`）；没声明时为
  *   `undefined`（此时请求与关闭该参数之前逐字相同）。
@@ -425,7 +424,6 @@ async function judgePrivacy(
   config: Required<Config>,
   remind: (reason: ReminderReason) => void,
   projection: string,
-  dryRun: boolean,
   observation: Observation,
   goal: string | undefined,
   efforts: EffortChoice,
