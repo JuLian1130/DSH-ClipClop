@@ -6,6 +6,8 @@
 2. [grep 主要读数据、sed 主要写文件、git 读写平衡吗？](#二grepsedgit-的读写分工)
 3. [DSH 写文件一般用什么工具/命令？](#三dsh-写文件用什么工具命令)
 
+sed / grep 的用途拆解与可精简场景另见《[sed 与 grep：用途与上下文成本](dsh-sed-grep-cost.md)》。
+
 ## 文档元信息
 
 | 项 | 值 |
