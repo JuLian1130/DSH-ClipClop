@@ -44,9 +44,18 @@ const TINY_SAVING_DIFF = [
   ...Array.from({ length: 41 }, (_, index) => ` const keep${String(index).padStart(2, '0')} = ${index} // 这一行会被完整保留`),
 ].join('\n')
 
+/**
+ * 一份**不是 diff** 的长正文（320 行互不相同的纯文本）：命令串仍是 `git diff`，所以分派会命中这一族，而族
+ * handler 在看懂正文之前就守卫放弃（`not-a-unified-diff`）。判据 10 的第 3、4 个去向（族放弃之后落通用链、
+ * 落成哪条取值）要靠它构造——已发布的这一族**不会抛异常**，异常那一支只能在安全层的纯函数接缝上观察。
+ */
+const NOT_A_DIFF_BODY = Array.from({ length: 320 }, (_, index) => `line ${index}`).join('\n')
+
+/** 同上，但末尾带一条上游位置说明：通用链的尾部封顶在已有位置说明时同样守卫放弃（`abstained`）。 */
+const NOT_A_DIFF_WITH_NOTICE = `${NOT_A_DIFF_BODY}\n\n(original result stored at: /tmp/entry.txt)`
+
 const open: HostFixture[] = []
 const roots: string[] = []
-
 afterEach(async () => {
   await Promise.all(open.splice(0).map(async (fixture) => { await fixture.dispose() }))
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
@@ -195,6 +204,16 @@ describe('票 16 判据 5：脚手架链按首个实质命令命中', () => {
     expect(text).toMatch(AGGREGATE_LINE)
     expect(observation(path)).toMatchObject({ family: 'compactDiff' })
   })
+
+  it('纯变量赋值段也被跳过：`PAGER=less; git diff …` 照样被这一族接手', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
+    const args = { command: 'PAGER=less; git diff HEAD~1' }
+    const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, args))).content)
+
+    expect(text).toMatch(AGGREGATE_LINE)
+    expect(observation(path)).toMatchObject({ family: 'compactDiff' })
+  })
 })
 
 describe('票 16 判据 13：命令族只在 bash 结果上求值', () => {
@@ -302,6 +321,33 @@ describe('票 16 判据 10：四个去向逐个从外部观察', () => {
     expect(readRecords(path)[0]).toMatchObject({
       action: 'condensed',
       condense: { family: 'compactDiff', rules: ['compactDiff'] },
+    })
+  })
+
+  it('族守卫放弃后落通用链：记录里 family 在场、rules 记的是通用链的 id，这次不是失败', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', NOT_A_DIFF_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
+    const record = readRecords(path)[0]!
+
+    // 正文确实被通用链改过（尾部封顶），而 `rules` 里没有族 id——`compactDiff` 被命中却守卫放弃了。
+    expect(textOf(result.content)).not.toBe(NOT_A_DIFF_BODY)
+    expect(record).toMatchObject({
+      action: 'condensed',
+      condense: { family: 'compactDiff', rules: ['tail-cap'] },
+    })
+  })
+
+  it('族守卫放弃、通用链也守卫放弃时，取值记 condense-abstained 而不是失败', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', NOT_A_DIFF_WITH_NOTICE))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
+
+    expect(textOf(result.content)).toBe(NOT_A_DIFF_WITH_NOTICE)
+    expect(readRecords(path)[0]).toMatchObject({
+      action: 'unmodified',
+      reason: 'condense-abstained',
+      condense: { rules: [], family: 'compactDiff' },
     })
   })
 })

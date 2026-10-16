@@ -84,10 +84,13 @@ export interface RuleTable {
 const SEGMENT_SEPARATOR = /&&|\|\||;|\||\n/
 
 /**
- * 脚手架成分的开头：目录切换、纯变量赋值、单纯的计时 / 环境包装。它们不产出被收窄的正文，因而不参与分派。
- * 词表照 `docs/dsh-condense-measure/transforms_gitdiff.py:54` 的测量原型（票 14 用同一张表量出的读数）。
+ * 脚手架成分：目录切换、纯变量赋值、单纯的计时 / 环境包装。它们不产出被收窄的正文，因而不参与分派。
+ * 命令词表照 `docs/dsh-condense-measure/transforms_gitdiff.py:54` 的测量原型（票 14 用同一张表量出的读数）。
+ *
+ * 纯变量赋值那支要求**整段就是一条赋值**（`FOO=1`）：`GIT_PAGER=cat git diff` 是给真命令加前缀、产出正文的是
+ * 后面那个命令，把它当脚手架会把这次调用整段丢掉——所以这里用 `$` 钉住段尾，不认「赋值开头」。
  */
-const SCAFFOLD = /^(?:cd|pushd|popd|export|set|source|\.|time|env|umask|ulimit)\b/
+const SCAFFOLD = /^(?:(?:cd|pushd|popd|export|set|source|\.|time|env|umask|ulimit)\b|[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)$)/
 
 /** 标题横幅：`echo` / `printf` 打出来的分隔行，同样不参与分派。 */
 const BANNER = /^(?:echo|printf)\b/

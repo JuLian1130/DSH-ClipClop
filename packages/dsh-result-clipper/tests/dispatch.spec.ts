@@ -155,8 +155,16 @@ describe('票 16 判据 5：脚手架与管道不参与分派', () => {
     expect(firstSubstantiveCommand(command)).toBe('git diff')
   })
 
-  it('纯变量赋值与分隔符也不参与', () => {
+  it('导出与纯变量赋值段都不参与（整段就是一条赋值才算脚手架）', () => {
     expect(firstSubstantiveCommand('export FOO=1; git diff --stat')).toBe('git diff --stat')
+    expect(firstSubstantiveCommand('FOO=1; git diff --stat')).toBe('git diff --stat')
+    expect(firstSubstantiveCommand("PAGER='less -R'; git diff")).toBe('git diff')
+  })
+
+  it('给真命令加前缀的赋值不是脚手架段：产出正文的是后面那个命令', () => {
+    // 这一段整段交给规则表判（`^git …` 自然不命中），不能被当成脚手架跳过——否则 `FOO=1 git diff` 这种写法
+    // 会因为「赋值的下一段」不存在而整次丢掉分派。
+    expect(firstSubstantiveCommand('GIT_PAGER=cat git diff')).toBe('GIT_PAGER=cat git diff')
   })
 
   it('首个实质命令就是非目标命令时，后面的 git diff 不参与', () => {
