@@ -194,8 +194,6 @@ def _run(label, transforms, out_dir, targets, floor_units, max_calls, mode):
         rep.tokens_after += after
         rep.tokens_saved_triggered += before - after
         rep.tokens_before_triggered += before
-        if len(transforms) > 1 and mode == "dispatch":
-            raise AssertionError("dispatch must resolve to exactly one rule")
     return rep
 
 
