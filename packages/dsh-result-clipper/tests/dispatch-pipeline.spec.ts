@@ -10,6 +10,10 @@
  * 收窄后的聚合量形态（`  +N -M`）与通用链的收窄形态（`…[省略 N 行]`）在正文里互不相同，所以「走的是哪条
  * 路」可以直接从模型可见的正文看出来。
  *
+ * 票 17 的判据 1/2/3/5/6/7 接着同一张接缝：两族（`sedWindow` / `rawDump`）各自的开关、形态、回退入口与两条
+ * 守卫。两族的输入都给 400 行——同时超过本族的应用期下限（60 行）与**通用链**的封顶触发线（300 行），于是
+ * 族形态（`…[中段省略 N 行]…`）与通用链形态（`…[省略 N 行]`）在正文里分得开，判据 1 的交叉对照才有观察面。
+ *
  * @module
  */
 
@@ -23,7 +27,7 @@ import { Config } from '../src/index.ts'
 import { exec, mount, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { AGGREGATE_LINE, GIT_DIFF_ARGS, GIT_DIFF_BODY } from './support/gitdiff.ts'
-import { FakeSpill } from './support/spill.ts'
+import { RETRIEVAL_HINT, FakeSpill } from './support/spill.ts'
 
 /**
  * 一份合法但**省幅过不了净收益阈值**（24 估算单位）的 diff：只改一行，其余 41 行是 hunk 内被完整保留的上下文。
@@ -53,6 +57,33 @@ const NOT_A_DIFF_BODY = Array.from({ length: 320 }, (_, index) => `line ${index}
 
 /** 同上，但末尾带一条上游位置说明：通用链的尾部封顶在已有位置说明时同样守卫放弃（`abstained`）。 */
 const NOT_A_DIFF_WITH_NOTICE = `${NOT_A_DIFF_BODY}\n\n(original result stored at: /tmp/entry.txt)`
+
+/**
+ * 票 17 的 `sed` 大窗口输入：请求打印 101 行的 `sed -n '1,101p'`，正文给 400 行。
+ *
+ * 400 行同时超过这一族的应用期下限（60 行）与**通用链**的封顶触发线（300 行），所以「走的是哪条路」在正文
+ * 形态上直接看得出来：族给 `…[中段省略 N 行]…`，通用链给 `…[省略 N 行]`。
+ */
+const SED_WINDOW_ARGS = { command: "sed -n '1,101p' f" }
+const SED_WINDOW_LINES = Array.from({ length: 400 }, (_, index) => `f line ${String(index + 1).padStart(3, '0')}`)
+const SED_WINDOW_BODY = SED_WINDOW_LINES.join('\n')
+
+/**
+ * 票 17 的原始转储输入：400 行的大 `ls -la` 清单，中间夹两条命中「有意思的行」词表的行（第 101、251 行）。
+ * 头段（1–15 行）与尾段（386–400 行）里不放命中行，于是「只从头尾之外挑」可以直接从输出看出来。
+ */
+const RAW_DUMP_ARGS = { command: 'ls -la /var/log' }
+const RAW_DUMP_LINES = Array.from(
+  { length: 400 },
+  (_, index) => `-rw-r--r--  1 root root ${String(index).padStart(6, '0')} Jan  1 00:00 log-${String(index).padStart(3, '0')}.txt`,
+)
+RAW_DUMP_LINES[100] = '-rw-r--r--  1 root root   1024 Jan  1 00:00 error.log'
+RAW_DUMP_LINES[250] = '-rw-r--r--  1 root root   2048 Jan  1 00:00 warn.log'
+const RAW_DUMP_BODY = RAW_DUMP_LINES.join('\n')
+
+/** 低于应用期尺寸下限（60 行）的小 `cat`：正文过得了尺寸下限（128 估算单位），但不该被这一族收窄。 */
+const SMALL_CAT_ARGS = { command: 'cat small.txt' }
+const SMALL_CAT_BODY = Array.from({ length: 50 }, (_, index) => `small.txt 第 ${index} 行：${'x'.repeat(30)}`).join('\n')
 
 const open: HostFixture[] = []
 const roots: string[] = []
@@ -92,6 +123,34 @@ function readRecords(path: string): Array<Record<string, unknown>> {
 /** 最后一条记录里的 `condense` 观测（每条用例都只发一次工具调用）。 */
 function observation(path: string): Record<string, unknown> {
   return readRecords(path)[0]!.condense as Record<string, unknown>
+}
+
+/** 一次端到端跑完的观察面：模型可见正文、`condense` 观测与整条 debug 记录。 */
+interface RunResult {
+  readonly text: string
+  readonly condense: Record<string, unknown>
+  readonly record: Record<string, unknown>
+}
+
+/**
+ * 跑一次端到端：装一份配置、注册一个 `bash` 工具、执行一条命令，交回观察面。
+ * @param config - 覆盖默认的插件配置。
+ * @param body - 模型可见正文（下游决策的那一份）。
+ * @param command - 调用参数里的命令串。
+ * @param value - `exitCode` 与 `truncated` 的取值；字段省略即事实缺失。
+ * @returns 正文、`condense` 观测与整条记录。
+ */
+async function run(
+  config: Schemastery.TypeS<typeof Config>,
+  body: string,
+  command: string,
+  value: { exitCode?: number, truncated?: boolean } = {},
+): Promise<RunResult> {
+  const { fixture, path } = await mounted(config)
+  fixture.ctx.tools.register(commandTool('bash', body, value))
+  const result = await fixture.ctx.tools.execute(exec('bash', undefined, { command }))
+  const record = readRecords(path)[0]!
+  return { text: textOf(result.content), condense: record.condense as Record<string, unknown>, record }
 }
 
 /**
@@ -155,7 +214,8 @@ describe('票 16 判据 1：默认关，关着时命令族那一步不发生', (
     for (const config of [{}, { condenseByCommand: true }]) {
       const { fixture, path } = await mounted(config)
       fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
-      const result = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'ls -la' }))
+      // 命令串不落任何一族（票 17 起 `ls -la` 是 `rawDump` 族的，不能再拿它当「族没命中」的样本）。
+      const result = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'node build.js' }))
       bodies.push(textOf(result.content))
       expect(observation(path)).not.toHaveProperty('family')
       expect(observation(path)).toMatchObject({ rules: ['tail-cap'] })
@@ -352,6 +412,186 @@ describe('票 16 判据 10：四个去向逐个从外部观察', () => {
   })
 })
 
+/** 票 17 两族的端到端用例共用这两条输入：一个族一条，族 id 与参数各自独立。 */
+const GLANCE_CASES = [
+  { command: SED_WINDOW_ARGS.command, body: SED_WINDOW_BODY, family: 'sedWindow' },
+  { command: RAW_DUMP_ARGS.command, body: RAW_DUMP_BODY, family: 'rawDump' },
+] as const
+
+describe('票 17 判据 1：两族开关各自独立（2 输入 × 2 开关）', () => {
+  const COMBOS = [
+    { condenseSedWindow: false, condenseRawDump: false },
+    { condenseSedWindow: true, condenseRawDump: false },
+    { condenseSedWindow: false, condenseRawDump: true },
+    { condenseSedWindow: true, condenseRawDump: true },
+  ] as const
+
+  /** 四个组合都在「按命令语义精简」打开的前提下跑。 */
+  const at = (combo: typeof COMBOS[number]): Schemastery.TypeS<typeof Config> =>
+    ({ condenseByCommand: true, ...combo })
+
+  it('大窗口 `sed` 输入：只随 condenseSedWindow 变，另一族开关的两态逐字相同', async () => {
+    const seen: RunResult[] = []
+    for (const combo of COMBOS) seen.push(await run(at(combo), SED_WINDOW_BODY, SED_WINDOW_ARGS.command))
+
+    // 关 → 通用链：不带族 id，正文是通用链的省略形态。
+    expect(seen[0]!.condense).not.toHaveProperty('family')
+    expect(seen[0]!.text).toContain('…[省略 ')
+    expect(seen[0]!.text).not.toContain('…[中段省略 ')
+
+    // 开 → 这一族的 id 与形态，且确实更短。
+    expect(seen[1]!.condense).toMatchObject({ family: 'sedWindow', rules: ['sedWindow'] })
+    expect(seen[1]!.text).toContain('…[中段省略 360 行]…')
+    expect(seen[1]!.text.length).toBeLessThan(seen[0]!.text.length)
+
+    // 交叉态：`condenseRawDump` 关/开时正文与观测逐字相同。
+    expect(seen[2]!.text).toBe(seen[0]!.text)
+    expect(seen[2]!.condense).toEqual(seen[0]!.condense)
+    expect(seen[3]!.text).toBe(seen[1]!.text)
+    expect(seen[3]!.condense).toEqual(seen[1]!.condense)
+  })
+
+  it('大 `ls -la` 清单：只随 condenseRawDump 变，另一族开关的两态逐字相同', async () => {
+    const seen: RunResult[] = []
+    for (const combo of COMBOS) seen.push(await run(at(combo), RAW_DUMP_BODY, RAW_DUMP_ARGS.command))
+
+    expect(seen[0]!.condense).not.toHaveProperty('family')
+    expect(seen[0]!.text).toContain('…[省略 ')
+
+    expect(seen[2]!.condense).toMatchObject({ family: 'rawDump', rules: ['rawDump'] })
+    expect(seen[2]!.text).toContain('…[中段省略 370 行]…')
+    expect(seen[2]!.text.length).toBeLessThan(seen[0]!.text.length)
+
+    // 交叉态：`condenseSedWindow` 关/开时正文与观测逐字相同。
+    expect(seen[1]!.text).toBe(seen[0]!.text)
+    expect(seen[1]!.condense).toEqual(seen[0]!.condense)
+    expect(seen[3]!.text).toBe(seen[2]!.text)
+    expect(seen[3]!.condense).toEqual(seen[2]!.condense)
+  })
+})
+
+describe('票 17 判据 2：大窗口 `sed` 被收窄；不是区间打印的 `sed` 不接这一族', () => {
+  it('阳性：`sed -n \'1,101p\'` 命中，正文按头 20 / 尾 20 变短、省略标记报出丢了多少行', async () => {
+    const { text, condense } = await run({ condenseByCommand: true }, SED_WINDOW_BODY, SED_WINDOW_ARGS.command)
+    const expected = [
+      ...SED_WINDOW_LINES.slice(0, 20),
+      '…[中段省略 360 行]…',
+      ...SED_WINDOW_LINES.slice(-20),
+    ].join('\n')
+
+    expect(text.startsWith(expected)).toBe(true)
+    expect(condense).toMatchObject({ family: 'sedWindow', rules: ['sedWindow'] })
+  })
+
+  it('阴性：替换 / `-i` 就地编辑 / 范围只写在替换文本里——正文 ≥60 行也不落这一族', async () => {
+    const commands = ["sed 's/line/LINE/' bigf", "sed -i 's/line/LINE/' bigf", "sed -n 's/x/1,200p/p' bigf"]
+    for (const command of commands) {
+      const { text, condense } = await run({ condenseByCommand: true }, SED_WINDOW_BODY, command)
+      expect(condense).not.toHaveProperty('family')
+      expect(text).not.toContain('…[中段省略 ')
+      // 阴性那次的输入真跑出了 400 行（≥60），所以它是被「不是窗口打印」挡下的，不是被应用期守卫挡下的；
+      // 通用链照常收窄，这条对照因此不是空的。
+      expect(text).toContain('…[省略 ')
+    }
+  })
+
+  it('请求 101 行、正文却不足 60 行：命中这一族但守卫放弃，正文逐字交回（两个阈值不是一个量）', async () => {
+    const shortBody = SED_WINDOW_LINES.slice(0, 50).join('\n')
+    const { text, condense } = await run({ condenseByCommand: true }, shortBody, SED_WINDOW_ARGS.command)
+
+    expect(condense).toMatchObject({ family: 'sedWindow', rules: [] })
+    expect(text).toBe(shortBody)
+  })
+})
+
+describe('票 17 判据 3：原始转储按 glance 形态收窄；族名只作参数不算', () => {
+  it('阳性：大 `ls -la` 清单命中、变短，有意思的行以「序号: 原行」插在头段之后', async () => {
+    const { text, condense } = await run({ condenseByCommand: true }, RAW_DUMP_BODY, RAW_DUMP_ARGS.command)
+    const expected = [
+      ...RAW_DUMP_LINES.slice(0, 15),
+      `101: ${RAW_DUMP_LINES[100]}`,
+      `251: ${RAW_DUMP_LINES[250]}`,
+      '…[中段省略 370 行]…',
+      ...RAW_DUMP_LINES.slice(-15),
+    ].join('\n')
+
+    expect(text.startsWith(expected)).toBe(true)
+    expect(condense).toMatchObject({ family: 'rawDump', rules: ['rawDump'] })
+  })
+
+  it('阴性：`grep cat f` 不落这一族；`git diff -- cat` 由更靠前的 `compactDiff` 接手、正文落通用链', async () => {
+    const grepped = await run({ condenseByCommand: true }, RAW_DUMP_BODY, 'grep cat f')
+    expect(grepped.condense).not.toHaveProperty('family')
+
+    const git = await run({ condenseByCommand: true }, RAW_DUMP_BODY, 'git diff -- cat')
+    expect(git.condense.family).toBe('compactDiff')
+    expect(git.text).not.toContain('…[中段省略 ')
+    expect(git.text).toContain('…[省略 ')
+  })
+
+  it('低于 60 行的小 `cat` 不被收窄：命中这一族、守卫放弃，正文逐字交回', async () => {
+    const { text, condense } = await run({ condenseByCommand: true }, SMALL_CAT_BODY, SMALL_CAT_ARGS.command)
+    expect(text).toBe(SMALL_CAT_BODY)
+    expect(condense).toMatchObject({ family: 'rawDump', rules: [] })
+  })
+})
+
+describe('票 17 判据 5：两族的替换都先把完整正文写进回退入口', () => {
+  it('两族各跑一次：spill 后端收到替换前的完整正文，模型可见正文带着入口说明', async () => {
+    for (const one of GLANCE_CASES) {
+      const { fixture } = await mounted({ condenseByCommand: true })
+      fixture.ctx.tools.register(commandTool('bash', one.body))
+      const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, { command: one.command }))).content)
+
+      // 「按入口能读回原文」：入口指向的那次写入就是替换前的完整正文。
+      expect(fixture.spill?.saves.map(save => save.content)).toEqual([one.body])
+      const ref = fixture.spill!.refs[0]!
+      expect(text).toContain('结果的精简版')
+      expect(text).toContain(ref.locator)
+      expect(text).toContain(RETRIEVAL_HINT)
+    }
+  })
+
+  it('入口写不成（没有 spill 后端）时两族都交回原文、不留入口', async () => {
+    for (const one of GLANCE_CASES) {
+      const { fixture, path } = await mounted({ condenseByCommand: true }, null)
+      fixture.ctx.tools.register(commandTool('bash', one.body))
+      const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, { command: one.command }))).content)
+
+      expect(text).toBe(one.body)
+      expect(readRecords(path)[0]).toMatchObject({
+        action: 'unmodified',
+        reason: 'condense-abstained',
+        condense: { family: one.family },
+      })
+    }
+  })
+})
+
+describe('票 17 判据 6：非零退出码时两族都不接，通用链照常收窄', () => {
+  it('退出码 0 时两族各自接手；退出码 1 时不接族、正文落通用链', async () => {
+    for (const one of GLANCE_CASES) {
+      const ok = await run({ condenseByCommand: true }, one.body, one.command, { exitCode: 0 })
+      expect(ok.condense).toMatchObject({ family: one.family })
+
+      const failed = await run({ condenseByCommand: true }, one.body, one.command, { exitCode: 1 })
+      expect(failed.condense).not.toHaveProperty('family')
+      expect(failed.text).not.toContain('…[中段省略 ')
+      expect(failed.record).toMatchObject({ action: 'condensed', condense: { rules: ['tail-cap'] } })
+    }
+  })
+})
+
+describe('票 17 判据 7：两族在诊断记录里各自的族 id 可分辨', () => {
+  it('两次结果分别记 `sedWindow` 与 `rawDump`，`rules` 也是各自的族 id', async () => {
+    const windowed = await run({ condenseByCommand: true }, SED_WINDOW_BODY, SED_WINDOW_ARGS.command)
+    const dumped = await run({ condenseByCommand: true }, RAW_DUMP_BODY, RAW_DUMP_ARGS.command)
+
+    expect([windowed.condense.family, dumped.condense.family]).toEqual(['sedWindow', 'rawDump'])
+    expect([windowed.condense.rules, dumped.condense.rules]).toEqual([['sedWindow'], ['rawDump']])
+  })
+})
+
 describe('票 16 判据 11：诊断里记下命中的族与两条事实', () => {
   it('记录里 family 是族 id，facts 是扁平 map（含 command / exitCode / truncated / format / bytes / lines / estimated）', async () => {
     const { fixture, path } = await mounted({ condenseByCommand: true })
@@ -375,14 +615,14 @@ describe('票 16 判据 11：诊断里记下命中的族与两条事实', () => 
   it('族没接手时 facts 照写（观察面不只在命中时才有）', async () => {
     const { fixture, path } = await mounted({ condenseByCommand: true })
     fixture.ctx.tools.register(textTool('bash', GIT_DIFF_BODY))
-    await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'ls -la' }))
+    await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'node build.js' }))
 
     const observed = observation(path)
     expect(observed).not.toHaveProperty('family')
     // `textTool` 的 `value` 是内容数组：没有可读的 `exitCode`，于是**这个事实不在 map 里**（判据 2）；
     // `truncated` 与票 15 的诊断字段同源、形状读不到就当没有（`false`），所以它在。
     expect(observed.facts).toEqual({
-      command: 'ls -la',
+      command: 'node build.js',
       truncated: false,
       format: 'text',
       bytes: Buffer.byteLength(GIT_DIFF_BODY, 'utf8'),

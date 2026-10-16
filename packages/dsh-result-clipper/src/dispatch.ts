@@ -23,6 +23,16 @@
  */
 
 import { compactDiff, type GitDiffParams } from './gitdiff.ts'
+import {
+  RAW_DUMP_COMMAND,
+  SED_WINDOW_COMMAND,
+  SED_WINDOW_MIN_WINDOW_LINES,
+  compactRawDump,
+  compactSedWindow,
+  sedWindowLines,
+  type RawDumpParams,
+  type SedWindowParams,
+} from './glance.ts'
 
 /** 分派事实的名字。事实是**扁平**的：没有嵌套容器，键即语义。 */
 export type FactName = 'command' | 'exitCode' | 'truncated' | 'format' | 'bytes' | 'lines' | 'estimated'
@@ -39,10 +49,10 @@ export type Facts = ReadonlyMap<FactName, FactValue>
 /**
  * 命令族的 id。
  *
- * 票 16 只落 `compactDiff`，它的三个封顶参数的字段名与命名法见 `config.ts`；另外两族（`sedWindow` / `rawDump`）
- * 的名字由票 16 备注的「族参数命名」条定死、随票 17 落地，这里不提前放进来。
+ * 三族的名字都由票 16 备注的「族参数命名」条定死、各自的字段名见 `config.ts`：`compactDiff`（票 16）、
+ * `sedWindow` 与 `rawDump`（票 17）。族 id 就是诊断记录里的规则 id（{@link condenseRuleOf}）。
  */
-export type CommandFamilyId = 'compactDiff'
+export type CommandFamilyId = 'compactDiff' | 'sedWindow' | 'rawDump'
 
 /** 一条命令族规则：命令匹配 + 附加事实要求 + 命中后对正文的收窄。 */
 export interface FamilyRule {
@@ -55,6 +65,11 @@ export interface FamilyRule {
   readonly command: string
   /** 还要求哪些事实在场且取这些值；**事实缺失即不命中**（判据 2）。 */
   readonly facts?: Readonly<Partial<Record<FactName, FactValue>>>
+  /**
+   * 命令正则之外的**纯谓词**，与正则同域（都在首个实质命令上求值）；返回 `false` 表示这条规则不命中、
+   * 继续看下一条。正则表达不了的判定落在这里（票 17：`sed` 的「请求窗口 ≥101 行」要数地址部分的数字）。
+   */
+  readonly match?: (command: string) => boolean
   /** 这一族会不会丢掉内容；会丢的必须写出回退入口（安全层的判据归票 15）。 */
   readonly lossy: boolean
   /**
@@ -231,7 +246,9 @@ export function selectFamily(
   if (substantive === undefined) return undefined
   for (const rule of rules) {
     if (rule.facts !== undefined && !satisfies(facts, rule.facts)) continue
-    if (new RegExp(rule.command).test(substantive)) return rule
+    if (!new RegExp(rule.command).test(substantive)) continue
+    if (rule.match !== undefined && !rule.match(substantive)) continue
+    return rule
   }
   return undefined
 }
@@ -247,20 +264,50 @@ export function selectFamily(
 export const GIT_DIFF_COMMAND = '^git\\s+[^|;&\\n]*\\bdiff(?:\\s|$)'
 
 /**
- * 已发布的命令族规则表，按优先级从高到低（票 16 只有一族）。
+ * 三族规则各自现读的当前参数：每个族一个 thunk，字段名就是族 id。
  *
- * `params` 用 thunk 传进来、`apply` 每次现读：三个封顶参数是配置文件里的非 volatile 字段，改了值就该按其
+ * 「改了配置文件里的值就按其取值生效」是组出来的——表在装载期编译一次就固定了规则与顺序，取值留到调用期。
+ */
+export interface FamilyParams {
+  /** `compactDiff` 族的封顶参数。 */
+  readonly gitDiff: () => GitDiffParams
+  /** `sedWindow` 族（`sed` 大窗口）的头尾预算与尺寸下限。 */
+  readonly sedWindow: () => SedWindowParams
+  /** `rawDump` 族（原始转储）的头尾预算、尺寸下限与「有意思的行」上限。 */
+  readonly rawDump: () => RawDumpParams
+}
+
+/**
+ * 已发布的命令族规则表，按优先级从高到低：`compactDiff` → `sedWindow` → `rawDump`（票 17 判据 2/3 的顺序）。
+ *
+ * 三族的 `params` 都用 thunk 传进来、`apply` 每次现读：封顶参数是配置文件里的非 volatile 字段，改了值就该按其
  * 取值生效（与票 15 的六个参数同一条规矩），所以表在装载期编译一次，参数在调用期读。
- * @param params - 读这一族当前封顶参数的取值函数。
+ * @param params - 读三族当前参数的取值函数。
  * @returns 规则表；还没做锚定校验，装载时交给 {@link compileRules}。
  */
-export function builtinRules(params: () => GitDiffParams): readonly FamilyRule[] {
-  return [{
-    family: 'compactDiff',
-    command: GIT_DIFF_COMMAND,
-    lossy: true,
-    apply: (text: string): string | undefined => compactDiff(text, params()),
-  }]
+export function builtinRules(params: FamilyParams): readonly FamilyRule[] {
+  return [
+    {
+      family: 'compactDiff',
+      command: GIT_DIFF_COMMAND,
+      lossy: true,
+      apply: (text: string): string | undefined => compactDiff(text, params.gitDiff()),
+    },
+    {
+      family: 'sedWindow',
+      command: SED_WINDOW_COMMAND,
+      lossy: true,
+      // 「请求的窗口 ≥101 行」正则表达不了（要数脚本地址部分的数字），所以走纯谓词通道。
+      match: (command: string): boolean => (sedWindowLines(command) ?? 0) >= SED_WINDOW_MIN_WINDOW_LINES,
+      apply: (text: string): string | undefined => compactSedWindow(text, params.sedWindow()),
+    },
+    {
+      family: 'rawDump',
+      command: RAW_DUMP_COMMAND,
+      lossy: true,
+      apply: (text: string): string | undefined => compactRawDump(text, params.rawDump()),
+    },
+  ]
 }
 
 /**

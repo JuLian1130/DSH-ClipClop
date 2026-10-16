@@ -70,6 +70,12 @@
  * 关着、被守卫放弃、非零退出码或输入已被工具自身截断才落通用链。两条守卫与平台面（只认 `bash`）都在
  * `selectFamily` 里；观测字段 `condense.family` / `condense.facts` 只在分派真发生时写。
  *
+ * 本票（17）再加两族（`glance.ts`）：`sedWindow`（请求窗口 ≥101 行的 `sed`）与 `rawDump`（`cat` / `ls` /
+ * `head` / `tail` / `nl`），规则表顺序 `compactDiff` → `sedWindow` → `rawDump`，命中即只跑那一族。两族各有
+ * 自己的非 volatile 开关与参数，关掉一族不影响另一族的取舍；两族都 `lossy: true`，所以每次替换都按票 15 的
+ * 安全层先写回退入口。窗口判定走 `FamilyRule.match` 这条纯谓词通道——正则表达不了「脚本地址部分的数字加起来
+ * ≥101」。
+ *
  * 任何路径都不得抛出——`tools/post-execute` 抛错会把整个工具调用变成错误结果；调用点的兜底 catch 只负责
  * 收住意外，正常失败各自以「透传 / 拦截」结算。精简层的异常归**放弃**不归失败（计划 §4.1 #8），所以在层内
  * 就地兜住、记 `condense-abstained`，不落到那个把取值记成 `failed` 的兜底 catch。
@@ -92,6 +98,7 @@ import {
   condenseRuleOf,
   dispatchFacts,
   selectFamily,
+  type CommandFamilyId,
   type Facts,
   type FamilyRule,
 } from './dispatch.ts'
@@ -171,11 +178,24 @@ export function apply(ctx: Context, config: Required<Config>): void {
   // 命令族规则表在**装载期**编译一次：锚定校验在这里发生，未以行首锚定的规则当场被拒绝并告警（票 16 判据 4）。
   // 封顶参数用 thunk 传进规则里、`apply` 每次现读，所以改配置文件里的值即按其取值生效。
   const familyTable = compileRules(
-    builtinRules(() => ({
-      maxHunkLines: config.condenseGitDiffMaxHunkLines,
-      maxLines: config.condenseGitDiffMaxLines,
-      leadingContext: config.condenseGitDiffLeadingContext,
-    })),
+    builtinRules({
+      gitDiff: () => ({
+        maxHunkLines: config.condenseGitDiffMaxHunkLines,
+        maxLines: config.condenseGitDiffMaxLines,
+        leadingContext: config.condenseGitDiffLeadingContext,
+      }),
+      sedWindow: () => ({
+        headLines: config.condenseSedWindowHeadLines,
+        tailLines: config.condenseSedWindowTailLines,
+        minLines: config.condenseSedWindowMinLines,
+      }),
+      rawDump: () => ({
+        headLines: config.condenseRawDumpHeadLines,
+        tailLines: config.condenseRawDumpTailLines,
+        minLines: config.condenseRawDumpMinLines,
+        hits: config.condenseRawDumpHits,
+      }),
+    }),
     (rejected) => {
       ctx.logger.warn(`dsh-result-clipper: 命令族 ${rejected.family} 的规则未以行首锚定，已拒绝：${rejected.branch}`)
     },
@@ -366,10 +386,10 @@ async function process(
         // `selectFamily` 里（平台面只认 bash、输入已被截断、非零退出码），三条都只放弃命令族那一步。
         // 开关关着时连事实都不摊——那时不发生分派，观测里也就不该有分派事实。
         const facts = config.condenseByCommand.get() ? factsOf(exec, result, body, truncated) : undefined
-        // 族开关关着就等于那一族不在表里：它不接手，这次落通用链。
+        // 族开关关着就等于那一族不在表里（票 17 判据 1）：它不接手，这次落通用链。
         const hit = facts === undefined
           ? undefined
-          : selectFamily(exec.name, facts, config.condenseGitDiff ? families : [])
+          : selectFamily(exec.name, facts, families.filter(rule => familyEnabled(config, rule.family)))
         const familyVerdict = hit === undefined ? undefined : condenseText(exec.name, body, params, [familyRule(hit)])
         // **命中某一族时只跑那一族**，不再叠一遍通用链；族 handler 的忠实性守卫放弃时落回通用链（票 16 的
         // 层序条）。命中之后再叠一遍链会把 `+`/`-` 行整段丢掉，那是这一族的忠实性要求不允许的。
@@ -742,6 +762,22 @@ function exitCodeOf(result: Readonly<ToolExecutionResult>): number | undefined {
  */
 function familyRule(rule: FamilyRule): CondenseRule {
   return condenseRuleOf(rule)
+}
+
+/**
+ * 某一族的开关是否打开（票 17 判据 1）：关着的族等于**不在规则表里**——它不接手，这次结果落通用链。
+ *
+ * 三个字段都是配置文件里的非 volatile 普通值、各管一族，所以打开其中一族不改变另一族的取舍。
+ * @param config - 解析后的配置。
+ * @param family - 族 id。
+ * @returns 该族开关的当前取值。
+ */
+function familyEnabled(config: Required<Config>, family: CommandFamilyId): boolean {
+  switch (family) {
+    case 'compactDiff': return config.condenseGitDiff
+    case 'sedWindow': return config.condenseSedWindow
+    case 'rawDump': return config.condenseRawDump
+  }
 }
 
 /**

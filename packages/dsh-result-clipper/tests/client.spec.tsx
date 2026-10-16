@@ -1077,15 +1077,17 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
 
 })
 
-describe('票 15：精简参数只写在配置文件里，设置页上没有它们', () => {
-  it('六个非 volatile 字段在页面上没有任何控件（阴性对照），既有控件照旧渲染', async () => {
+describe('票 15/16/17：精简参数只写在配置文件里，设置页上没有它们', () => {
+  it('19 个非 volatile 字段在页面上没有任何控件（阴性对照），既有控件照旧渲染', async () => {
     const { container } = await renderCard()
     const ids = [...container.querySelectorAll('[id]')].map(node => node.getAttribute('id') ?? '')
 
     // 阳性对照：页面确实把既有配置项渲染成了控件，否则下面几条阴性断言是空转的。
     expect(ids).toContain('plugin-config-result-clipper-min-inline')
 
-    // 这六个字段是非 volatile（只影响配置文件里的 A/B）：页面上既没有它们的控件，id 里也不出现它们的名字。
+    // 这些字段是非 volatile（只影响配置文件里的 A/B）：页面上既没有它们的控件，id 里也不出现它们的名字。
+    // 前六个是票 15 的通用参数，接着四个是票 16 的 `git diff` 族，最后九个是票 17 的两族（开关与参数）。
+    // 页面上那两个总开关（`condense` / `condenseByCommand`）是 volatile、控件归票 19，不在这一批里。
     for (const field of [
       'condense-min-units',
       'condense-min-net-gain-units',
@@ -1093,6 +1095,19 @@ describe('票 15：精简参数只写在配置文件里，设置页上没有它�
       'condense-tail-lines',
       'condense-max-lines',
       'condense-max-line-chars',
+      'condense-git-diff',
+      'condense-git-diff-max-hunk-lines',
+      'condense-git-diff-max-lines',
+      'condense-git-diff-leading-context',
+      'condense-sed-window',
+      'condense-sed-window-head-lines',
+      'condense-sed-window-tail-lines',
+      'condense-sed-window-min-lines',
+      'condense-raw-dump',
+      'condense-raw-dump-head-lines',
+      'condense-raw-dump-tail-lines',
+      'condense-raw-dump-min-lines',
+      'condense-raw-dump-hits',
     ]) {
       expect(ids.some(id => id.includes(field))).toBe(false)
     }

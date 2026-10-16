@@ -7,7 +7,8 @@
  * `web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
  * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
  * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（`ruleSummary`）、debug 关闭且不
- * 自动改用临时路径、干跑关闭、**工具结果精简开启**、**按命令语义精简关闭**、`git diff` 族开启。
+ * 自动改用临时路径、干跑关闭、**工具结果精简开启**、**按命令语义精简关闭**、`git diff` / `sed` 大窗口 /
+ * 原始转储三族开启。
  *
  * **精简参数是 6 个非 volatile 字段**（票 15）：尺寸下限与净收益阈值以**估算单位**计（与摘要的两个阈值同一把
  * 尺子），封顶参数按**行数**计。非 volatile 的含义是「只影响配置文件的 A/B，不进设置页」：settings 的写回路径
@@ -18,6 +19,10 @@
  * 四个**非 volatile** 字段——族开关 `condenseGitDiff`（默认**开**：关掉它只用于逐个 A/B 对照，总开关打开就该
  * 有族接手）与它的三个封顶参数。族参数一律按 `condense<族名><参数名>` 平铺，默认值引 `gitdiff.ts` 的
  * `GIT_DIFF_DEFAULTS`（票 14 实测的那一档，换一档门槛读数就不可比）。
+ *
+ * **票 17 再加九项**：`sedWindow`（`sed` 大窗口）与 `rawDump`（原始转储）两族各自的**非 volatile** 开关与参数
+ * ——开关默认**开**（理由与 `condenseGitDiff` 相同），参数引 `glance.ts` 的 `SED_WINDOW_DEFAULTS` /
+ * `RAW_DUMP_DEFAULTS`（同样是票 14 实测的那一档）。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
  * 清回空串。三个角色（摘要、摘要准入判断、隐私闸门）各有自己的 route：`routeProvider` / `routeModel` 是摘要
@@ -31,6 +36,7 @@ import z from '@deepseek-ai/schemastery'
 import type { Volatile } from '@deepseek-ai/cordis'
 import { CONDENSE_DEFAULTS } from './condense.ts'
 import { GIT_DIFF_DEFAULTS } from './gitdiff.ts'
+import { RAW_DUMP_DEFAULTS, SED_WINDOW_DEFAULTS } from './glance.ts'
 
 /**
  * 本插件的配置。
@@ -153,6 +159,32 @@ export interface Config {
    * ——只给「每 hunk」留字段而不写这条推导，前导上下文会跨 hunk 无界增长。
    */
   condenseGitDiffLeadingContext?: number
+  /**
+   * `sed` 大窗口族（`sedWindow`）的开关，**默认开启**；非 volatile，理由与 `condenseGitDiff` 相同。
+   *
+   * 它管的是「请求窗口 ≥101 行的 `sed`」那一类调用；命中门槛与这一族的尺寸下限是两个量（后者见
+   * `condenseSedWindowMinLines`）。
+   */
+  condenseSedWindow?: boolean
+  /** 这一族保留的头行数。 */
+  condenseSedWindowHeadLines?: number
+  /** 这一族保留的尾行数。 */
+  condenseSedWindowTailLines?: number
+  /** 这一族的尺寸下限（行数）：正文不足它就是 glance 尺寸，这次收窄放弃、落回通用链。 */
+  condenseSedWindowMinLines?: number
+  /**
+   * 原始转储族（`rawDump`：`cat` / `ls` / `head` / `tail` / `nl`）的开关，**默认开启**；非 volatile，理由与
+   * `condenseGitDiff` 相同。
+   */
+  condenseRawDump?: boolean
+  /** 这一族保留的头行数。 */
+  condenseRawDumpHeadLines?: number
+  /** 这一族保留的尾行数。 */
+  condenseRawDumpTailLines?: number
+  /** 这一族的尺寸下限（行数），与 `sedWindow` 族同一个量级、同一个去向。 */
+  condenseRawDumpMinLines?: number
+  /** 这一族最多保留多少条「有意思的行」（形态是 `序号: 原行`）；`0` 表示一条都不插。 */
+  condenseRawDumpHits?: number
 }
 
 /**
@@ -207,4 +239,15 @@ export const Config = z.object({
   condenseGitDiffMaxHunkLines: z.number().default(GIT_DIFF_DEFAULTS.maxHunkLines),
   condenseGitDiffMaxLines: z.number().default(GIT_DIFF_DEFAULTS.maxLines),
   condenseGitDiffLeadingContext: z.number().default(GIT_DIFF_DEFAULTS.leadingContext),
+  // 票 17 的两族：开关与各自参数同样**不带 `.volatile()`**（只影响配置文件里的逐个对照，不进设置页）。
+  // 默认值一律引 `glance.ts` 的常量——换一档，`docs/dsh-condense-measure/` 里记的门槛读数就不可比。
+  condenseSedWindow: z.boolean().default(true),
+  condenseSedWindowHeadLines: z.number().default(SED_WINDOW_DEFAULTS.headLines),
+  condenseSedWindowTailLines: z.number().default(SED_WINDOW_DEFAULTS.tailLines),
+  condenseSedWindowMinLines: z.number().default(SED_WINDOW_DEFAULTS.minLines),
+  condenseRawDump: z.boolean().default(true),
+  condenseRawDumpHeadLines: z.number().default(RAW_DUMP_DEFAULTS.headLines),
+  condenseRawDumpTailLines: z.number().default(RAW_DUMP_DEFAULTS.tailLines),
+  condenseRawDumpMinLines: z.number().default(RAW_DUMP_DEFAULTS.minLines),
+  condenseRawDumpHits: z.number().default(RAW_DUMP_DEFAULTS.hits),
 })

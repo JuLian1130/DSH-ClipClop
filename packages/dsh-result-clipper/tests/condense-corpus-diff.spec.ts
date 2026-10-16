@@ -40,6 +40,7 @@ import {
 import { builtinRules, compileRules, condenseRuleOf, dispatchFacts, selectFamily } from '../src/dispatch.ts'
 import { ENTRY_RESERVE } from '../src/entry.ts'
 import { GIT_DIFF_DEFAULTS } from '../src/gitdiff.ts'
+import { RAW_DUMP_DEFAULTS, SED_WINDOW_DEFAULTS } from '../src/glance.ts'
 
 /** `extract_calls.py` 的 `--out` 默认值；语料在本机就该跑，不在本机就跳过。 */
 const DEFAULT_CORPUS = '/tmp/dsh-condense'
@@ -147,7 +148,12 @@ describe.skipIf(!corpusRoot)('票 16 判据 8/12：真实语料上的「计数�
       const root = corpusRoot as string
       const sessionsDir = join(root, 'sessions')
       const files = readdirSync(sessionsDir).filter(name => name.endsWith('.jsonl')).sort()
-      const rules = compileRules(builtinRules(() => GIT_DIFF_DEFAULTS)).rules
+      // 规则表是票 17 的三族表；本文件只对账 `compactDiff` 一族（另外两族的门槛读数有各自的导出口）。
+      const rules = compileRules(builtinRules({
+        gitDiff: () => GIT_DIFF_DEFAULTS,
+        sedWindow: () => SED_WINDOW_DEFAULTS,
+        rawDump: () => RAW_DUMP_DEFAULTS,
+      })).rules.filter(rule => rule.family === 'compactDiff')
 
       const tally: Tally = {
         calls: 0,

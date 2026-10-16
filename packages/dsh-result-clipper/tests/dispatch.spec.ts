@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest'
 import { CONDENSE_DEFAULTS, condenseText } from '../src/condense.ts'
 import {
+  builtinRules,
   compileRules,
   condenseRuleOf,
   firstSubstantiveCommand,
@@ -21,6 +22,8 @@ import {
   type FactValue,
   type FamilyRule,
 } from '../src/dispatch.ts'
+import { GIT_DIFF_DEFAULTS } from '../src/gitdiff.ts'
+import { RAW_DUMP_DEFAULTS, SED_WINDOW_DEFAULTS } from '../src/glance.ts'
 
 /**
  * 把字面量摊成事实 map；**没写进来的事实就是缺失**（判据 2 的「缺失不等于按空值匹配」要靠这个构造）。
@@ -201,6 +204,70 @@ describe('票 16 判据 13/7/6：平台面与两条守卫', () => {
   it('正文不是单张文本块时不接族', () => {
     const rules = [rule('^git diff')]
     expect(pick('bash', facts({ command: 'git diff', format: 'other' }), rules)).toBeUndefined()
+  })
+})
+
+describe('票 17 判据 2/3：`match` 谓词通道', () => {
+  it('谓词返回 false 时这条规则不命中，继续看下一条', () => {
+    const first = rule('^sed', { match: () => false })
+    const second = rule('^sed', { match: () => true })
+    expect(pick('bash', facts({ command: "sed -n '1,101p' f", format: 'text' }), [first, second])).toBe(second)
+  })
+
+  it('谓词返回 true 时这一条就接手，后面的规则不再看', () => {
+    const first = rule('^sed', { match: () => true })
+    const second = rule('^sed', { match: () => true })
+    expect(pick('bash', facts({ command: "sed -n '1,101p' f", format: 'text' }), [first, second])).toBe(first)
+  })
+
+  it('谓词在首个实质命令上求值（脚手架与管道右侧都不进它的入参）', () => {
+    const seen: string[] = []
+    const fixture = rule('^sed', { match: (command: string): boolean => { seen.push(command); return true } })
+    const command = 'cd /repo && echo "=== 标题 ===" && sed -n \'1,101p\' f | head -40'
+    pick('bash', facts({ command, format: 'text' }), [fixture])
+    expect(seen).toEqual(["sed -n '1,101p' f"])
+  })
+})
+
+describe('票 17 判据 2/3：已发布的三族规则表', () => {
+  const families = builtinRules({
+    gitDiff: () => GIT_DIFF_DEFAULTS,
+    sedWindow: () => SED_WINDOW_DEFAULTS,
+    rawDump: () => RAW_DUMP_DEFAULTS,
+  })
+
+  /** 一条命令串在真实规则表上落到哪一族。 */
+  const familyOf = (command: string): string | undefined =>
+    pick('bash', facts({ command, format: 'text' }), families)?.family
+
+  it('规则顺序是 compactDiff → sedWindow → rawDump', () => {
+    expect(families.map(family => family.family)).toEqual(['compactDiff', 'sedWindow', 'rawDump'])
+  })
+
+  it('两族都是有损的（替换前必须写回退入口）', () => {
+    expect(families.filter(family => family.family !== 'compactDiff').map(family => family.lossy)).toEqual([true, true])
+  })
+
+  it('请求窗口 ≥101 行的 `sed` 落 sedWindow（`$` 按无限大算）', () => {
+    expect(familyOf("sed -n '1,101p' f")).toBe('sedWindow')
+    expect(familyOf("sed -n '1,$p' f")).toBe('sedWindow')
+  })
+
+  it('窗口只到 100 行、或不是区间打印的 `sed` 不落这一族', () => {
+    expect(familyOf("sed -n '1,100p' f")).toBeUndefined()
+    expect(familyOf("sed -n 's/x/1,200p/p' f")).toBeUndefined()
+    expect(familyOf("sed -i 's/x/y/' f")).toBeUndefined()
+  })
+
+  it('转储命令落 rawDump', () => {
+    expect(familyOf('cat big')).toBe('rawDump')
+    expect(familyOf('ls -la')).toBe('rawDump')
+    expect(familyOf('nl -ba f')).toBe('rawDump')
+  })
+
+  it('族名只作为参数或文件名出现时不落 rawDump：`git diff -- cat` 由更靠前的规则接手', () => {
+    expect(familyOf('grep cat f')).toBeUndefined()
+    expect(familyOf('git diff -- cat')).toBe('compactDiff')
   })
 })
 

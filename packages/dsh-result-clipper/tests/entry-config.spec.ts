@@ -169,4 +169,28 @@ describe('配置契约', () => {
     expect(tunedConfig.condenseGitDiffMaxLines).toBe(60)
     expect(tunedConfig.condenseGitDiffLeadingContext).toBe(0)
   })
+
+  it('票 17：两族的九个字段——两个开关的默认值与七个参数', async () => {
+    const { fiber } = await load({})
+    // 九个字段同样是非 volatile 的**普通值**（没有 `.get()`）：设置页只保留 volatile 字段，所以它们不回页面。
+    // 默认值取票 14 实测的那一档（`sed` 窗口 20/20/60、转储 15/15/60/20），换一档门槛读数就不可比。
+    const config = fiber.config as unknown as Record<string, unknown>
+    expect(config.condenseSedWindow).toBe(true)
+    expect(config.condenseSedWindowHeadLines).toBe(20)
+    expect(config.condenseSedWindowTailLines).toBe(20)
+    expect(config.condenseSedWindowMinLines).toBe(60)
+    expect(config.condenseRawDump).toBe(true)
+    expect(config.condenseRawDumpHeadLines).toBe(15)
+    expect(config.condenseRawDumpTailLines).toBe(15)
+    expect(config.condenseRawDumpMinLines).toBe(60)
+    expect(config.condenseRawDumpHits).toBe(20)
+
+    // 写在配置文件里可读、改值即按其取值生效（这是「非 volatile 只影响 A/B」的可观察面）：开关关掉一族、
+    // 一个参数改成非默认值，读回的都是改后的值。
+    const tuned = await load({ condenseSedWindow: false, condenseRawDump: true, condenseRawDumpTailLines: 3 })
+    const tunedConfig = tuned.fiber.config as unknown as Record<string, unknown>
+    expect(tunedConfig.condenseSedWindow).toBe(false)
+    expect(tunedConfig.condenseRawDump).toBe(true)
+    expect(tunedConfig.condenseRawDumpTailLines).toBe(3)
+  })
 })
