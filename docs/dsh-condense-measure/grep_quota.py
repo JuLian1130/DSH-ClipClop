@@ -79,6 +79,19 @@ def main():
     print("longest result per tool (chars): %s"
           % ", ".join("%s=%d" % kv for kv in longest.most_common(6)))
 
+    forms = collections.Counter()
+    for row in grep_rows:
+        first = (row.get("text") or "").split("\n", 1)[0]
+        m = FOUND.match(first)
+        if m:
+            forms["Found N of M matches (capped)" if m.group(2)
+                  else "Found N matches (complete)"] += 1
+        elif first.startswith("No matches found"):
+            forms["No matches found (complete, zero hits)"] += 1
+        else:
+            forms["other (error results etc.)"] += 1
+    print("first-line forms: %s" % " ; ".join("%s=%d" % kv for kv in forms.most_common()))
+
     parsed = [(row, parse_grep(row.get("text") or "")) for row in grep_rows]
     unparseable = [r for r, g in parsed if g is None]
     parsed = [(r, g) for r, g in parsed if g is not None]

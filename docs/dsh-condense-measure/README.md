@@ -66,7 +66,7 @@ python3 docs/dsh-condense-measure/grep_quota.py
 
 计划把「靠前的文件吃满配额、靠后的文件一条没有」列为**判断不是实测**，并要求阶段 0 验掉；实测分布均匀则推荐作废。`grep_quota.py` 的读数（2,954 次 grep 调用，全部解析成功）：
 
-- 结果里带 `Found <shown> of <total> matches` 头的**只有 69 次**（2.3%），即真正被 250 条配额截断的那部分。其余 2,885 次里：**2,582 次**是 `Found N matches`（未截断，`N` 就是全部）、**247 次**是 `No matches found`、**56 次**是 `Error: grep search failed (exit 2): rg: …`（错误结果，根本没有命中头）。三种形态的区别就是信号本身，所以 `grep_quota.py` 把它们分开计数。
+- 结果里带 `Found <shown> of <total> matches` 头的**只有 69 次**（2.3%），即真正被 250 条配额截断的那部分。其余 2,885 次里：**2,582 次**是 `Found N matches`（未截断，`N` 就是全部）、**247 次**是 `No matches found`、**56 次**是 `Error: grep search failed (exit 2): rg: …`（错误结果，根本没有命中头）。三种形态的区别就是信号本身，所以 `grep_quota.py` 按首行形态分开计数并打印（第四桶是 `Error: grep search failed` 之类的错误结果）。
 - 这 69 次里，**每次展示的文件数中位数 53、p90 123、最多 131**；只有 **1 次（1.4%）** 出现「单文件吃满配额」。
 - 展示的配额里，**单个文件最大占比中位数 12%、p90 34%**。
 - 被截断的那 69 次整体只看得见 31.3% 的命中（17,250 / 55,144）——后半段确实看不到，但分不到「前几个文件」头上。
