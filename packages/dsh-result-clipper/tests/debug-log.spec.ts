@@ -88,6 +88,8 @@ describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => 
       cacheObservation: 0,
       judgeInputTokens: null,
       extract: false,
+      // 精简层考虑过这条 bash 结果（工具与正文形态都符合），但正文低于尺寸下限，一条规则都没命中。
+      condense: { rules: [], truncated: false },
       action: 'unmodified',
       reason: 'summary-off',
     })
@@ -227,8 +229,8 @@ describe('票 02 第 5 条：记录不含原文、摘要正文、提示词与凭
     expect(raw).not.toContain('sk-credential')
     const [record] = readRecords(path) as [Record<string, unknown>]
     expect(Object.keys(record).sort()).toEqual([
-      'action', 'admission', 'cacheObservation', 'durationMs', 'extract', 'judgeInputTokens', 'pluginVersion',
-      'reason', 'resultBytes', 'toolName',
+      'action', 'admission', 'cacheObservation', 'condense', 'durationMs', 'extract', 'judgeInputTokens',
+      'pluginVersion', 'reason', 'resultBytes', 'toolName',
     ])
   })
 })

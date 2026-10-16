@@ -39,7 +39,8 @@ function tempRoot(): string {
  * @returns 夹具。
  */
 async function booted(config: Record<string, unknown>): Promise<LiveFixture> {
-  const fixture = await bootProfile(config)
+  // 本用例测的是设置保存即生效：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），既有取值与正文逐字保留；精简层自己的行为见 condense-pipeline.spec.ts。
+  const fixture = await bootProfile({ condenseMinUnits: 1e9, ...config })
   open.push(fixture)
   return fixture
 }

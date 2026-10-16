@@ -75,7 +75,10 @@ async function mounted(
   const path = join(tempRoot(), 'debug.jsonl')
   const route = new FakeRoute(script)
   const fixture = await mount(
-    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
+    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock',
+      // 本用例测的是摘要与提取目标路：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），既有取值与正文逐字保留；精简层自己的行为见 condense-pipeline.spec.ts。
+      condenseMinUnits: 1e9,
+      ...overrides } as Schemastery.TypeS<typeof Config>,
     undefined,
     route,
   )

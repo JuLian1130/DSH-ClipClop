@@ -63,7 +63,10 @@ async function mounted(
   const path = join(tempRoot(), 'debug.jsonl')
   const route = new FakeRoute(script)
   const fixture = await mount(
-    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
+    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock',
+      // 本用例测的是原结果入口与读回：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），夹具正文与既有取值逐字保留；精简层的入口行为见 condense-pipeline.spec.ts。
+      condenseMinUnits: 1e9,
+      ...overrides } as Schemastery.TypeS<typeof Config>,
     undefined,
     route,
     spill,

@@ -62,18 +62,28 @@ export interface WrittenEntry {
 /** 按会话分开的「已写出 locator」台账：fork 出的新会话不复用父会话的入口。 */
 export type ReadbackLedger = Map<string, Set<string>>
 
+/** 一次替换的身份：摘要还是精简。入口说明的措辞按它分叉，取回语义完全相同。 */
+export type RewriteKind = 'summary' | 'condense'
+
 /**
- * 拼出入口说明：接在**摘要正文之后**的兜底段。
+ * 拼出入口说明：接在**替换后的正文之后**的兜底段。
  *
- * 位置与文案的由来：模型必须先读到摘要。原来的顺序是「入口说明在最前、摘要跟在后面」，而整条消息里没有任何
- * 一句说明这是摘要、也没有一句说够用就别读——实测（246 条带入口的真实结果）取回动作有 67% 落在紧接着的
+ * 位置与文案的由来：模型必须先读到替换后的正文。原来的顺序是「入口说明在最前、摘要跟在后面」，而整条消息里没有
+ * 任何一句说明这是摘要、也没有一句说够用就别读——实测（246 条带入口的真实结果）取回动作有 67% 落在紧接着的
  * 下一次调用、43% 是整文件一把读回。旧约束「必须在正文最前」的依据是旧结果裁剪器只保头 4096 / 尾 1024
  * （阈值 8192 字符）：本替换结果只有几百字符，远低于阈值，且裁剪器头尾都留，放末尾同样不会被裁掉。
+ *
+ * 精简那条路的措辞不同（票 15）：被替换掉的不是「模型的改写」而是**被丢掉的正文**，所以不能叫摘要——用户与
+ * 模型都该看出这份入口指向的是被压掉的那一份原文。取回语义（`read` 该 `locator`）两条路一致。
  * @param ref - 存储后端返回的入口。
  * @param toolName - 产生这条结果的工具名。
- * @returns 入口说明正文；调用方把它接在摘要正文之后。
+ * @param kind - 这次替换是摘要还是精简；默认摘要（既有调用点不变）。
+ * @returns 入口说明正文；调用方把它接在替换后的正文之后。
  */
-export function composeEntry(ref: EntryRef, toolName: string): string {
+export function composeEntry(ref: EntryRef, toolName: string, kind: RewriteKind = 'summary'): string {
+  if (kind === 'condense') {
+    return `\n\n（以上为本次 ${toolName} 结果的精简版，被丢掉的都是不承载判断的重复与超长部分；需要逐字内容时原文在此：${ref.locator}。${ref.retrievalHint}）`
+  }
   return `\n\n（以上为本次 ${toolName} 结果的摘要，够用就不必再读；需要逐字核对时原文在此：${ref.locator}。${ref.retrievalHint}）`
 }
 
@@ -104,6 +114,7 @@ function readPathOf(exec: EntryExec): string | undefined {
  * @param exec - 工具执行（决定会话归属、工具来源与调用 id）。
  * @param toolName - 工具名。
  * @param content - 被替换掉的完整正文。
+ * @param kind - 这次替换是摘要还是精简；默认摘要（既有调用点不变）。
  * @returns 入口说明、`locator` 与会话 id；调用没有会话归属时为 `undefined`（没有入口就不摘要）。
  */
 export async function writeEntry(
@@ -111,6 +122,7 @@ export async function writeEntry(
   exec: EntryExec,
   toolName: string,
   content: string,
+  kind: RewriteKind = 'summary',
 ): Promise<WrittenEntry | undefined> {
   const sessionId = sessionIdOf(exec)
   if (sessionId === undefined) return undefined
@@ -120,7 +132,7 @@ export async function writeEntry(
     suggestedName: `${toolName}.txt`,
     content,
   })
-  return { entry: composeEntry(ref, toolName), locator: ref.locator, sessionId }
+  return { entry: composeEntry(ref, toolName, kind), locator: ref.locator, sessionId }
 }
 
 /**

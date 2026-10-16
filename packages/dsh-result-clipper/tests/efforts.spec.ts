@@ -129,7 +129,8 @@ describe('整条插件：请求上真的带的档位', () => {
   /** 挂一份插件 + 假 route 的夹具（摘要走 mock route）。 */
   async function mounted(overrides: Record<string, unknown>, route: FakeRoute): Promise<HostFixture> {
     const fixture = await mount(
-      { summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
+      // 本用例测的是请求上带的推理档位：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），夹具正文与既有取值逐字保留；精简层自己的行为见 condense-pipeline.spec.ts。
+      { summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock', condenseMinUnits: 1e9, ...overrides } as Schemastery.TypeS<typeof Config>,
       undefined,
       route,
     )

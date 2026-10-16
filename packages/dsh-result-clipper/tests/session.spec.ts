@@ -41,7 +41,8 @@ async function tracked(
   config: Schemastery.TypeS<typeof Config>,
   toolArguments = '{}',
 ): Promise<LoopFixture> {
-  const fixture = await runLoop(config, BODY, SUMMARY, toolArguments)
+  // 本用例测的是会话落盘与计量器读数：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），夹具正文与既有取值逐字保留；精简层自己的行为见 condense-pipeline.spec.ts。
+  const fixture = await runLoop({ condenseMinUnits: 1e9, ...config }, BODY, SUMMARY, toolArguments)
   open.push(fixture)
   return fixture
 }

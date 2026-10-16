@@ -8,7 +8,9 @@
  * `判断器输入 token 数`（准入判断那次请求的输入规模）——并给干跑记录加一个 `dryRun` 标记。票 26 加入
  * `rule-summary-off`（规则摘要关闭且这次没声明提取目标）。票 39 加入 `exact-text`（目标要求逐字原文，
  * 摘要器给不出逐字保证，按失败策略透传）。票 40 加入 `whole-result`（目标是 `WHOLE_RESULT` 哨兵，主模型显式
- * 要整份结果）与 `truncated`（摘要输出撞满输出预算、正文被截断，按原文透传）。0.1.4 起每条记录（含挂载决策
+ * 要整份结果）与 `truncated`（摘要输出撞满输出预算、正文被截断，按原文透传）。票 15 加入动作 `condensed` 与
+ * `unmodified` 的三个精简原因（`condense-off` / `condense-abstained` / `condense-not-shorter`），并给精简层
+ * 一个自己的观测字段 {@link CondenseObservation}。0.1.4 起每条记录（含挂载决策
  * 记录）带 `pluginVersion`：日志按追加写、跨版本混在一个文件里，没有这个字段就无法把观测归属到当时在跑的构建。
  *
  * 同一个文件里还有一条**挂载决策记录**（`kind: 'mount'`，见 {@link MountRecord}）：每次装载写在最前面，
@@ -61,6 +63,12 @@ export type UnmodifiedReason =
   | 'exact-text'
   | 'whole-result'
   | 'truncated'
+  /** 精简总开关关着（票 15）：这一层不介入，正文逐字不动。 */
+  | 'condense-off'
+  /** 精简层放弃（票 15）：忠实性守卫不满足、或有损变换的回退入口写不成；两种都交回下游正文。 */
+  | 'condense-abstained'
+  /** 精简改了正文但过不了净收益闸门（票 15）：省不到阈值就交回下游正文。 */
+  | 'condense-not-shorter'
 
 /**
  * 准入结论：这次结果有没有进准入判断、判断说了什么。`not-applicable` 覆盖所有没进准入阶段的情形
@@ -74,7 +82,28 @@ export type AdmissionVerdict = 'yes' | 'no' | 'failed' | 'not-applicable'
 export type DebugOutcome =
   | { readonly action: 'summarized' }
   | { readonly action: 'rejected' }
+  | { readonly action: 'condensed' }
   | { readonly action: 'unmodified'; readonly reason: UnmodifiedReason }
+
+/**
+ * 精简层的观测（票 15）：只在它**考虑过**这条结果时写——精简工具（`bash` / `grep` / `pwsh`）、正文是一张
+ * 文本块、且结果没被下游 `block`。所以 `read` / `web_fetch` / `glob` 的记录完全没有这个字段；「一处都没改动」
+ * （低于尺寸下限、四条规则都没命中）时它不表态、不改正文，但观测字段照写——规格要的是「输入已被工具截断的
+ * 频率」，分母必须是本层看到的所有精简工具结果，而不是被改动过的那些。
+ */
+export interface CondenseObservation {
+  /**
+   * 本次**命中**（改动了正文）的精简规则 id，按施加顺序。一处都没命中、或整层守卫放弃时是空数组；
+   * `condense-not-shorter` 的行里照记——闸门挡下的是「替换」，不是「哪条规则命中过」，那个区别正是
+   * 「为什么这条大结果没变短」的答案。
+   */
+  readonly rules: readonly string[]
+  /**
+   * 输入是否已被工具自身截断（`bash` 的 `stdout.truncated` / `stderr.truncated`）。它只记事实、不参与取舍，
+   * 用途是解释「为什么这次没有更省」——已被截断的输出，头尾封顶能压掉的东西本来就不多。
+   */
+  readonly truncated: boolean
+}
 
 /** 一行 debug JSONL。 */
 export type DebugRecord = DebugOutcome & {
@@ -102,6 +131,12 @@ export type DebugRecord = DebugOutcome & {
    * 「观察一段时间后删掉准入判断」这条退出条件的前提。
    */
   extract: boolean
+  /**
+   * 精简观测（票 15）：本层考虑过这条结果时就存在。它让「已精简」与三个未改动原因都能被事后分辨，并记下输入
+   * 是否已被工具自身截断（用来统计截断占比）；不含正文，规则命中是文字变换而不是命令族（命令族 handler 属票
+   * 16/17）。
+   */
+  condense?: CondenseObservation
   /**
    * 干跑记录：动作与原因记的是「本应发生什么」的预报，不是真实结果。真实记录没有这个键。
    */

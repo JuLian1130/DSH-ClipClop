@@ -56,8 +56,18 @@
  * 候选结果一律透传并记 `rule-summary-off`，用来量出"`extract` 为空时按摘要提示词摘要"本身有没有必要。它只管
  * 摘要提示词那条路，理由同上：隐私那条路不用摘要提示词。
  *
+ * 本票（15）在 block 判定之后、隐私判断之前接入**工具结果精简层**（`condense.ts`）：只在正文恰好是一张文本
+ * 块时考虑 `bash` / `grep` / `pwsh`，**基准是下游正文**（含 spill 处理之后的那一份，不是原始投影），总开关
+ * 关掉即整层不介入。它的四个去向是：替换（记 `condensed`）、总开关关（`condense-off`）、守卫或回退入口失败
+ * 放弃（`condense-abstained`）、过不了净收益闸门（`condense-not-shorter`）；「一处都没改动」时它不表态，取值
+ * 照旧交给既有词表。有损替换必须先把**替换前的完整正文**写进回退入口，写不成一律交回下游正文（不留入口）。
+ * 干跑下它照算判定、记同一条取值，但不替换正文、不写回退入口、不记台账——干跑是判断「要不要打开它」的唯一
+ * 工具。精简过的不再进摘要：隐私判断照常跑在精简后的正文上（隐私那条路是闸门不是摘要能力），候选、memo、
+ * 准入与摘要请求整条短路。
+ *
  * 任何路径都不得抛出——`tools/post-execute` 抛错会把整个工具调用变成错误结果；调用点的兜底 catch 只负责
- * 收住意外，正常失败各自以「透传 / 拦截」结算。
+ * 收住意外，正常失败各自以「透传 / 拦截」结算。精简层的异常归**放弃**不归失败（计划 §4.1 #8），所以在层内
+ * 就地兜住、记 `condense-abstained`，不落到那个把取值记成 `failed` 的兜底 catch。
  *
  * @module
  */
@@ -69,12 +79,14 @@ import type { ContentBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { composeAdmissionPrompt, requestAdmission } from './admission.ts'
 import { candidateOf } from './candidate.ts'
+import { condenseText, isCondenseTool } from './condense.ts'
 import type { Config } from './config.ts'
 import {
   appendDebugRecord,
   measureContent,
   PLUGIN_VERSION,
   type AdmissionVerdict,
+  type CondenseObservation,
   type DebugOutcome,
   type DebugRecord,
   type MountRecord,
@@ -106,6 +118,7 @@ import { extractEnabled, extractGoalOf, extractRule, installExtractArg, isWholeR
 export * from './config.ts'
 export * from './debug.ts'
 export * from './candidate.ts'
+export * from './condense.ts'
 export * from './summary.ts'
 export * from './admission.ts'
 export * from './entry.ts'
@@ -185,6 +198,8 @@ interface Processed extends Applied {
   readonly extract: boolean
   /** 本次要交回的提醒，作为附加上下文挂在决策上；没有时为空的数组。 */
   readonly additionalContexts: readonly UserMessage[]
+  /** 精简层的观测（票 15）：只在它对这条结果表过态时存在（见 `debug.ts` 的 {@link CondenseObservation}）。 */
+  readonly condense?: CondenseObservation
 }
 
 /** 这条结果发出的模型请求的观测累计，即 debug 的「缓存观测」与「判断器输入 token 数」两个字段。 */
@@ -244,6 +259,16 @@ async function process(
   // 判定必须先做，所以这条路真的会把提示词发出去）。
   const promptGoal = goal !== undefined && (isWholeResult(goal) || wantsExactText(goal)) ? undefined : goal
   const observation: Observation = { cacheReadTokens: 0, judgeInputTokens: null }
+  // 精简层（票 15）的局部状态，只在这里承载，不改动其余结构：
+  // - `current` 是本层替换正文后的决策（没替换时就是下游决策）；隐私判断与交回都看它。
+  // - `condensed` 记「本层替换了正文」（干跑时是「本应替换」），它同时是跳过摘要提示词路的开关。
+  // - `condenseReason` 是本层**没**替换却表了态时的取值（总开关关 / 守卫放弃 / 过不了闸门），下面的
+  //   `unchanged(...)` 优先采用它；后续真的改写正文的分支返回自己的动作，天然覆盖它。
+  // - `condense` 是本层的观测字段：本层**考虑过**这条结果（精简工具、正文一张文本块、没被下游 block）就写。
+  let current: PostToolDecision = decision
+  let condensed = false
+  let condenseReason: UnmodifiedReason | undefined
+  let condense: CondenseObservation | undefined
   /** 本次要交回的提醒；`settle` 在返回时读它，所以提醒必须在本条路径返回之前取。 */
   const remindersOut: UserMessage[] = []
   const remind = (reason: ReminderReason): void => {
@@ -255,10 +280,18 @@ async function process(
   // 放回名额也是台账写入，所以与 `remind` 一样受干跑约束：干跑不能改变随后真实运行的提醒次序。
   if (!dryRun && required && goal !== undefined) forgetExtractMissingReminder(reminders, exec.agent?.session)
   const settle = (applied: Applied): Processed => ({
-    ...applied, observation, extract: goal !== undefined, additionalContexts: remindersOut,
+    ...applied,
+    observation,
+    extract: goal !== undefined,
+    additionalContexts: remindersOut,
+    ...condense === undefined ? {} : { condense },
   })
   const unchanged = (reason: UnmodifiedReason, admission: AdmissionVerdict = 'not-applicable'): Processed =>
-    settle({ decision, outcome: { action: 'unmodified', reason }, admission })
+    settle({
+      decision: current,
+      outcome: { action: 'unmodified', reason: condenseReason ?? reason },
+      admission,
+    })
   // 声明逐字原文时按原文透传：摘要器只能改写，给不出逐字保证（exp9 实测 6 条候选里 4 条被改写、模型随即
   // 又读一次同一文件）。放在候选判定之后，所以低于下限的结果仍记 `not-candidate`。
   const exactText = (): Processed => {
@@ -274,7 +307,82 @@ async function process(
   if (decision.kind === 'block') return unchanged('not-candidate')
 
   // 要替换掉的那段**模型即将看到的投影**是下游决策的正文；附加上下文与图片块只影响隐私判断的文本投影。
-  const visible = decision.content ?? result.content
+  let visible = decision.content ?? result.content
+
+  // —— 本票（15）精简层：在 block 判定之后、隐私判断之前（计划 §2.1 第 1、2 条）——
+  // 只在正文恰好是一张文本块时考虑：多块正文压成一块会改变结果的形状，不在本层的判据里（此时不表态，取值
+  // 交给既有词表）。`body` 取下游正文，尺寸下限、净收益闸门与全部变换都以它为基准，不是 `result` 的原始投影。
+  if (isCondenseTool(exec.name) && visible.length === 1 && visible[0]?.type === 'text') {
+    const body = visible[0].text
+    // 整段自带兜底（计划 §4.1 #8）：任何抛出都归「守卫放弃」，不能落到 `apply()` 调用点那个把取值记成
+    // `failed` 的兜底 catch——那是「模型或 route 出了问题」，与「这次变换不做了」不是一回事。
+    try {
+      if (!config.condense.get()) {
+        condenseReason = 'condense-off'
+        condense = { rules: [], truncated: truncatedOf(result) }
+      } else {
+        const truncated = truncatedOf(result)
+        const verdict = condenseText(exec.name, body, {
+          // 六个参数是配置里的非 volatile 字段，读到的就是普通值（不是每步现读的 volatile 引用）。
+          minUnits: config.condenseMinUnits,
+          minNetGainUnits: config.condenseMinNetGainUnits,
+          headLines: config.condenseHeadLines,
+          tailLines: config.condenseTailLines,
+          maxLines: config.condenseMaxLines,
+          maxLineChars: config.condenseMaxLineChars,
+          entryReserveChars: ENTRY_RESERVE,
+        })
+        // 观测字段在**本层考虑过这条结果**时就写（判据 10）：这样「输入已被工具截断的频率」的分母是「本层看到
+        // 的所有精简工具结果」，而不是「被改动过的那些」。`unchanged` 只是不表态、取值交给既有词表。
+        condense = { rules: [], truncated }
+        if (verdict.kind === 'abstained') {
+          condenseReason = 'condense-abstained'
+        } else if (verdict.kind === 'not-shorter') {
+          // 闸门挡下的是「替换」，不是「哪条规则命中过」：命中的规则照记，这是「为什么这条没变短」的答案。
+          condenseReason = 'condense-not-shorter'
+          condense = { rules: verdict.rules, truncated }
+        } else if (verdict.kind === 'condensed') {
+          // 有损替换必须先把**替换前**的完整正文写进回退入口（计划 §4.1 #3）。写不成（没有存储后端、写入抛错、
+          // 没有会话归属）一律交回下游正文，且不留下入口（计划 §7.4 第 1 条）。干跑不写盘，只预报配置层面的
+          // 那一半：没有存储后端时真实运行同样写不成入口。
+          const store = verdict.lossy ? ctx.get('spillStore') : undefined
+          const written = store === undefined || dryRun
+            ? undefined
+            : await writeEntry(store, exec, exec.name, body, 'condense').catch((): undefined => undefined)
+          if (verdict.lossy && (store === undefined || (!dryRun && written === undefined))) {
+            // 观测字段保持上面那份（本次没有正文被替换，`rules` 就是空的）。
+            condenseReason = 'condense-abstained'
+          } else {
+            let text = verdict.text
+            if (written !== undefined) {
+              noteReadback(readback, written)
+              text += written.entry
+            }
+            condense = { rules: verdict.rules, truncated }
+            condensed = true
+            // 干跑不替换正文：交回的仍是下游决策（计划 §2.1 第 5 条）。
+            if (!dryRun) {
+              const content: ContentBlock[] = [{ type: 'text', text }]
+              current = {
+                kind: 'accept',
+                content,
+                ...decision.additionalContexts === undefined
+                  ? {}
+                  : { additionalContexts: decision.additionalContexts },
+              }
+              visible = content
+            }
+          }
+        }
+        // `unchanged`（不适用工具之外的一切「一处都没改动」）：本层不表态，取值交给既有词表。
+      }
+    } catch {
+      // 异常归「放弃」不归「失败」（计划 §4.1 #8）。已经替换完成的那次不回退——入口已经写出去了，回退只会留下
+      // 无人引用的副本；没替换的一律由 `current` 交回下游正文。
+      condenseReason = 'condense-abstained'
+      condense = { rules: [], truncated: truncatedOf(result) }
+    }
+  }
 
   // 隐私闸门默认不判 `web_fetch`：它取的多是外网公开信息（`webFetchPrivacyGate` 可以把内网部署的它纳入）。被跳过
   // 的结果与「隐私关闭」同路（候选 → memo → 准入 → 摘要），不是既不判也不加工。
@@ -292,6 +400,10 @@ async function process(
         admission: 'not-applicable',
       })
     }
+    // 精简过的不再进摘要（规格 237、用户故事 62）：判定为 `condensed` 时隐私判断照常跑在**精简后的正文**上
+    // ——隐私那条路是闸门不是摘要能力，所以它照跑——但候选、memo、准入与摘要请求整条短路。拦截仍然优先于
+    // 精简（上面那条先返回），按 `passthrough` 放行时交回的仍是精简后的正文。
+    if (condensed) return settle({ decision: current, outcome: { action: 'condensed' }, admission: 'not-applicable' })
     // 隐私闸门**自成一路**：它不经过摘要提示词，判定与摘要是同一次请求的两个字段，所以摘要总开关与
     // 规则摘要开关都管不到它——隐私开着时 `safe` 的摘要照旧替换正文（否则这一次请求的输出白付，正文也白白留着）。
     if (judgement.kind === 'passthrough') return unchanged(judgement.reason)
@@ -308,6 +420,10 @@ async function process(
       ctx, readback, exec, decision, visible, judgement.action.summary, 'not-applicable', dryRun,
     ))
   }
+
+  // 精简过的不再进摘要（规格 237、用户故事 62）：隐私关着时同样短路候选、memo、准入与摘要请求——精简已经把它
+  // 压到不值得再发一次模型请求的程度。干跑照样短路：干跑的意义就是预报「打开之后会发生什么」。
+  if (condensed) return settle({ decision: current, outcome: { action: 'condensed' }, admission: 'not-applicable' })
 
   if (!config.summarize.get()) return unchanged('summary-off')
   // 按入口读回：跳过整个摘要路径（含准入判断）。识别只做字符串比对，见 `entry.ts`。
@@ -542,6 +658,20 @@ function textOf(content: readonly ContentBlock[]): string {
 }
 
 /**
+ * 输入是否已被工具自身截断（票 15）：只读 `result.value` 上的两处已知字段，只认严格 `true`——形状不认识就是
+ * `false`，不解析、不猜测、不抛。它是诊断事实，不参与任何取舍。
+ * @param result - 工具结果的原始投影。
+ * @returns `stdout.truncated` 或 `stderr.truncated` 为 `true` 时为真。
+ */
+function truncatedOf(result: Readonly<ToolExecutionResult>): boolean {
+  const value = result.value as
+    | { readonly stdout?: { readonly truncated?: unknown }, readonly stderr?: { readonly truncated?: unknown } }
+    | undefined
+  if (typeof value !== 'object' || value === null) return false
+  return value.stdout?.truncated === true || value.stderr?.truncated === true
+}
+
+/**
  * 追加一行挂载决策记录（`kind: 'mount'`）：首个 agent 创建时，每个目标工具走的是接管、遮蔽，还是它看不到。
  *
  * 与结果记录共用开关与路径，所以 debug 关闭或路径为空时同样不写盘。它从 `agent/created` 的监听器里调用，
@@ -586,6 +716,7 @@ async function record(
     cacheObservation: applied.observation.cacheReadTokens,
     judgeInputTokens: applied.observation.judgeInputTokens,
     extract: applied.extract,
+    ...applied.condense === undefined ? {} : { condense: applied.condense },
     ...applied.outcome,
     ...(dryRunInEffect(config) ? { dryRun: true } : {}),
   }

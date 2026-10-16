@@ -86,6 +86,8 @@ async function mounted(
     {
       // 隐私路不受两个摘要开关影响；`ruleSummary` 打开只是为了让 `web_fetch` 那几条（默认不进隐私路）照旧走摘要路径。
       privacyGate: true, summarize: true, ruleSummary: true, debug: true, debugPath: path,
+      // 本用例测的是隐私闸门与摘要路：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），既有取值与正文逐字保留；精简层自己的行为见 condense-pipeline.spec.ts。
+      condenseMinUnits: 1e9,
       routeProvider: 'mock', routeModel: 'mock', privacyConfirmedLocal: true, ...overrides,
     } as Schemastery.TypeS<typeof Config>,
     undefined,
@@ -101,7 +103,8 @@ async function mounted(
  * @returns 夹具。
  */
 async function booted(config: Record<string, unknown>): Promise<LiveFixture> {
-  const fixture = await bootProfile(config)
+  // 同上：夹具正文不归精简层处理。
+  const fixture = await bootProfile({ condenseMinUnits: 1e9, ...config })
   live.push(fixture)
   return fixture
 }
@@ -676,6 +679,8 @@ describe('票 07 第 11 条：受控装载顺序的两种顺序', () => {
     const config = {
       privacyGate: true, summarize: true, debug: true, debugPath: path,
       routeProvider: 'mock', routeModel: 'mock', privacyConfirmedLocal: true,
+      // 本用例测的是装载顺序：夹具正文不归精简层处理（同 `mounted` 的注释）。
+      condenseMinUnits: 1e9,
     } as Schemastery.TypeS<typeof Config>
     const truncate = truncatingListener(LIMIT)
     const fixture = await mount(

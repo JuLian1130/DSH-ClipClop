@@ -1077,3 +1077,25 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
 
 })
 
+describe('票 15：精简参数只写在配置文件里，设置页上没有它们', () => {
+  it('六个非 volatile 字段在页面上没有任何控件（阴性对照），既有控件照旧渲染', async () => {
+    const { container } = await renderCard()
+    const ids = [...container.querySelectorAll('[id]')].map(node => node.getAttribute('id') ?? '')
+
+    // 阳性对照：页面确实把既有配置项渲染成了控件，否则下面几条阴性断言是空转的。
+    expect(ids).toContain('plugin-config-result-clipper-min-inline')
+
+    // 这六个字段是非 volatile（只影响配置文件里的 A/B）：页面上既没有它们的控件，id 里也不出现它们的名字。
+    for (const field of [
+      'condense-min-units',
+      'condense-min-net-gain-units',
+      'condense-head-lines',
+      'condense-tail-lines',
+      'condense-max-lines',
+      'condense-max-line-chars',
+    ]) {
+      expect(ids.some(id => id.includes(field))).toBe(false)
+    }
+  })
+})
+

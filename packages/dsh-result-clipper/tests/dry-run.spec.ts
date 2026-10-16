@@ -67,14 +67,15 @@ async function mounted(
   spill: FakeSpill | null = new FakeSpill(),
 ): Promise<HostFixture> {
   // 规则摘要默认关闭；这些用例测的是摘要提示词路，所以夹具默认把它打开（用例仍可覆盖）。
-  const fixture = await mount({ ruleSummary: true, ...config }, undefined, route, spill)
+  // 本用例测的是干跑：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），夹具正文与既有取值逐字保留；精简层自己的干跑行为见 condense-pipeline.spec.ts。
+  const fixture = await mount({ ruleSummary: true, condenseMinUnits: 1e9, ...config }, undefined, route, spill)
   open.push(fixture)
   return fixture
 }
 
 /** 装一条 profile 并登记收场。 */
 async function booted(config: Record<string, unknown>, route?: FakeRoute): Promise<LiveFixture> {
-  const fixture = await bootProfile({ ruleSummary: true, ...config }, route)
+  const fixture = await bootProfile({ ruleSummary: true, condenseMinUnits: 1e9, ...config }, route)
   live.push(fixture)
   return fixture
 }
@@ -361,8 +362,8 @@ describe('票 08 第 4 条：干跑记录受同一条禁写约束', () => {
     // 记录只留动作、结果取值与观测字段：没有放摘要文本、原文或入口的位置。
     const [record] = readRecords(path)
     expect(Object.keys(record!).sort()).toEqual([
-      'action', 'admission', 'cacheObservation', 'dryRun', 'durationMs', 'extract', 'judgeInputTokens', 'pluginVersion',
-      'resultBytes', 'toolName',
+      'action', 'admission', 'cacheObservation', 'condense', 'dryRun', 'durationMs', 'extract', 'judgeInputTokens',
+      'pluginVersion', 'resultBytes', 'toolName',
     ])
   })
 })

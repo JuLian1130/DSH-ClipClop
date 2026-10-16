@@ -94,3 +94,21 @@ python3 docs/dsh-condense-measure/grep_quota.py
 3. **`git show` 半边触发 0 次**（过下限 804 次全被守卫放弃：427 次压根不是 diff、354 次 commit 前言）。这条规则没有产出。
 4. **脚手架剥离是这两个 handler 成立的前提**：不剥的话 `sed` 只覆盖 333 / 1,620（漏 79%）、转储只覆盖 4,327 / 16,670（漏 74%）。做法是按 `&&` / `||` / `|` / `;` / 换行拆段（引号内的分隔符不算）、跳过 `cd`/`echo`/`printf`/`set`/`export`/`source`/`.`/`true`/`:`/`pwd`/`pushd`/`popd`/`ulimit`/`umask` 与赋值语句，取第一段。
 5. **`sed` 的「策略依赖」答案是「窗口专用预算」**：§4.5 的通用封顶参数（头 50 / 尾 200）在 `sed` 上只有 28.1%（仅 42 次触发，因为 sed 窗口中位数才 110 行、300 行总额度几乎从不生效）；实测最松的可过线档是头 20 / 尾 20（30+30 就掉到 54.9%）。
+
+## TS 实现的真语料验证（票 15）
+
+上面这些读数是**原型**的。票 15 把通用变换做成 `packages/dsh-result-clipper/src/condense.ts` 并接进流水线后，得在发布版实现上复核一遍，复核结果在 [`results-condense-ts.md`](results-condense-ts.md)：
+
+- [`condense_ts_verify.py`](condense_ts_verify.py) 读 TS 侧导出的 JSONL，**import 本目录的原型**（`transforms_general.py` + `harness.py`）逐条比 sha256 / 长度 / 判定，再用 `o200k_base` 做「估算单位减少 ⟹ 真 token 减少」的同号断言。
+- TS 侧的导出由 [`condense-corpus.spec.ts`](../../packages/dsh-result-clipper/tests/condense-corpus.spec.ts) 产生：逐调用断言幂等，并把「会被替换」的调用导出成 JSONL。**语料在场就一定跑**（`DSH_CONDENSE_CORPUS` 优先，否则用本目录 `extract_calls.py` 的默认输出路径 `/tmp/dsh-condense`；都没有才跳过），所以本机常规 `pnpm test` 也会跑这条断言。
+
+```bash
+cd packages/dsh-result-clipper
+DSH_CONDENSE_CORPUS=/tmp/dsh-condense PATH=/tmp/pm-shim:$PATH \
+  pnpm vitest run tests/condense-corpus.spec.ts
+cd ../..
+python3 docs/dsh-condense-measure/condense_ts_verify.py \
+  --out /tmp/dsh-condense --dump /tmp/dsh-condense-ts/ts-condense.jsonl
+```
+
+结论：幂等违反 0、口径同号反例 0、TS 与原型逐条等价（票 14 读数可搬运）。细节、触发集差异与「这次没验证到的部分」见 [`results-condense-ts.md`](results-condense-ts.md)。

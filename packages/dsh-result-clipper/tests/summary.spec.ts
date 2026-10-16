@@ -72,7 +72,10 @@ async function mounted(
   const path = join(tempRoot(), 'debug.jsonl')
   const route = new FakeRoute(script)
   const fixture = await mount(
-    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
+    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock',
+      // 本用例测的是摘要路：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），既有取值与正文逐字保留；精简层自己的行为见 condense-pipeline.spec.ts。
+      condenseMinUnits: 1e9,
+      ...overrides } as Schemastery.TypeS<typeof Config>,
     undefined,
     route,
   )
@@ -196,6 +199,8 @@ describe('票 03：摘要路径的失败一律原样透传且不抛出', () => {
     const path = join(tempRoot(), 'debug.jsonl')
     const fixture = await mount({
       summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock',
+      // 本用例测的是摘要路径的失败透传：夹具正文不归精简层处理（见上一条注释）。
+      condenseMinUnits: 1e9,
     } as Schemastery.TypeS<typeof Config>)
     open.push(fixture)
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))

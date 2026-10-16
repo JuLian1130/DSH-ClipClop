@@ -69,7 +69,8 @@ afterAll(() => { cleanupProfiles() })
  * @returns 夹具。
  */
 async function booted(config: Record<string, unknown>): Promise<LiveFixture> {
-  const fixture = await bootProfile(config)
+  // 本用例测的是 memo 台账：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），夹具正文与既有取值逐字保留。
+  const fixture = await bootProfile({ condenseMinUnits: 1e9, ...config })
   live.push(fixture)
   return fixture
 }
@@ -94,7 +95,10 @@ async function mounted(
   const path = join(tempRoot(), 'debug.jsonl')
   const route = new FakeRoute(script)
   const fixture = await mount(
-    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock', ...overrides } as Schemastery.TypeS<typeof Config>,
+    { summarize: true, ruleSummary: true, debug: true, debugPath: path, routeProvider: 'mock', routeModel: 'mock',
+      // 同上：夹具正文不归精简层处理（精简层自己的行为见 condense-pipeline.spec.ts）。
+      condenseMinUnits: 1e9,
+      ...overrides } as Schemastery.TypeS<typeof Config>,
     undefined,
     route,
   )

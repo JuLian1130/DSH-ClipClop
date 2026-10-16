@@ -68,7 +68,8 @@ async function mounted(
   route?: FakeRoute,
   spill: FakeSpill | null = new FakeSpill(),
 ): Promise<HostFixture> {
-  const fixture = await mount(config, undefined, route, spill)
+  // 本用例逐个走的是既有各路：把精简层的尺寸下限抬到夹具正文之上，本层判 unchanged（不表态），既有取值与正文逐字保留；精简层自己的行为见 condense-pipeline.spec.ts。
+  const fixture = await mount({ condenseMinUnits: 1e9, ...config }, undefined, route, spill)
   open.push(fixture)
   return fixture
 }
@@ -317,8 +318,8 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
 
     const [record] = readRecords(path)
     expect(Object.keys(record!).sort()).toEqual([
-      'action', 'admission', 'cacheObservation', 'durationMs', 'extract', 'judgeInputTokens', 'pluginVersion',
-      'resultBytes', 'toolName',
+      'action', 'admission', 'cacheObservation', 'condense', 'durationMs', 'extract', 'judgeInputTokens',
+      'pluginVersion', 'resultBytes', 'toolName',
     ])
     expect(record).toEqual({
       pluginVersion: PLUGIN_VERSION,
@@ -332,6 +333,8 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
       judgeInputTokens: 147,
       // 这次调用没声明提取目标。
       extract: false,
+      // 精简层考虑过这条结果（工具与正文形态都符合），但夹具把尺寸下限抬到它之上，所以一条规则都没命中。
+      condense: { rules: [], truncated: false },
       action: 'summarized',
     })
   })
