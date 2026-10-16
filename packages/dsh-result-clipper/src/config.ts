@@ -7,12 +7,17 @@
  * `web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
  * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
  * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（`ruleSummary`）、debug 关闭且不
- * 自动改用临时路径、干跑关闭、**工具结果精简开启**。
+ * 自动改用临时路径、干跑关闭、**工具结果精简开启**、**按命令语义精简关闭**、`git diff` 族开启。
  *
  * **精简参数是 6 个非 volatile 字段**（票 15）：尺寸下限与净收益阈值以**估算单位**计（与摘要的两个阈值同一把
  * 尺子），封顶参数按**行数**计。非 volatile 的含义是「只影响配置文件的 A/B，不进设置页」：settings 的写回路径
  * 只接受 volatile 路径，非 volatile 字段在页面上看不见、写入非 volatile 路径也会被拒；写在配置文件里则照常可读、
  * 改了值就按其取值生效。默认值引 `condense.ts` 的 `CONDENSE_DEFAULTS`，不在这里另抄一份数字。
+ *
+ * **票 16 再加五项**：`condenseByCommand`（「按命令语义精简」，volatile，默认关——它是命令族那一步的总闸）与
+ * 四个**非 volatile** 字段——族开关 `condenseGitDiff`（默认**开**：关掉它只用于逐个 A/B 对照，总开关打开就该
+ * 有族接手）与它的三个封顶参数。族参数一律按 `condense<族名><参数名>` 平铺，默认值引 `gitdiff.ts` 的
+ * `GIT_DIFF_DEFAULTS`（票 14 实测的那一档，换一档门槛读数就不可比）。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
  * 清回空串。三个角色（摘要、摘要准入判断、隐私闸门）各有自己的 route：`routeProvider` / `routeModel` 是摘要
@@ -25,6 +30,7 @@
 import z from '@deepseek-ai/schemastery'
 import type { Volatile } from '@deepseek-ai/cordis'
 import { CONDENSE_DEFAULTS } from './condense.ts'
+import { GIT_DIFF_DEFAULTS } from './gitdiff.ts'
 
 /**
  * 本插件的配置。
@@ -109,6 +115,14 @@ export interface Config {
    * 不改变摘要那条路：`summarize` 关着时精简照旧生效（精简取代的是「把整段正文交给模型」）。
    */
   condense?: Volatile<boolean>
+  /**
+   * 「按命令语义精简」开关，**默认关闭**（票 16）：打开后命令族 handler 才参与分派——命中某一族时只跑那一族，
+   * 未命中（或该族关着、被忠实性守卫放弃、非零退出码、输入已被工具自身截断）照旧走通用链。
+   *
+   * 默认关是刻意的：命令族那一层是**有损**的（它按命令语义丢内容），要不要由用户决定。关着时整层只剩通用形状
+   * 变换，行为与票 15 完全一样。
+   */
+  condenseByCommand?: Volatile<boolean>
   /** 精简的尺寸下限（估算单位）：低于它的结果一个都不触发精简，也不写回退入口。 */
   condenseMinUnits?: number
   /** 精简的净收益阈值（估算单位）：省不到它就交回下游正文，免得为小结果付入口说明的开销。 */
@@ -121,6 +135,24 @@ export interface Config {
   condenseMaxLines?: number
   /** 单行字符上限：超过它的单行被截断并带标记。 */
   condenseMaxLineChars?: number
+  /**
+   * `git diff` 族（`compactDiff`）的开关，**默认开启**。非 volatile：只影响配置文件里的逐个对照，不进设置页。
+   *
+   * 默认开是必须的：判据 1 要的是「打开『按命令语义精简』后同一份改动视图就被收窄」——族开关若默认关，总开关
+   * 打开却什么都不发生。它的用途是 A/B 时**逐个关掉**某一族，看那一族单独贡献了多少。
+   */
+  condenseGitDiff?: boolean
+  /** 这一族**每 hunk** 保留的明细行数上限（删增行都算）。 */
+  condenseGitDiffMaxHunkLines?: number
+  /** 这一族整体保留的行数上限（含每文件头与聚合量）；前导上下文不计入它。 */
+  condenseGitDiffMaxLines?: number
+  /**
+   * 这一族**每 hunk** 的前导上下文行数上限。
+   *
+   * 全 diff 的前导上下文上限由 `condenseGitDiffMaxLines / 10` 推导，两者都**不计入** `condenseGitDiffMaxLines`
+   * ——只给「每 hunk」留字段而不写这条推导，前导上下文会跨 hunk 无界增长。
+   */
+  condenseGitDiffLeadingContext?: number
 }
 
 /**
@@ -160,6 +192,8 @@ export const Config = z.object({
   privacyConfirmedLocal: z.boolean().default(false).volatile(),
   failurePolicy: z.union([z.const('passthrough'), z.const('block')]).default('passthrough').volatile(),
   condense: z.boolean().default(true).volatile(),
+  // 「按命令语义精简」默认关（票 16）：命令族那一层是有损的，要不要由用户决定。
+  condenseByCommand: z.boolean().default(false).volatile(),
   // 六个精简参数**不带 `.volatile()`**：它们只影响配置文件里的 A/B，不出现在设置页（计划 §4.5）。
   condenseMinUnits: z.number().default(CONDENSE_DEFAULTS.minUnits),
   condenseMinNetGainUnits: z.number().default(CONDENSE_DEFAULTS.minNetGainUnits),
@@ -167,4 +201,10 @@ export const Config = z.object({
   condenseTailLines: z.number().default(CONDENSE_DEFAULTS.tailLines),
   condenseMaxLines: z.number().default(CONDENSE_DEFAULTS.maxLines),
   condenseMaxLineChars: z.number().default(CONDENSE_DEFAULTS.maxLineChars),
+  // 票 16 的 `git diff` 族：开关与三个封顶参数同样**不带 `.volatile()`**。默认值取票 14 实测的那一档——
+  // 换一档，`docs/dsh-condense-measure/` 里记的门槛读数就不可比（默认值引 `GIT_DIFF_DEFAULTS`，不抄数字）。
+  condenseGitDiff: z.boolean().default(true),
+  condenseGitDiffMaxHunkLines: z.number().default(GIT_DIFF_DEFAULTS.maxHunkLines),
+  condenseGitDiffMaxLines: z.number().default(GIT_DIFF_DEFAULTS.maxLines),
+  condenseGitDiffLeadingContext: z.number().default(GIT_DIFF_DEFAULTS.leadingContext),
 })

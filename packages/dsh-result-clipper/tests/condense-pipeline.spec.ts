@@ -22,6 +22,7 @@ import type { PostToolDecision, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
 import { exec, mount, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
+import { AGGREGATE_LINE, GIT_DIFF_BODY } from './support/gitdiff.ts'
 import { FakeRoute, requestText } from './support/route.ts'
 import { FakeSpill } from './support/spill.ts'
 
@@ -290,13 +291,30 @@ describe('票 15 判据 8：按内容判定、平台中立', () => {
     fixture.ctx.tools.register(textTool('bash', LONG_LINES_BODY))
     fixture.ctx.tools.register(textTool('pwsh', LONG_LINES_BODY))
 
-    // 将来按命令族分派的 handler 只该认 unix 命令串、并挡在 Windows shell 之外；本层一个 `arguments` 都不读，
-    // 所以这条阴性对照今天就该是绿的——它挡的是「分派顺手把 `pwsh` 也算进 git 族」那一类改动。
+    // 本层一个 `arguments` 都不读：不打开「按命令语义精简」时，同一条命令串在两种 shell 上是同一份取舍。
     const args = { command: 'git diff --stat' }
     const bash = await fixture.ctx.tools.execute(exec('bash', undefined, args))
     const pwsh = await fixture.ctx.tools.execute(exec('pwsh', undefined, args))
 
     expect(condensedBody(textOf(pwsh.content))).toBe(condensedBody(textOf(bash.content)))
+  })
+
+  it('打开「按命令语义精简」后，同一条 unix 命令串只在 bash 上被命令族接手（票 16 判据 13）', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(textTool('bash', GIT_DIFF_BODY))
+    fixture.ctx.tools.register(textTool('pwsh', GIT_DIFF_BODY))
+
+    const args = { command: 'git diff --stat' }
+    const bash = await fixture.ctx.tools.execute(exec('bash', undefined, args))
+    const pwsh = await fixture.ctx.tools.execute(exec('pwsh', undefined, args))
+
+    // 阳性对照：bash 上族真的接手了（正文里出现逐文件聚合量）；pwsh 上即使命令串就是 `git diff` 也不进分派。
+    expect(textOf(bash.content)).toMatch(AGGREGATE_LINE)
+    expect(textOf(pwsh.content)).not.toMatch(AGGREGATE_LINE)
+    expect(readRecords(path).map(record => record.condense)).toEqual([
+      expect.objectContaining({ family: 'compactDiff' }),
+      expect.not.objectContaining({ family: expect.anything() }),
+    ])
   })
 })
 

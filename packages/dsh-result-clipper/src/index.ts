@@ -65,6 +65,11 @@
  * 工具。精简过的不再进摘要：隐私判断照常跑在精简后的正文上（隐私那条路是闸门不是摘要能力），候选、memo、
  * 准入与摘要请求整条短路。
  *
+ * 本票（16）在精简层里加**分派**（`dispatch.ts`）：打开「按命令语义精简」后，先按扁平事实 map 与有序规则表取
+ * **首个命中者**，命中某一族时**只跑那一族**（`gitdiff.ts` 的 `compactDiff`），不再叠一遍通用链；未命中、该族
+ * 关着、被守卫放弃、非零退出码或输入已被工具自身截断才落通用链。两条守卫与平台面（只认 `bash`）都在
+ * `selectFamily` 里；观测字段 `condense.family` / `condense.facts` 只在分派真发生时写。
+ *
  * 任何路径都不得抛出——`tools/post-execute` 抛错会把整个工具调用变成错误结果；调用点的兜底 catch 只负责
  * 收住意外，正常失败各自以「透传 / 拦截」结算。精简层的异常归**放弃**不归失败（计划 §4.1 #8），所以在层内
  * 就地兜住、记 `condense-abstained`，不落到那个把取值记成 `failed` 的兜底 catch。
@@ -79,7 +84,17 @@ import type { ContentBlock, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { composeAdmissionPrompt, requestAdmission } from './admission.ts'
 import { candidateOf } from './candidate.ts'
-import { condenseText, isCondenseTool } from './condense.ts'
+import { condenseText, estimateUnits, isCondenseTool } from './condense.ts'
+import type { CondenseRule, CondenseVerdict } from './condense.ts'
+import {
+  builtinRules,
+  compileRules,
+  condenseRuleOf,
+  dispatchFacts,
+  selectFamily,
+  type Facts,
+  type FamilyRule,
+} from './dispatch.ts'
 import type { Config } from './config.ts'
 import {
   appendDebugRecord,
@@ -153,11 +168,23 @@ export function apply(ctx: Context, config: Required<Config>): void {
   // 可选参数 extract：主模型在调用时声明提取目标。启用判据按每次 agent 创建读一次（就是摘要总开关），所以关掉
   // 摘要时，之后创建的 agent 看不到这个参数，也不再覆盖工具。
   installExtractArg(ctx, () => extractEnabled(config), modes => recordMount(config, modes))
+  // 命令族规则表在**装载期**编译一次：锚定校验在这里发生，未以行首锚定的规则当场被拒绝并告警（票 16 判据 4）。
+  // 封顶参数用 thunk 传进规则里、`apply` 每次现读，所以改配置文件里的值即按其取值生效。
+  const familyTable = compileRules(
+    builtinRules(() => ({
+      maxHunkLines: config.condenseGitDiffMaxHunkLines,
+      maxLines: config.condenseGitDiffMaxLines,
+      leadingContext: config.condenseGitDiffLeadingContext,
+    })),
+    (rejected) => {
+      ctx.logger.warn(`dsh-result-clipper: 命令族 ${rejected.family} 的规则未以行首锚定，已拒绝：${rejected.branch}`)
+    },
+  )
   ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
     if (exec.parent !== undefined) return next()
     const startedAt = performance.now()
     const decision = await next()
-    const applied = await process(ctx, config, readback, memo, reminders, efforts, exec, result, decision)
+    const applied = await process(ctx, config, readback, memo, reminders, efforts, familyTable.rules, exec, result, decision)
       // 任何意外都不得把工具调用变成错误结果：透传并记 `failed`。
       .catch((): Processed => ({
         decision,
@@ -233,6 +260,7 @@ function dryRunInEffect(config: Required<Config>): boolean {
  * @param readback - 本进程内各会话写出的入口台账。
  * @param memo - 本进程内各会话已产出的摘要。
  * @param reminders - 本进程内各会话的失效提醒台账。
+ * @param families - 装载期编译好的命令族规则表（票 16）；「按命令语义精简」关着时它整表不参与分派。
  * @param exec - 工具执行（会话归属与 `read` 的路径）。
  * @param result - 工具结果的原始投影（摘要资格按它测量）。
  * @param decision - 下游（含 spill）的决策，也是隐私判断与替换的对象。
@@ -245,6 +273,7 @@ async function process(
   memo: SummaryMemo,
   reminders: ReminderLedger,
   efforts: EffortChoice,
+  families: readonly FamilyRule[],
   exec: ToolExecution,
   result: Readonly<ToolExecutionResult>,
   decision: PostToolDecision,
@@ -314,15 +343,16 @@ async function process(
   // 交给既有词表）。`body` 取下游正文，尺寸下限、净收益闸门与全部变换都以它为基准，不是 `result` 的原始投影。
   if (isCondenseTool(exec.name) && visible.length === 1 && visible[0]?.type === 'text') {
     const body = visible[0].text
+    // 输入截断事实在 `try` 外取一次：无论走哪条路（含异常兜底）都要写进观测，且它本身不参与取舍。
+    const truncated = truncatedOf(result)
     // 整段自带兜底（计划 §4.1 #8）：任何抛出都归「守卫放弃」，不能落到 `apply()` 调用点那个把取值记成
     // `failed` 的兜底 catch——那是「模型或 route 出了问题」，与「这次变换不做了」不是一回事。
     try {
       if (!config.condense.get()) {
         condenseReason = 'condense-off'
-        condense = { rules: [], truncated: truncatedOf(result) }
+        condense = { rules: [], truncated }
       } else {
-        const truncated = truncatedOf(result)
-        const verdict = condenseText(exec.name, body, {
+        const params = {
           // 六个参数是配置里的非 volatile 字段，读到的就是普通值（不是每步现读的 volatile 引用）。
           minUnits: config.condenseMinUnits,
           minNetGainUnits: config.condenseMinNetGainUnits,
@@ -331,16 +361,35 @@ async function process(
           maxLines: config.condenseMaxLines,
           maxLineChars: config.condenseMaxLineChars,
           entryReserveChars: ENTRY_RESERVE,
-        })
+        }
+        // 票 16：先分派、再决定跑哪一套。事实按**下游正文**现算（计划 §4.2 末尾），三条「不接族」的判据都在
+        // `selectFamily` 里（平台面只认 bash、输入已被截断、非零退出码），三条都只放弃命令族那一步。
+        // 开关关着时连事实都不摊——那时不发生分派，观测里也就不该有分派事实。
+        const facts = config.condenseByCommand.get() ? factsOf(exec, result, body, truncated) : undefined
+        // 族开关关着就等于那一族不在表里：它不接手，这次落通用链。
+        const hit = facts === undefined
+          ? undefined
+          : selectFamily(exec.name, facts, config.condenseGitDiff ? families : [])
+        const familyVerdict = hit === undefined ? undefined : condenseText(exec.name, body, params, [familyRule(hit)])
+        // **命中某一族时只跑那一族**，不再叠一遍通用链；族 handler 的忠实性守卫放弃时落回通用链（票 16 的
+        // 层序条）。命中之后再叠一遍链会把 `+`/`-` 行整段丢掉，那是这一族的忠实性要求不允许的。
+        const verdict: CondenseVerdict = familyVerdict === undefined || familyVerdict.kind === 'abstained'
+          ? condenseText(exec.name, body, params)
+          : familyVerdict
         // 观测字段在**本层考虑过这条结果**时就写（判据 10）：这样「输入已被工具截断的频率」的分母是「本层看到
         // 的所有精简工具结果」，而不是「被改动过的那些」。`unchanged` 只是不表态、取值交给既有词表。
-        condense = { rules: [], truncated }
+        condense = {
+          rules: [],
+          truncated,
+          ...hit === undefined ? {} : { family: hit.family },
+          ...facts === undefined ? {} : { facts: Object.fromEntries(facts) },
+        }
         if (verdict.kind === 'abstained') {
           condenseReason = 'condense-abstained'
         } else if (verdict.kind === 'not-shorter') {
           // 闸门挡下的是「替换」，不是「哪条规则命中过」：命中的规则照记，这是「为什么这条没变短」的答案。
           condenseReason = 'condense-not-shorter'
-          condense = { rules: verdict.rules, truncated }
+          condense = { ...condense, rules: verdict.rules }
         } else if (verdict.kind === 'condensed') {
           // 有损替换必须先把**替换前**的完整正文写进回退入口（计划 §4.1 #3）。写不成（没有存储后端、写入抛错、
           // 没有会话归属）一律交回下游正文，且不留下入口（计划 §7.4 第 1 条）。干跑不写盘，只预报配置层面的
@@ -358,7 +407,7 @@ async function process(
               noteReadback(readback, written)
               text += written.entry
             }
-            condense = { rules: verdict.rules, truncated }
+            condense = { ...condense, rules: verdict.rules }
             condensed = true
             // 干跑不替换正文：交回的仍是下游决策（计划 §2.1 第 5 条）。
             if (!dryRun) {
@@ -380,7 +429,7 @@ async function process(
       // 异常归「放弃」不归「失败」（计划 §4.1 #8）。已经替换完成的那次不回退——入口已经写出去了，回退只会留下
       // 无人引用的副本；没替换的一律由 `current` 交回下游正文。
       condenseReason = 'condense-abstained'
-      condense = { rules: [], truncated: truncatedOf(result) }
+      condense = { rules: [], truncated }
     }
   }
 
@@ -669,6 +718,60 @@ function truncatedOf(result: Readonly<ToolExecutionResult>): boolean {
     | undefined
   if (typeof value !== 'object' || value === null) return false
   return value.stdout?.truncated === true || value.stderr?.truncated === true
+}
+
+/**
+ * 工具结果里的退出码（票 16 判据 6）：只读 `result.value.exitCode`，不是整数就**没有这个事实**。
+ *
+ * 缺失与「退出码是 0」在分派里必须分得开（判据 2「缺失的事实永不匹配」）：缺失是「不知道」，不会替用户
+ * 把一次失败的命令当成成功的。
+ * @param result - 工具结果的原始投影。
+ * @returns 整数退出码；形状不认识时为 `undefined`。
+ */
+function exitCodeOf(result: Readonly<ToolExecutionResult>): number | undefined {
+  const value = result.value as { readonly exitCode?: unknown } | undefined
+  if (typeof value !== 'object' || value === null) return undefined
+  const exitCode = (value as { readonly exitCode?: unknown }).exitCode
+  return typeof exitCode === 'number' && Number.isInteger(exitCode) ? exitCode : undefined
+}
+
+/**
+ * 把命中的族规则交给安全层：族 id 就是记录里的规则 id（{@link condenseRuleOf} 是与语料对账共用的那个映射）。
+ * @param rule - 命中的族规则。
+ * @returns 可以交给 `condenseText` 的规则。
+ */
+function familyRule(rule: FamilyRule): CondenseRule {
+  return condenseRuleOf(rule)
+}
+
+/**
+ * 这条结果的分派事实（票 16 判据 2）：先把 DSH 的两处形状读出来，再交给 `dispatch.ts` 摊成扁平 map——摊的规则
+ * 与语料对账共用一份，两边的尺子不会各自漂。
+ *
+ * `bytes` / `lines` / `estimated` 按**下游正文**现算（计划 §4.2 末尾：分派判的是下游正文），与票 15 的尺寸
+ * 下限、净收益闸门同一份基准、同一把尺子。`truncated` 与票 15 的诊断字段同源（形状读不到就当没有）。
+ * @param exec - 工具执行（命令串在调用参数里）。
+ * @param result - 工具结果的原始投影（退出码在 `value` 上）。
+ * @param body - 下游正文。
+ * @param truncated - 输入是否已被工具自身截断。
+ * @returns 事实 map。
+ */
+function factsOf(
+  exec: ToolExecution,
+  result: Readonly<ToolExecutionResult>,
+  body: string,
+  truncated: boolean,
+): Facts {
+  const args = exec.arguments
+  const command = typeof args === 'object' && args !== null
+    ? (args as { readonly command?: unknown }).command
+    : undefined
+  return dispatchFacts({
+    command: typeof command === 'string' ? command : undefined,
+    exitCode: exitCodeOf(result),
+    truncated,
+    body,
+  }, estimateUnits)
 }
 
 /**

@@ -42,7 +42,7 @@ import {
   condenseText,
   generalRules,
   isCondenseTool,
-  type CondenseRuleId,
+  type GeneralRuleId,
   type CondenseVerdict,
 } from '../src/condense.ts'
 
@@ -78,8 +78,8 @@ interface ScanTally {
   targetCalls: number
   targetWithText: number
   belowFloor: number
-  changed: Record<CondenseRuleId, number>
-  abstainedPerRule: Partial<Record<CondenseRuleId, number>>
+  changed: Record<GeneralRuleId, number>
+  abstainedPerRule: Partial<Record<GeneralRuleId, number>>
   chainChanged: number
   chainAbstained: number
   verdicts: Record<CondenseVerdict['kind'], number>

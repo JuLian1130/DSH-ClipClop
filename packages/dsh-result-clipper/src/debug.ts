@@ -95,7 +95,8 @@ export interface CondenseObservation {
   /**
    * 本次**命中**（改动了正文）的精简规则 id，按施加顺序。一处都没命中、或整层守卫放弃时是空数组；
    * `condense-not-shorter` 的行里照记——闸门挡下的是「替换」，不是「哪条规则命中过」，那个区别正是
-   * 「为什么这条大结果没变短」的答案。
+   * 「为什么这条大结果没变短」的答案。票 16 起这里也会出现**命令族 id**（`compactDiff`）：命中某一族时只跑
+   * 那一族，不再叠一遍通用链。
    */
   readonly rules: readonly string[]
   /**
@@ -103,6 +104,17 @@ export interface CondenseObservation {
    * 用途是解释「为什么这次没有更省」——已被截断的输出，头尾封顶能压掉的东西本来就不多。
    */
   readonly truncated: boolean
+  /**
+   * 本次**选中的命令族**（票 16 判据 11）。没有族接手时这个字段不存在——未命中、该族关着、被两条守卫
+   * （输入已截断 / 非零退出码）拦下，三种都是这个样子。族被选中但**它的守卫放弃了**时这个字段在、而 `rules`
+   * 记的是随后通用链里真正改动正文的 id（层序：守卫放弃落通用链）。
+   */
+  readonly family?: string
+  /**
+   * 分派事实的扁平 map（票 16 判据 2）：`command` / `exitCode` / `truncated` / `format` / `bytes` / `lines` /
+   * `estimated`。**缺失的事实不在里面**——少了哪一项就是没有那一项，不是空值。
+   */
+  readonly facts?: Readonly<Record<string, string | number | boolean>>
 }
 
 /** 一行 debug JSONL。 */

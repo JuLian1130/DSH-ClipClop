@@ -30,6 +30,7 @@
 
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { estimateContent } from '@deepseek-ai/dsh-token-meter/estimate'
+import type { CommandFamilyId } from './dispatch.ts'
 import { ENTRY_RESERVE } from './entry.ts'
 
 /**
@@ -53,8 +54,16 @@ export function isCondenseTool(toolName: string): toolName is CondenseTool {
   return (CONDENSE_TOOLS as readonly string[]).includes(toolName)
 }
 
-/** 一条通用形状变换的名字。命令族 handler 的 id 在票 16／17 加进来。 */
-export type CondenseRuleId = 'strip-ansi' | 'strip-cr' | 'dedup-adjacent' | 'tail-cap'
+/** 一条**通用形状变换**的名字。 */
+export type GeneralRuleId = 'strip-ansi' | 'strip-cr' | 'dedup-adjacent' | 'tail-cap'
+
+/**
+ * 一条精简规则的 id：通用形状变换，或**命令族**（票 16 起后者也会出现在观测里）。
+ *
+ * 两种 id 不会在同一条记录里同时出现——命中某一族时只跑那一族、不再叠一遍通用链（层序，票 16 备注）。观测
+ * 要能回答「这次是哪一族接手的」，所以族 id 与通用变换 id 走同一个字段。
+ */
+export type CondenseRuleId = GeneralRuleId | CommandFamilyId
 
 /**
  * 一条精简规则：一条确定性文本变换及其适用条件。
@@ -68,6 +77,11 @@ export interface CondenseRule {
   /** 这条规则会不会丢掉内容；会丢的必须写出回退入口（计划 §4.1 #3）。 */
   readonly lossy: boolean
   apply(text: string): string | undefined
+}
+
+/** 通用形状变换的一条规则：id 收窄到 {@link GeneralRuleId}，于是调用方不必为族 id 留分支。 */
+export interface GeneralRule extends CondenseRule {
+  readonly id: GeneralRuleId
 }
 
 /**
@@ -164,10 +178,13 @@ function hasPositionNotice(text: string): boolean {
 
 /**
  * 把一张文本块按插件既有的估算器计价。
+ *
+ * 导出给分派层用：事实里的 `estimated` 与这一层的尺寸下限、净收益阈值必须是**同一把尺子**（计划 §4.1 表后的
+ * 「两把尺子必须是一把」）。
  * @param text - 正文。
  * @returns 估算单位（`ceil(字符数/4) + 4`）。
  */
-function units(text: string): number {
+export function estimateUnits(text: string): number {
   return estimateContent([{ type: 'text', text } satisfies ContentBlock])
 }
 
@@ -179,7 +196,7 @@ function units(text: string): number {
  * @returns 估算单位。
  */
 function unitsWithReserve(text: string, entryReserveChars: number): number {
-  return units(text + 'x'.repeat(entryReserveChars))
+  return estimateUnits(text + 'x'.repeat(entryReserveChars))
 }
 
 /** 剥 ANSI 转义序列。正文里没有 `ESC` 时原样交回（O(n) 预检，计划 §4.1 #9）。 */
@@ -265,7 +282,7 @@ function tailCap(text: string, params: CondenseParams): string | undefined {
  * @param params - 精简参数；封顶那条规则按它取值。
  * @returns 依施加顺序排列的规则表。
  */
-export function generalRules(params: CondenseParams): readonly CondenseRule[] {
+export function generalRules(params: CondenseParams): readonly GeneralRule[] {
   return [
     { id: 'strip-ansi', lossy: false, apply: stripAnsi },
     { id: 'strip-cr', lossy: false, apply: stripCr },
@@ -298,7 +315,7 @@ export function condenseText(
 ): CondenseVerdict {
   if (!isCondenseTool(toolName)) return { kind: 'unchanged' }
   if (body === '') return { kind: 'unchanged' }
-  const before = units(body)
+  const before = estimateUnits(body)
   if (before < params.minUnits) return { kind: 'unchanged' }
 
   let text = body
@@ -321,7 +338,7 @@ export function condenseText(
   }
   if (text === body) return { kind: 'unchanged' }
 
-  const after = lossy ? unitsWithReserve(text, params.entryReserveChars) : units(text)
+  const after = lossy ? unitsWithReserve(text, params.entryReserveChars) : estimateUnits(text)
   // 两道判据，缺一不可：**不严格更短就交回下游正文**——这一条由机制本身保证，任何配置都关不掉它（计划 §4.1 #2
   // 的「不可配置关闭」指的正是它，否则把阈值配成 0 或负数就能让本层交出更长或等长的正文）；以及省幅要过阈值，
   // 那一条才是配置里的 `minNetGainUnits`。
