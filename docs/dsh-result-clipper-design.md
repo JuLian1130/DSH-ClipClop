@@ -158,3 +158,17 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 - **替换后的落盘内容被 token 计量器读到**，自动压缩的触发随之推迟（旧调研把它列为必须验证的一项）。
 - 干跑不改变任何模型可见内容、不交回提醒、不调用 `saveText`，并在 debug 日志里留下「本应发生什么」的记录；debug 开关关闭或路径为空时干跑不生效。
 - debug 日志不含原文、摘要正文、完整提示词与凭据。
+
+## 工具结果精简
+
+机制与参数暂在 `.scratch/dsh-result-clipper/doc/tool-result-trimming-plan.md` §2 与 §4，实施期迁入本节。本节先落阶段 0（票 14）的验证状态。
+
+### 验证状态
+
+阶段 0 的语料、harness 与口径落在 `docs/dsh-condense-measure/`，读数与复现方法见该目录 README。以下每条都有一次实跑支撑，不是判断。
+
+- **计划 §7.5 的基线可复现**：四个钉住工具都在 1.5% 以内——`bash` 106,504 次（−0.2%）/ 61,405,768 token（−0.0%）、`read` 25,325（+0.1%）/ 51,790,732（+0.4%）、`grep` 2,954（−1.3%）/ 4,436,512（−1.5%）、`glob` 284（−0.7%）/ 143,987（−0.1%）。
+- **「靠前的文件吃满配额、靠后的文件一条没有」不成立 —— 票 18 作废**（计划 §6 阶段 4 的作废条件已触发）。2,954 次 native `grep` 里只有 **69 次（2.3%）**被 `GREP_MAX_MATCHES = 250` 截断；这 69 次里每次展示的文件数**中位数 53、p90 123**，只有 **1 次（1.4%）**出现单文件吃满配额，被截断的那批整体看得见 31.3% 的命中——配额是摊在几十个文件上的。按计划 §6「阶段 4 是条件票」的约定废掉该票，**不记 `deferred.md`**（它是实测结论，不是待办）。
+- **`/tmp/dsh-bash-stats/all_tools.jsonl` 不能当本层的语料**：它的抽取白名单不含 `grep` / `glob`，索引里「零 native `grep`/`glob`」是白名单造成的，不是会话里没有。
+- **`bash` 的输入截断事实离线测不到**：会话日志的 `tool/result.meta` 对 `bash` 只留 `cwd`，`stdout.truncated` 不在其中（`grep` / `glob` / `web_fetch` 的 `meta` 才有 `truncated`，`read` 用 `offset` / `lines` / `totalLines` 分页）。「输入是否已被工具自身截断」这个 debug 字段只能在运行期采集，语料回放给不出它的出现频率。
+- **结果正文的上限**：`bash` 与 `web_fetch` 封顶在 50,000 字符，`read` 到 57,507、不受该顶。归因是**推断**——spill 的 12,500 估算单位预算按头尾两半截断，估算器是 4 字符/单位（`packages/llm/token-meter/src/estimate.ts:13` 的 `CHARS_PER_TOKEN`），而 spill 硬编码豁免 `read`（`packages/spill/spill-policy/src/index.ts:135`）。注意 `tool-workflow` 有一个同值不同物的 50,000 字符上限（`maxResultChars`），它作用于 `workflow` 工具自己的渲染结果。
