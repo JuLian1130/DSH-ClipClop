@@ -8,7 +8,9 @@
  * 两处与原型的有意差异：
  *
  * 1. 窗口只在 `sed` 脚本的**地址部分**取 —— 原型 `_RANGE`（`transforms_sed_dump.py:97`）扫的是整段命令串，
- *    于是 `sed -n 's/x/1,200p/p' f` 这种把范围写在**替换文本**里的调用会被误判成大窗口。
+ *    于是 `sed -n 's/x/1,200p/p' f` 这种把范围写在**替换文本**里的调用会被误判成大窗口。落地办法是最小命令
+ *    走查器（{@link walkScript}）：认地址、认命令字母，`s` / `y` 按定界符跳过两段参数——替换文本里的分号因此
+ *    也不是段首地址（`sed -n 's/x/;1,200p/p' f` 不是 200 行窗口）。
  * 2. 行按 `\n` 切（与 `gitdiff.ts` 同口径）；原型用 `str.splitlines()`，它还在 `\r`、`\v` 等处切。
  *
  * 守卫放弃（正文没兑现、低于尺寸下限）一律交回 `undefined`，调用方据此落回通用链；抛出不在这一层兜——安全层
@@ -64,9 +66,6 @@ export const LINE_TRUNCATED = '…[行已截断]'
 
 /** 「有意思的行」的词表，逐字照原型 `INTERESTING`，忽略大小写。 */
 const INTERESTING = /error|exception|traceback|fail|fatal|warn|denied|refused|timeout|not found|✗|✘|✖/i
-
-/** 定位在**命令开头**的打印地址：`1,101p` 或 `1,$p`；不在开头的（替换文本里的）不算。 */
-const LEADING_RANGE = /^\s*(\d+)\s*,\s*(\d+|\$)\s*p/
 
 /**
  * 按 shell 的引号规则把一条命令切成操作数：引号内的空白不是分隔符，引号本身不进入操作数。
@@ -145,11 +144,155 @@ function sedScripts(tokens: readonly string[]): string[] {
   return scripts
 }
 
+/** 一次走查的窗口累计：`\d+,\d+` 的行数，以及有没有出现 `$`（无限大）。 */
+interface WindowTally {
+  total: number
+  unbounded: boolean
+}
+
+/** 一个 sed 地址：行号、最后一行（`$`）或正则（`/re/`）。 */
+interface SedAddress {
+  /** 地址之后的位置。 */
+  readonly end: number
+  readonly kind: 'line' | 'last' | 'regex'
+  /** 行号地址的行数；其余形态为 0。 */
+  readonly line: number
+}
+
+/**
+ * 读一个 sed 地址：`\d+` / `$` / `/re/`（正则里 `\` 转义不算收尾的 `/`）。
+ * @param script - 脚本原文。
+ * @param start - 地址起始位置。
+ * @returns 地址与它之后的位置；这里不是地址时为 `undefined`。
+ */
+function readAddress(script: string, start: number): SedAddress | undefined {
+  const char = script[start]
+  if (char === '$') return { end: start + 1, kind: 'last', line: 0 }
+  if (char === '/') {
+    let index = start + 1
+    while (index < script.length) {
+      if (script[index] === '\\') {
+        index += 2
+        continue
+      }
+      if (script[index] === '/') return { end: index + 1, kind: 'regex', line: 0 }
+      index += 1
+    }
+    return undefined
+  }
+  const digits = /^\d+/.exec(script.slice(start))
+  if (digits === null) return undefined
+  return { end: start + digits[0].length, kind: 'line', line: Number(digits[0]) }
+}
+
+/** 跳过空白（sed 允许地址与命令字母之间有空格 / 制表符，但不跨行）。 */
+function skipBlanks(script: string, start: number): number {
+  let index = start
+  while (script[index] === ' ' || script[index] === '\t') index += 1
+  return index
+}
+
+/**
+ * 读命令开头的地址部分（一到两个 `\d+` / `$` / `/re/`，逗号分隔），并算出这条命令要计的行数。
+ *
+ * 只有 `\d+,\d+` 与 `\d+,\$` 构成窗口：单地址、正则地址对（`/start/,/end/p`）、倒序区间都不算。
+ * @param script - 脚本原文。
+ * @param start - 命令起始位置。
+ * @returns 地址部分之后的位置与窗口行数（`'unbounded'` 表示 `$`）。
+ */
+function readWindow(script: string, start: number): { end: number; window: number | 'unbounded' | undefined } {
+  const first = readAddress(script, start)
+  if (first === undefined) return { end: start, window: undefined }
+
+  let end = first.end
+  let second: SedAddress | undefined
+  const comma = skipBlanks(script, end)
+  if (script[comma] === ',') {
+    second = readAddress(script, skipBlanks(script, comma + 1))
+    if (second !== undefined) end = second.end
+  }
+
+  let window: number | 'unbounded' | undefined
+  if (first.kind === 'line' && second !== undefined) {
+    if (second.kind === 'last') window = 'unbounded'
+    else if (second.kind === 'line' && second.line >= first.line) window = second.line - first.line + 1
+  }
+  return { end, window }
+}
+
+/**
+ * 从 `start` 起跳过一段定界文本，交回收尾定界符之后的位置；没有收尾时吃到串尾（`\` 转义不算定界符）。
+ * @param script - 脚本原文。
+ * @param start - 文本起点。
+ * @param delimiter - 定界符。
+ * @returns 收尾定界符之后的位置。
+ */
+function skipDelimited(script: string, start: number, delimiter: string): number {
+  let index = start
+  while (index < script.length) {
+    if (script[index] === '\\') {
+      index += 2
+      continue
+    }
+    if (script[index] === delimiter) return index + 1
+    index += 1
+  }
+  return index
+}
+
+/**
+ * 跳过 `s` / `y` 的两段参数（`s` 是 pattern + replacement、`y` 是 source + dest，按定界符读），再把 flags
+ * 推到下一个命令边界。
+ *
+ * 参数里可以有分号与逗号（`s|x|;1,200p|`）——把整条命令跳过去，它们就不会被当成分段地址，这正是「只在地址
+ * 部分取窗口」在替换文本上的落点。
+ * @param script - 脚本原文。
+ * @param at - 命令字母之后的位置（定界符所在处）。
+ * @returns 下一个命令边界的位置（`;` / 换行 / `}` / 串尾）。
+ */
+function skipSubstitution(script: string, at: number): number {
+  const delimiter = script[at]
+  if (delimiter === undefined || delimiter === '\\' || delimiter === '\n') return at + 1
+  const afterPattern = skipDelimited(script, at + 1, delimiter)
+  let index = skipDelimited(script, afterPattern, delimiter)
+  while (index < script.length && script[index] !== ';' && script[index] !== '\n' && script[index] !== '}') index += 1
+  return index
+}
+
+/**
+ * 走查一条 `sed` 脚本，把**命令开头**的 `\d+,\d+p` / `\d+,\$p` 累加进 `tally`。
+ *
+ * 命令边界不靠裸切 `;`（那会把 `s|x|;1,200p|` 的替换文本当成分段）：先读地址部分、再认命令字母；`s` / `y` 按
+ * 定界符跳过两段参数、flags 推到边界，其余命令按一个字符推进。
+ * @param script - 脚本操作数原文。
+ * @param tally - 窗口累计。
+ */
+function walkScript(script: string, tally: WindowTally): void {
+  let index = 0
+  while (index < script.length) {
+    const char = script[index] as string
+    // 命令之间的分隔（`;`、换行、空白、块结束）不承载判断。
+    if (char === ';' || char === '\n' || char === ' ' || char === '\t' || char === '}') {
+      index += 1
+      continue
+    }
+    const addresses = readWindow(script, index)
+    const at = skipBlanks(script, addresses.end)
+    const letter = script[at]
+    if (letter === undefined) return
+    if (letter === 'p' && addresses.window !== undefined) {
+      if (addresses.window === 'unbounded') tally.unbounded = true
+      else tally.total += addresses.window
+    }
+    index = letter === 's' || letter === 'y' ? skipSubstitution(script, at + 1) : at + 1
+  }
+}
+
 /**
  * 这次 `sed` 调用**请求**打印的行数；不是区间打印时交回 `undefined`。
  *
- * 要求脚本段里有独立的 `-n` / `--quiet` / `--silent`（原型同样要求它前后有空白），并在脚本的每条命令**开头**
- * 累加 `\d+,\d+p` / `\d+,\$p` 的行数；`$` 按无限大算。非 sed 命令、非打印脚本、没有这种地址、或范围只写在
+ * 要求脚本段里有独立的 `-n` / `--quiet` / `--silent`（原型同样要求它前后有空白），并走查脚本：只有**命令开头**
+ * 的 `\d+,\d+p` / `\d+,\$p` 才计入，`$` 按无限大算。非 sed 命令、非打印脚本、没有这种地址、或范围只写在
  * 替换文本里都交回 `undefined`。
  * @param command - **首个实质命令**段（`dispatch.ts` 已剥掉脚手架、管道右侧与标题回显）。
  * @returns 请求的窗口行数；不是窗口打印时为 `undefined`。
@@ -160,20 +303,10 @@ export function sedWindowLines(command: string): number | undefined {
   if (tokens[0] !== 'sed') return undefined
   if (!tokens.some(token => token === '-n' || token === '--quiet' || token === '--silent')) return undefined
 
-  let total = 0
-  let unbounded = false
-  for (const script of sedScripts(tokens)) {
-    // 按脚本的命令边界（`;`、换行）逐条看：只有**命令开头**的地址才是窗口。
-    for (const piece of script.split(/[;\n]/)) {
-      const range = LEADING_RANGE.exec(piece)
-      if (range === null) continue
-      const low = Number(range[1])
-      if (range[2] === '$') unbounded = true
-      else if (Number(range[2]) >= low) total += Number(range[2]) - low + 1
-    }
-  }
-  if (unbounded) return UNBOUNDED_WINDOW
-  return total === 0 ? undefined : total
+  const tally: WindowTally = { total: 0, unbounded: false }
+  for (const script of sedScripts(tokens)) walkScript(script, tally)
+  if (tally.unbounded) return UNBOUNDED_WINDOW
+  return tally.total === 0 ? undefined : tally.total
 }
 
 /**

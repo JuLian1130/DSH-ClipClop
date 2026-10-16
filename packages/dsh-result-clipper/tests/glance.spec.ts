@@ -80,6 +80,21 @@ describe('sedWindowLines · 请求的窗口行数', () => {
     expect(sedWindowLines("sed -n 's/x/1,200p/p' f")).toBeUndefined()
   })
 
+  it('替换文本里的分号不是命令边界：`s|x|;1,200p|` / `s/x/;1,200p/p` / `y/a/;1,200p/` / `-e` 拼法都不是窗口', () => {
+    expect(sedWindowLines("sed -n 's|x|;1,200p|' f")).toBeUndefined()
+    expect(sedWindowLines("sed -n 's/x/;1,200p/p' f")).toBeUndefined()
+    expect(sedWindowLines("sed -n 'y/a/;1,200p/' f")).toBeUndefined()
+    expect(sedWindowLines("sed -n -e 's/x/;1,200p/p' f")).toBeUndefined()
+  })
+
+  it('真地址与替换文本里的假地址并存时只数真地址', () => {
+    expect(sedWindowLines("sed -n '1,101p;s/x/;200p/p' f")).toBe(101)
+  })
+
+  it('正则地址（`/start/,/end/p`）不是行数窗口', () => {
+    expect(sedWindowLines("sed -n '/start/,/end/p' f")).toBeUndefined()
+  })
+
   it('非 sed 命令即使带 `-n` 与范围也不是', () => {
     expect(sedWindowLines("grep -n '1,101p' f")).toBeUndefined()
     expect(sedWindowLines("awk 'NR==1,101p' f")).toBeUndefined()

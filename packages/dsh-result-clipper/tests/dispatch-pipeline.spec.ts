@@ -483,8 +483,14 @@ describe('票 17 判据 2：大窗口 `sed` 被收窄；不是区间打印的 `s
     expect(condense).toMatchObject({ family: 'sedWindow', rules: ['sedWindow'] })
   })
 
-  it('阴性：替换 / `-i` 就地编辑 / 范围只写在替换文本里——正文 ≥60 行也不落这一族', async () => {
-    const commands = ["sed 's/line/LINE/' bigf", "sed -i 's/line/LINE/' bigf", "sed -n 's/x/1,200p/p' bigf"]
+  it('阴性：替换 / `-i` 就地编辑 / 范围只写在替换文本里（含替换文本里的分号）——正文 ≥60 行也不落这一族', async () => {
+    const commands = [
+      "sed 's/line/LINE/' bigf",
+      "sed -i 's/line/LINE/' bigf",
+      "sed -n 's/x/1,200p/p' bigf",
+      // 替换文本里的 `;1,200p` 不是段首地址：走查器按定界符跳过 `s` 的两段参数（票 17 收口）。
+      "sed -n 's/x/;1,200p/p' bigf",
+    ]
     for (const command of commands) {
       const { text, condense } = await run({ condenseByCommand: true }, SED_WINDOW_BODY, command)
       expect(condense).not.toHaveProperty('family')

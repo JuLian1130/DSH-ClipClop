@@ -648,15 +648,21 @@ def stage2(dump_path, dump, dup, stat, index, ordered, ruler):
         condensed = [r for r in dump
                      if r.get("family") == family and r.get("outcome") == "condensed"
                      and id(r) in pair]
-        before_units = after_units = recon_before_tok = after_tok_reserve = after_tok_notice = 0
+        before_units = after_units = 0
         no_body = 0
         for row in condensed:
-            entry = pair[id(row)]
             before_units += int(row.get("beforeUnits") or 0)
             after_units += int(row.get("afterUnits") or 0)
-            if entry.body is None:
+            if pair[id(row)].body is None:
                 no_body += 1
-                continue
+        # token 口径的 after 侧只能借原型重建的那一份正文（dump 不含正文，与票 16 同）。所以这里**只取
+        # 发布正文与原型正文逐字相同**的行（sha256 相等）——那些行上「原型正文的 token 数」就是「发布正文的
+        # token 数」；正文不同的行（本语料 10 行，全部是行切分口径）从 token 口径排除、单独报数。
+        tok_rows = [r for r in condensed
+                    if pair[id(r)].body is not None and r.get("sha256") == _sha256(pair[id(r)].body)]
+        recon_before_tok = after_tok_reserve = after_tok_notice = 0
+        for row in tok_rows:
+            entry = pair[id(row)]
             recon_before_tok += entry.before_tok
             after_tok_reserve += ruler(entry.body) + ruler("x" * reserve)
             after_tok_notice += ruler(entry.body) + ruler(fallback_notice(entry.text_len))
@@ -674,6 +680,9 @@ def stage2(dump_path, dump, dup, stat, index, ordered, ruler):
         print("  族触发集（family=%s 且 outcome=condensed）= %d 行；记录原型 triggered = %d，差 %+d"
               % (family, len(condensed), want["triggered"], len(condensed) - want["triggered"]))
         print("  替换后正文重建不出（原型在该行放弃）= %d 行，已从 token 口径的分子分母中排除" % no_body)
+        print("  token 口径（口径 2/3）实际用的行 = %d（发布正文与原型正文 sha256 逐字相同；"
+              "另排除「正文不同」%d 行、原型重建不出 %d 行）"
+              % (len(tok_rows), len(condensed) - no_body - len(tok_rows), no_body))
         print("  分母：triggered = %d 行 / ΣbeforeUnits = %d 单位 / ΣafterUnits = %d 单位"
               " / Σbefore 语料 token = %d tok"
               % (len(condensed), before_units, after_units, recon_before_tok))
