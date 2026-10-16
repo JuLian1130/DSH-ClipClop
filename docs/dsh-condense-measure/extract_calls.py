@@ -15,9 +15,8 @@ version, v3 and v4, so calls would otherwise be counted twice):
 
     $OUT/sessions/<dirkey>.jsonl
 
-Row fields: callId, name, session, project, version, file, turn, step, command,
-description, argKeys, argsScalars, text, textLen, isError, meta, metaTruncated,
-hasResult.
+Row fields: callId, name, session, project, version, dir, turn, step, command,
+description, argKeys, args, text, textLen, isError, meta, metaTruncated, hasResult.
 
 Large argument values (file bodies, old/new strings) are recorded as lengths only —
 they are not what the condense layer rewrites, and keeping them would multiply the
@@ -118,16 +117,26 @@ def slim(value):
     return None
 
 
+def iter_rows(out_dir):
+    """Stream every row of a corpus this script wrote."""
+    sess = os.path.join(out_dir, "sessions")
+    for fn in sorted(os.listdir(sess)):
+        with open(os.path.join(sess, fn), encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    yield json.loads(line)
+                except Exception:
+                    continue
+
+
 def extract_dir(paths, out_path):
     """Merge every schema version in one session directory, deduped by callId."""
     calls = {}
     results = {}
     session_id = version = None
     project = os.path.basename(os.path.dirname(paths[0]))
-    events = 0
     for path in paths:
         for ev in iter_events(path):
-            events += 1
             etype = ev.get("type")
             if etype == "session" and session_id is None:
                 session_id = ev.get("id")
@@ -194,7 +203,7 @@ def extract_dir(paths, out_path):
     with open(out_path, "w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-    return (paths[0], len(rows), len(calls), len(results), events, None)
+    return (len(rows), None)
 
 
 def main():
@@ -228,7 +237,7 @@ def main():
             futs.append(pool.submit(extract_dir, logs, os.path.join(out_dir, key + ".jsonl")))
         for fut in futs:
             try:
-                _first, n, ncalls, nresults, _ev, _err = fut.result()
+                n, _err = fut.result()
             except Exception as exc:  # pragma: no cover
                 errors += 1
                 print("ERR %s" % exc, flush=True)
@@ -242,19 +251,13 @@ def main():
                     flush=True,
                 )
 
-    for fn in os.listdir(out_dir):
-        with open(os.path.join(out_dir, fn), encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    row = json.loads(line)
-                except Exception:
-                    continue
-                name = row.get("name") or "<none>"
-                bucket = per_tool.setdefault(name, {"calls": 0, "chars": 0, "noResult": 0})
-                bucket["calls"] += 1
-                bucket["chars"] += row.get("textLen") or 0
-                if not row.get("hasResult"):
-                    bucket["noResult"] += 1
+    for row in iter_rows(out_dir):
+        name = row.get("name") or "<none>"
+        bucket = per_tool.setdefault(name, {"calls": 0, "chars": 0, "noResult": 0})
+        bucket["calls"] += 1
+        bucket["chars"] += row.get("textLen") or 0
+        if not row.get("hasResult"):
+            bucket["noResult"] += 1
 
     summary = {
         "root": args.root,
