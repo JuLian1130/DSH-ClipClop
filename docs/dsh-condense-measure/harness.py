@@ -94,6 +94,7 @@ class Report:
     tokens_before: int = 0
     tokens_after: int = 0
     tokens_saved_triggered: int = 0
+    tokens_before_triggered: int = 0
 
     @property
     def saving_all(self) -> float:
@@ -106,16 +107,15 @@ class Report:
               % (self.targeted, self.floor_skipped, self.triggered, self.abstained,
                  self.unchanged, self.gate_rejected))
         print("tokens before=%d  after=%d" % (self.tokens_before, self.tokens_after))
-        print("省幅 all=%.1f%%  省幅 triggered=%.1f%%"
-              % (100 * self.saving_all, 100 * self.saving_triggered))
-        print("省幅（触发口径）= (Σ before − Σ after) / Σ before，只算真正被替换的 %d 次"
-              % self.triggered)
+        print("省幅 all=%.1f%%（分母 %d token：全部命中目标工具的调用；放弃与未改动算零节省）"
+              % (100 * self.saving_all, self.tokens_before))
+        print("省幅 triggered=%.1f%%（分母 %d token：只有真正被替换的 %d 次）"
+              % (100 * self.saving_triggered, self.tokens_before_triggered, self.triggered))
 
     @property
     def saving_triggered(self) -> float:
-        return (self.tokens_saved_triggered /
-                (self.tokens_saved_triggered + self.tokens_after)
-                if (self.tokens_saved_triggered + self.tokens_after) else 0.0)
+        return (self.tokens_saved_triggered / self.tokens_before_triggered
+                if self.tokens_before_triggered else 0.0)
 
 
 def _targeted(row, targets) -> bool:
@@ -193,6 +193,7 @@ def _run(label, transforms, out_dir, targets, floor_units, max_calls, mode):
         rep.tokens_before += before
         rep.tokens_after += after
         rep.tokens_saved_triggered += before - after
+        rep.tokens_before_triggered += before
         if len(transforms) > 1 and mode == "dispatch":
             raise AssertionError("dispatch must resolve to exactly one rule")
     return rep
