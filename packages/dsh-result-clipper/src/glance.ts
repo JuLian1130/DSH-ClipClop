@@ -9,8 +9,9 @@
  *
  * 1. 窗口只在 `sed` 脚本的**地址部分**取 —— 原型 `_RANGE`（`transforms_sed_dump.py:97`）扫的是整段命令串，
  *    于是 `sed -n 's/x/1,200p/p' f` 这种把范围写在**替换文本**里的调用会被误判成大窗口。落地办法是最小命令
- *    走查器（{@link walkScript}）：认地址、认命令字母，`s` / `y` 按定界符跳过两段参数——替换文本里的分号因此
- *    也不是段首地址（`sed -n 's/x/;1,200p/p' f` 不是 200 行窗口）。
+ *    走查器（{@link walkScript}）：认地址、认命令字母；`s` / `y` 按定界符跳过两段参数，注释与 `a`/`i`/`c`/`r`/`w`
+ *    跳到行尾，其余命令整条跳到下一个边界——替换文本与命令自由文本里的 `N,Mp` 因此都不是地址
+ *    （`sed -n 's/x/;1,200p/p' f` 与 `sed -n '1,100p # 1,200p' f` 都不是大窗口）。
  * 2. 行按 `\n` 切（与 `gitdiff.ts` 同口径）；原型用 `str.splitlines()`，它还在 `\r`、`\v` 等处切。
  *
  * 守卫放弃（正文没兑现、低于尺寸下限）一律交回 `undefined`，调用方据此落回通用链；抛出不在这一层兜——安全层
@@ -241,6 +242,40 @@ function skipDelimited(script: string, start: number, delimiter: string): number
 }
 
 /**
+ * 跳到下一个命令边界（`;` / 换行 / `}` / 串尾）。
+ *
+ * 命令的**自由文本**（`p` 后面跟着的东西、`s` 的 flags、文件名……）里可能有 `N,Mp` 这种看着像地址的文本，
+ * 把整条命令一次跳过去，循环就不会在自由文本里重新读地址。
+ * @param script - 脚本原文。
+ * @param start - 起点。
+ * @returns 边界位置。
+ */
+function skipToBoundary(script: string, start: number): number {
+  let index = start
+  while (index < script.length && script[index] !== ';' && script[index] !== '\n' && script[index] !== '}') index += 1
+  return index
+}
+
+/**
+ * 跳到行尾（`\n` / 串尾）。
+ * @param script - 脚本原文。
+ * @param start - 起点。
+ * @returns 行尾位置。
+ */
+function lineEnd(script: string, start: number): number {
+  const newline = script.indexOf('\n', start)
+  return newline < 0 ? script.length : newline
+}
+
+/**
+ * 整行都是自由文本的命令字母：`#`（注释）与 `a` / `i` / `c`（追加 / 插入 / 替换文本）、`r` / `w`（文件名）。
+ *
+ * 它们在 sed 里的参数一直吃到行尾——BSD sed 实测 `sed -n 'w /tmp/f;1,2p'` 的文件名就是 `f;1,2p`（`;1,2p` 不是
+ * 命令），GNU sed 把 `a text` / `p # …` 当合法的文本 / 注释。所以这些字母之后整行都不再读地址。
+ */
+const LINE_TEXT_COMMANDS = '#aicrw'
+
+/**
  * 跳过 `s` / `y` 的两段参数（`s` 是 pattern + replacement、`y` 是 source + dest，按定界符读），再把 flags
  * 推到下一个命令边界。
  *
@@ -254,16 +289,14 @@ function skipSubstitution(script: string, at: number): number {
   const delimiter = script[at]
   if (delimiter === undefined || delimiter === '\\' || delimiter === '\n') return at + 1
   const afterPattern = skipDelimited(script, at + 1, delimiter)
-  let index = skipDelimited(script, afterPattern, delimiter)
-  while (index < script.length && script[index] !== ';' && script[index] !== '\n' && script[index] !== '}') index += 1
-  return index
+  return skipToBoundary(script, skipDelimited(script, afterPattern, delimiter))
 }
 
 /**
  * 走查一条 `sed` 脚本，把**命令开头**的 `\d+,\d+p` / `\d+,\$p` 累加进 `tally`。
  *
- * 命令边界不靠裸切 `;`（那会把 `s|x|;1,200p|` 的替换文本当成分段）：先读地址部分、再认命令字母；`s` / `y` 按
- * 定界符跳过两段参数、flags 推到边界，其余命令按一个字符推进。
+ * 命令边界不靠裸切 `;`，也不在自由文本里找地址：先读地址部分、再认命令字母；`s` / `y` 按定界符跳过两段参数，
+ * {@link LINE_TEXT_COMMANDS} 整行跳过，其余命令跳到下一个边界。
  * @param script - 脚本操作数原文。
  * @param tally - 窗口累计。
  */
@@ -284,7 +317,9 @@ function walkScript(script: string, tally: WindowTally): void {
       if (addresses.window === 'unbounded') tally.unbounded = true
       else tally.total += addresses.window
     }
-    index = letter === 's' || letter === 'y' ? skipSubstitution(script, at + 1) : at + 1
+    if (letter === 's' || letter === 'y') index = skipSubstitution(script, at + 1)
+    else if (LINE_TEXT_COMMANDS.includes(letter)) index = lineEnd(script, at)
+    else index = skipToBoundary(script, at + 1)
   }
 }
 

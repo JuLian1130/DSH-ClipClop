@@ -95,6 +95,29 @@ describe('sedWindowLines · 请求的窗口行数', () => {
     expect(sedWindowLines("sed -n '/start/,/end/p' f")).toBeUndefined()
   })
 
+  it('命令的自由文本不是地址：`p` 后面的 `# 1,200p` 只是注释，只数真窗口 100', () => {
+    // GNU sed 把 `# 1,200p` 当注释（输出 100 行）；只推进一个命令字母的实现会把它当第二个窗口、判成 300。
+    expect(sedWindowLines("sed -n '1,100p # 1,200p' f")).toBe(100)
+  })
+
+  it('整行自由文本的命令字母：`#1,200p`（注释）与 `a 1,200p`（追加文本）都不算窗口', () => {
+    expect(sedWindowLines("sed -n '#1,200p' f")).toBeUndefined()
+    expect(sedWindowLines("sed -n 'a 1,200p' f")).toBeUndefined()
+  })
+
+  it('`w` 的文件名到行尾（BSD sed 实测文件名就是 `1,200p`）：`1,100p;w 1,200p` 只数 100', () => {
+    expect(sedWindowLines("sed -n '1,100p;w 1,200p' f")).toBe(100)
+  })
+
+  it('真窗口一条都不漏：真地址与替换文本 / 块 / 多脚本混在一起时照数', () => {
+    expect(sedWindowLines("sed -n '100,300p' f")).toBe(201)
+    expect(sedWindowLines("sed -n '1,101p;s/x/;9p/' f")).toBe(101)
+    expect(sedWindowLines("sed -n 's/x/y/;1,200p' f")).toBe(200)
+    expect(sedWindowLines("sed -n 'y/a/b/;1,200p' f")).toBe(200)
+    expect(sedWindowLines("sed -n '2,5{p;1,200p}' f")).toBe(200)
+    expect(sedWindowLines("sed -n --expression='1,60p' --expression='100,160p' f")).toBe(121)
+  })
+
   it('非 sed 命令即使带 `-n` 与范围也不是', () => {
     expect(sedWindowLines("grep -n '1,101p' f")).toBeUndefined()
     expect(sedWindowLines("awk 'NR==1,101p' f")).toBeUndefined()
