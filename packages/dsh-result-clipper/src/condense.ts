@@ -308,7 +308,7 @@ function dedupAdjacent(text: string): string {
  * @param params - 精简参数。
  * @returns 封顶后的正文；不触发封顶时原样交回。
  */
-function tailCap(text: string, params: CondenseParams): string | undefined {
+function tailCap(text: string, params: CondenseParams): string {
   const lines = text.split('\n')
   const overLongLine = lines.some(line => line.length > params.maxLineChars)
   if (lines.length <= params.maxLines && !overLongLine) return text
@@ -343,7 +343,7 @@ export function generalRules(params: CondenseParams): readonly GeneralRule[] {
     { id: 'strip-ansi', lossy: false, apply: stripAnsi },
     { id: 'strip-cr', lossy: false, apply: stripCr },
     { id: 'dedup-adjacent', lossy: false, apply: dedupAdjacent },
-    { id: 'tail-cap', lossy: true, apply: (text: string): string | undefined => tailCap(text, params) },
+    { id: 'tail-cap', lossy: true, apply: (text: string) => tailCap(text, params) },
   ]
 }
 

@@ -343,6 +343,28 @@ describe('票 20 · 上游入口与尾部标记', () => {
     expect(out.text).not.toContain('精简版')
   })
 
+  it('真实 compactDiff 同时遇到退出标记与位置说明时按原顺序回贴', () => {
+    const rules = builtinRules({
+      gitDiff: () => GIT_DIFF_DEFAULTS,
+      sedWindow: () => SED_WINDOW_DEFAULTS,
+      rawDump: () => RAW_DUMP_DEFAULTS,
+    })
+    const diff = rules.find(rule => rule.family === 'compactDiff')
+    expect(diff).toBeDefined()
+    // 上游顺序：diff 正文 → 退出标记 → spill 追加的说明块。
+    const body = `${GIT_DIFF_BODY}\n[exit code: 1]${notice}`
+    const out = condenseText('bash', body, at(), [condenseRuleOf(diff!)])
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    expect(out.lossy).toBe(true)
+    if (!out.lossy) return
+    expect(out.entry).toBe('upstream')
+    expect(out.text).toContain('[exit code: 1]')
+    expect(out.text.endsWith(notice)).toBe(true)
+    expect(out.text.indexOf('[exit code: 1]')).toBeLessThan(out.text.indexOf(notice.trim()))
+    expect(out.text).not.toContain('精简版')
+  })
+
   it.each(['sedWindow', 'rawDump'] as const)('%s 也不截坏超长上游说明，入口归属仍是上游', (family) => {
     const rules = builtinRules({
       gitDiff: () => GIT_DIFF_DEFAULTS,
