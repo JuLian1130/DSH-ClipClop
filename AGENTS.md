@@ -52,6 +52,8 @@
 
 规格和任务使用仓库内 `.scratch/` 目录中的本地 Markdown。详见 `docs/agents/issue-tracker.md`。
 
+**复审/停表**：代码复审的收敛判据（哪些发现进修复、何时不再补轮）见 `docs/agents/issue-tracker.md`「代码复审的收敛判据」。开复审前先读它，并把判据与票面「已决定不改」台账带进 reviewer prompt。
+
 **提交归属：`.scratch/` 是它自己的 git 仓库**（主仓库的 `.git/info/exclude` 排除了整个 `.scratch/`，主仓库历史里从没有票据文件）。因此：
 
 - 改动 `.scratch/` 内任何文件（票据、规格、探针、复核记录）后，**在 `.scratch/` 目录里** `git add` / `git commit`；提交信息照该仓库的既有格式写「票NN …」的中文短句。
