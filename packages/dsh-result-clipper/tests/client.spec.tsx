@@ -1183,19 +1183,17 @@ describe('票 19：设置页上的两个精简开关与整页文案', () => {
     expect(condenseFields).toContain('condenseByCommand')
     expect(condenseFields.length).toBeGreaterThanOrEqual(21)
 
-    // 机制名、取值名与实现细节。`route` 只在**中文**里禁：票面点名的唯一 `route` 问题是「中文句里裸用」它，
-    // 英文侧保留 DSH 自己的术语（三段被用户逐字定死的说明里本来就有 "route"）。
+    // 机制名、取值名与实现细节。`route` 两本字典都禁，唯一豁免是英文的 `summaryGroupHint`——那句是用户逐字
+    // 定死的文案（里面本来就有 "route"），改它就是改定死原文（票 19 备注）。
     const forbidden = [
       ...condenseFields,
       'extract', 'volatile', 'spill', 'baseURL', 'Host', '安全外壳',
       'summary-off', 'rule-summary-off', 'condense-off', 'condense-abstained', 'condense-not-shorter',
       'not-candidate', 'whole-result', 'exact-text', 'read-back', 'not-shorter', 'failed-window', 'passthrough',
     ]
-    for (const [locale, dictionary, banned] of [
-      ['zh', zh, [...forbidden, 'route']],
-      ['en', en, forbidden],
-    ] as const) {
+    for (const [locale, dictionary] of [['zh', zh], ['en', en]] as const) {
       for (const [key, text] of Object.entries(dictionary)) {
+        const banned = locale === 'en' && key === 'summaryGroupHint' ? forbidden : [...forbidden, 'route']
         for (const name of banned) {
           expect(text, `${locale}.${key} 里出现了内部名字「${name}」`).not.toContain(name)
         }

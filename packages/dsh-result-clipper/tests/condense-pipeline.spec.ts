@@ -22,7 +22,7 @@ import type { PostToolDecision, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
 import { exec, mount, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
-import { AGGREGATE_LINE, GIT_DIFF_BODY } from './support/gitdiff.ts'
+import { AGGREGATE_LINE, GIT_DIFF_ARGS, GIT_DIFF_BODY } from './support/gitdiff.ts'
 import { FakeRoute, requestText } from './support/route.ts'
 import { FakeSpill } from './support/spill.ts'
 
@@ -478,5 +478,97 @@ describe('票 15 判据 10：记下输入是否已被工具自身截断', () => 
 
     expect(readRecords(other.path)[0]!.condense).toEqual({ rules: ['tail-cap'], truncated: false })
     expect(readRecords(textBlocks.path)[0]!.condense).toEqual({ rules: ['tail-cap'], truncated: false })
+  })
+})
+
+
+describe('票 19 判据 2：19 个非 volatile 字段改值即改变行为（写在配置文件里可读，也按其取值生效）', () => {
+  /**
+   * 一份带 hunk 前导上下文的 diff：三个 hunk，每个 40 行长上下文再跟 10 处改动。只有 `leadingContext` 会改
+   * 这些上下文行留几行；省幅要盖过回退入口的预留，所以上下文行写得长一点。
+   */
+  const CONTEXT_DIFF = [
+    'diff --git a/app.ts b/app.ts',
+    'index 1a2b3c4..5d6e7f8 100644',
+    '--- a/app.ts',
+    '+++ b/app.ts',
+    ...Array.from({ length: 3 }, (_, hunk) => [
+      `@@ -${hunk * 50 + 1},50 +${hunk * 50 + 1},50 @@ function part${hunk}() {`,
+      ...Array.from({ length: 40 }, (_, index) => ` keep-${hunk}-${String(index).padStart(2, '0')}-context-padding`),
+      ...Array.from({ length: 10 }, (_, index) => `-const old${hunk}${index} = compute(${index})`),
+      ...Array.from({ length: 10 }, (_, index) => `+const neu${hunk}${index} = compute(${index})`),
+    ]).flat(),
+  ].join('\n')
+  /** 200 行转储，中间 30 行是「有意思的行」——只有 `hits` 那一档会改变它们插不插。 */
+  const DUMP_200 = Array.from({ length: 200 }, (_, index) =>
+    index >= 20 && index < 50 ? `error: something failed at ${index}` : `row-${String(index).padStart(3, '0')}`).join('\n')
+  /** 200 行互不相同的正文：通用链不动它，只有 `sed` 大窗口族会收窄。 */
+  const SED_200 = Array.from({ length: 200 }, (_, index) => `row-${String(index).padStart(3, '0')}`).join('\n')
+  /** 296 行、每行接近 20 字符：默认封顶触发行数 300 不触发，改成 50 才触发，且省幅要盖过回退入口的预留。 */
+  const PLAIN_296 = Array.from({ length: 296 }, (_, index) =>
+    `row-${String(index).padStart(3, '0')}-xxxxxxxxxxxx`).join('\n')
+
+  /** 一档「只改这一个字段」的对照。 */
+  interface FieldCase {
+    readonly field: string
+    readonly value: number | boolean
+    readonly body: string
+    /** 命令族要读的命令串；不给就是一次没有参数的工具调用。 */
+    readonly args?: Record<string, unknown>
+    /** 命令族那一半必须先打开「按命令语义精简」。 */
+    readonly byCommand?: boolean
+  }
+
+  const CASES: readonly FieldCase[] = [
+    // 票 15 的六个通用参数：四条通用形状变换各自可拧的那一档。
+    { field: 'condenseMinUnits', value: 1e9, body: LONG_LINES_BODY },
+    { field: 'condenseMinNetGainUnits', value: 0, body: NOT_SHORTER_BODY },
+    { field: 'condenseHeadLines', value: 10, body: LONG_LINES_BODY },
+    { field: 'condenseTailLines', value: 100, body: LONG_LINES_BODY },
+    { field: 'condenseMaxLines', value: 50, body: PLAIN_296 },
+    { field: 'condenseMaxLineChars', value: 5000, body: 'x'.repeat(3000) },
+    // 票 16 的 `git diff` 族。
+    { field: 'condenseGitDiff', value: false, body: GIT_DIFF_BODY, args: GIT_DIFF_ARGS, byCommand: true },
+    { field: 'condenseGitDiffMaxHunkLines', value: 1, body: GIT_DIFF_BODY, args: GIT_DIFF_ARGS, byCommand: true },
+    { field: 'condenseGitDiffMaxLines', value: 20, body: GIT_DIFF_BODY, args: GIT_DIFF_ARGS, byCommand: true },
+    { field: 'condenseGitDiffLeadingContext', value: 0, body: CONTEXT_DIFF, args: GIT_DIFF_ARGS, byCommand: true },
+    // 票 17 的 `sed` 大窗口族与原始转储族。
+    { field: 'condenseSedWindow', value: false, body: SED_200, args: { command: "sed -n '1,200p' f" }, byCommand: true },
+    { field: 'condenseSedWindowHeadLines', value: 5, body: SED_200, args: { command: "sed -n '1,200p' f" }, byCommand: true },
+    { field: 'condenseSedWindowTailLines', value: 5, body: SED_200, args: { command: "sed -n '1,200p' f" }, byCommand: true },
+    { field: 'condenseSedWindowMinLines', value: 1e6, body: SED_200, args: { command: "sed -n '1,200p' f" }, byCommand: true },
+    { field: 'condenseRawDump', value: false, body: DUMP_200, args: { command: 'cat bigfile' }, byCommand: true },
+    { field: 'condenseRawDumpHeadLines', value: 5, body: DUMP_200, args: { command: 'cat bigfile' }, byCommand: true },
+    { field: 'condenseRawDumpTailLines', value: 5, body: DUMP_200, args: { command: 'cat bigfile' }, byCommand: true },
+    { field: 'condenseRawDumpMinLines', value: 1e6, body: DUMP_200, args: { command: 'cat bigfile' }, byCommand: true },
+    { field: 'condenseRawDumpHits', value: 0, body: DUMP_200, args: { command: 'cat bigfile' }, byCommand: true },
+  ]
+
+  /**
+   * 装一份夹具、跑同一条结果，交回模型可见正文。
+   * @param config - 这一档的插件配置。
+   * @param testCase - 这一档要跑的工具正文与参数。
+   * @returns 交回给模型的正文。
+   */
+  const outputOf = async (config: Record<string, unknown>, testCase: FieldCase): Promise<string> => {
+    const { fixture } = await mounted(config as Schemastery.TypeS<typeof Config>)
+    fixture.ctx.tools.register(textTool('bash', testCase.body))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, testCase.args))
+    return textOf(result.content)
+  }
+
+  it('逐字段对照：只改这一个字段、同一条结果的正文就变', async () => {
+    const schemaFields = Object.keys((Config as unknown as { dict: Record<string, unknown> }).dict)
+      .filter(field => field.startsWith('condense') && field !== 'condense' && field !== 'condenseByCommand')
+    // 对照表必须与 schema 上的非 volatile 字段一一对上：加一个字段而不补一档，这里就红。
+    expect(new Set(CASES.map(testCase => testCase.field))).toEqual(new Set(schemaFields))
+    expect(schemaFields).toHaveLength(19)
+
+    for (const testCase of CASES) {
+      const base = testCase.byCommand === true ? { condenseByCommand: true } : {}
+      const baseline = await outputOf(base, testCase)
+      const overridden = await outputOf({ ...base, [testCase.field]: testCase.value }, testCase)
+      expect(overridden, `${testCase.field} 改值后同一条结果的正文应随之改变`).not.toBe(baseline)
+    }
   })
 })
