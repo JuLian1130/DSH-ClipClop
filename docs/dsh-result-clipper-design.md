@@ -287,4 +287,4 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 - **整份/逐字让路**：`WHOLE_RESULT` 与逐字要求下，超过单行封顶的 5000 字符单行结果和可被 `compactDiff` 收窄的 diff 都逐字交回；`spill.saves` 为 0，记录 `whole-result` / `exact-text` 且没有 `condense` 字段。`extract` 只在摘要总开关开着时存在；关着时没有这个模型级出口，用户级出口仍是精简总开关。`tests/condense-pipeline.spec.ts` 三条用例。
 - **入口说明中性化**：精简兜底段逐字断言为「…标记处省略了部分内容；若需要被省略的内容，原文在此：…」，不含「不承载判断」，长度仍不超过 `ENTRY_RESERVE`；摘要那条逐字未变。`tests/condense.spec.ts`。
 - **语料**：默认值只改采纳面，不改单条判定——通用链 `condensed` 1,157 / `abstained` 0 / `not-shorter` 412 / 幂等违反 0；三族 `condensed` 4,327（`compactDiff` 698 / `sedWindow` 1,264 / `rawDump` 2,365）、`abstained` 8,056、`not-shorter` 315，均与票 20 后一致。
-- **门禁**：四 workspace typecheck 全过；`pnpm test` 30 文件 / 559 用例全绿。
+- **门禁**：四 workspace typecheck 全过；`pnpm test` 全绿。
