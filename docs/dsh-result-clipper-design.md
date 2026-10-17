@@ -283,8 +283,8 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 
 **票 21（按命令语义精简默认开）的验证，2026-10-17**，观察面是插件级端到端 + 页面用例 + 语料扫描：
 
-- **默认开与显式关**：schema 默认值改为 `true`；设置页两个勾选默认都勾着，点一下写回 `false`；显式 `condenseByCommand: false` 仍只走通用链。`tests/entry-config.spec.ts`、`tests/full-closure.spec.ts`、`tests/client.spec.tsx`、`tests/dispatch-pipeline.spec.ts`。
-- **整份/逐字让路**：`WHOLE_RESULT` 与逐字要求下，超过单行封顶的 5000 字符单行结果和可被 `compactDiff` 收窄的 diff 都逐字交回；`spill.saves` 为 0，记录 `whole-result` / `exact-text` 且没有 `condense` 字段。`extract` 只在摘要总开关开着时存在；关着时没有这个模型级出口，用户级出口仍是精简总开关。`tests/condense-pipeline.spec.ts` 三条用例。
-- **入口说明中性化**：精简兜底段逐字断言为「…标记处省略了部分内容；若需要被省略的内容，原文在此：…」，不含「不承载判断」，长度仍不超过 `ENTRY_RESERVE`；摘要那条逐字未变。`tests/condense.spec.ts`。
+- **默认开与显式关**：schema 默认值改为 `true`；设置页两个勾选默认都勾着，点一下写回 `false`；显式 `condenseByCommand: false` 仍只走通用链。`tests/client.spec.tsx` 的 `两个开关都在页面上，默认值读得出来：两个都勾着`、`镜像里没有这两个键时也读 host 半 schema 的默认（两个都开）`、`两个开关都保存即生效：各点一下当场写回一个字段，不经过任何「保存」`；`tests/entry-config.spec.ts` 的 `票 16：分派层的五个字段——两个开关的默认值与三个封顶参数`；`tests/full-closure.spec.ts` 的 `schema 的逐字段默认值正确`、`逐字段写入后立刻读得到，逐字段清掉覆盖后回落到底层默认`；`tests/dispatch-pipeline.spec.ts` 的 `显式关掉后同一份 diff 只走通用链：没有族 id，正文是尾部封顶的形态`。
+- **整份/逐字让路**：`WHOLE_RESULT` 与逐字要求下，超过单行封顶的 5000 字符单行结果和可被 `compactDiff` 收窄的 diff 都逐字交回；`spill.saves` 为 0，记录 `whole-result` / `exact-text` 且没有 `condense` 字段。`extract` 只在摘要总开关开着时存在；关着时没有这个模型级出口，用户级出口仍是精简总开关。`tests/condense-pipeline.spec.ts` 的 `WHOLE_RESULT：超过单行封顶的结果逐字透传，不写入口，记录 whole-result 且没有精简观测`、`逐字要求：命令族也不接手，记录 exact-text`、`WHOLE_RESULT：打开命令族也不收窄 diff，正文逐字不变`。
+- **入口说明中性化**：精简兜底段逐字断言为「…标记处省略了部分内容；若需要被省略的内容，原文在此：…」，不含「不承载判断」，长度仍不超过 `ENTRY_RESERVE`；摘要那条逐字未变。`tests/condense.spec.ts` 的 `精简版入口说明只陈述省略与取回，不评价被丢内容是否重要`、`摘要那条路的说明文字逐字未变`。
 - **语料**：默认值只改采纳面，不改单条判定——通用链 `condensed` 1,157 / `abstained` 0 / `not-shorter` 412 / 幂等违反 0；三族 `condensed` 4,327（`compactDiff` 698 / `sedWindow` 1,264 / `rawDump` 2,365）、`abstained` 8,056、`not-shorter` 315，均与票 20 后一致。
 - **门禁**：四 workspace typecheck 全过；`pnpm test` 全绿。
