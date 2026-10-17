@@ -1,12 +1,14 @@
 /**
  * `plugins.bundle.config` 的包详情页配置区：**本插件唯一的设置界面**。摘要、摘要准入判断、隐私闸门三个角色
  * 各自成一组，每组把该角色的 route（provider 与 model）、推理档位与提示词规则正文放在一起；摘要组另带两个
- * 阈值；最后是诊断组——debug 与干跑两个开关加它们的日志路径。组之间用一条横线隔开。
+ * 阈值；接着是诊断组——debug 与干跑两个开关加它们的日志路径；最后是**工具结果精简**的两个开关（总开关与它下面
+ * 的「按命令语义精简」）。组之间用一条横线隔开。
  *
  * **三项能力的开关都紧挨各自那一组、且一律保存即生效**（`applySwitch`）：摘要开关在摘要组之上、准入启用位在
  * 准入组之上、隐私闸门开关在隐私组之上；三者关掉时，它们下面那一整组（含该组的保存 / 恢复默认）都不显示。
  * 走即时写入而不是分组草稿是必须的——它们折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次
- * 存不下去的改动。其余开关（自动摘要大内容、web_fetch 也过隐私闸门、隐私确认位、debug 与干跑）留在所属组的
+ * 存不下去的改动。**工具结果精简的两个开关同样保存即生效**（它们不折叠任何承载「保存」的组，这一层也没有别的
+ * 参数需要草稿）；其余开关（自动摘要大内容、web_fetch 也过隐私闸门、隐私确认位、debug 与干跑）留在所属组的
  * 草稿里，由该组的「保存」一次写回。
  *
  * **每组是「草稿 + 保存」**：控件只改本地草稿，不点该组的「保存」什么都不落盘；「保存」把该组所有改动作为
@@ -48,6 +50,8 @@ import type { ResultClipperLocaleKey } from './locales.ts'
 export type ResultClipperCardField =
   | 'summarize'
   | 'ruleSummary'
+  | 'condense'
+  | 'condenseByCommand'
   | 'routeProvider'
   | 'routeModel'
   | 'admissionJudge'
@@ -131,6 +135,10 @@ export interface ResultClipperCardInjected {
     dryRun: ObservableSnapshot<boolean>
     /** debug JSONL 路径；未配置时为空串。 */
     debugPath: ObservableSnapshot<string>
+    /** 工具结果精简总开关（默认开）：关掉时这一层完全不介入，工具结果按原样交给模型。 */
+    condense: ObservableSnapshot<boolean>
+    /** 「按命令语义精简」开关（默认关）：关着时只剩通用形状变换，与票 15 的行为一样。 */
+    condenseByCommand: ObservableSnapshot<boolean>
     /** DSH 当前可路由的 provider 分组与模型；provider 与 model 的候选来自它。 */
     modelCatalog: ObservableSnapshot<readonly ModelCatalogProvider[]>
   }
@@ -742,19 +750,26 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const debug = props.useDebug(value => value)
   const dryRun = props.useDryRun(value => value)
   const debugPath = props.useDebugPath(value => value)
+  const condense = props.useCondense(value => value)
+  const condenseByCommand = props.useCondenseByCommand(value => value)
   // 能力开关写入失败时记下是哪一个，提示就出现在那一行下面。
-  const [failedSwitch, setFailedSwitch] = useState<'summarize' | 'admissionJudge' | 'privacyGate'>()
+  const [failedSwitch, setFailedSwitch] = useState<
+    'summarize' | 'admissionJudge' | 'privacyGate' | 'condense' | 'condenseByCommand'
+  >()
   const catalog = props.useModelCatalog(value => value)
   // 卡片挂载时重读一次目录：用户往往是先去「设置 → 模型」建 route、再回来选它。
   useEffect(() => { props.refreshModelCatalog() }, [])
 
   /**
-   * 写回一个能力开关（摘要 / 准入启用位 / 隐私闸门）。三者都是**保存即生效**的一行，不走分组草稿——每个开关
-   * 折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次存不下去的改动。
+   * 写回一个能力开关（摘要 / 准入启用位 / 隐私闸门 / 工具结果精简的两个开关）。它们都是**保存即生效**的一行，
+   * 不走分组草稿——前三个折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次存不下去的改动。
    * @param field - 要写的开关字段。
    * @param next - 新的开关取值。
    */
-  const applySwitch = (field: 'summarize' | 'admissionJudge' | 'privacyGate', next: boolean): void => {
+  const applySwitch = (
+    field: 'summarize' | 'admissionJudge' | 'privacyGate' | 'condense' | 'condenseByCommand',
+    next: boolean,
+  ): void => {
     setFailedSwitch(undefined)
     void props.saveFields([{ op: 'set', path: [field], value: next }])
       .then((accepted) => { if (!accepted) setFailedSwitch(field) })
@@ -1053,5 +1068,23 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         hint={props.t('debugPathHint')} value={diagnostics.value('debugPath') as string}
         onChange={next => { diagnostics.change('debugPath', next) }} />
     </Group>
+
+    <hr style={DIVIDER_STYLE} />
+
+    {/* 工具结果精简自成一层（不发模型请求），两个开关都**保存即生效**；它们不折叠任何承载「保存」按钮的组，
+        这一层也没有别的参数需要草稿——其余参数都是非 volatile，只写在配置文件里，页面上看不见。
+        「按命令语义精简」只在总开关开着时才有意义，从属关系用缩排表示。 */}
+    <CheckRow id="plugin-config-result-clipper-condense" label={props.t('condense')}
+      hint={props.t('condenseHint')}
+      checked={condense}
+      onChange={next => { applySwitch('condense', next) }} />
+    {failedSwitch === 'condense' && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
+    {condense === true && <div style={NEST_ONE}>
+      <CheckRow id="plugin-config-result-clipper-condense-by-command" label={props.t('condenseByCommand')}
+        hint={props.t('condenseByCommandHint')}
+        checked={condenseByCommand}
+        onChange={next => { applySwitch('condenseByCommand', next) }} />
+      {failedSwitch === 'condenseByCommand' && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
+    </div>}
   </div>
 }

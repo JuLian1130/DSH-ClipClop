@@ -385,6 +385,9 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
     summaryPrompt: '',
     admissionPrompt: '',
     privacyPrompt: '',
+    // 工具结果精简：总开关默认开、按命令语义默认关（票 19 把它们摆上设置页，字段本身由票 15/16 落）。
+    condense: true,
+    condenseByCommand: false,
   }
 
   /** 每个字段的显式覆盖值：布尔取反、数字换值、字符串非空、策略取另一支。 */
@@ -411,6 +414,8 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
     summaryPrompt: '只看目标',
     admissionPrompt: '只看体积',
     privacyPrompt: '只看我定义的机密',
+    condense: false,
+    condenseByCommand: true,
   }
 
   /** 字段名清单：默认、覆盖、恢复默认三轮共用同一份，少一个字段就少一列断言。 */

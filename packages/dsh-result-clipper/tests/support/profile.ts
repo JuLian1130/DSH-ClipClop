@@ -52,6 +52,8 @@ export interface LiveConfig {
   readonly summaryPrompt: { get(): string }
   readonly admissionPrompt: { get(): string }
   readonly privacyPrompt: { get(): string }
+  readonly condense: { get(): boolean }
+  readonly condenseByCommand: { get(): boolean }
 }
 
 /** 一条装好的 profile。 */
@@ -59,6 +61,13 @@ export interface LiveFixture {
   readonly ctx: Context
   /** 本插件那一行**解析后**的配置引用；读它即装载期解析出的取值。 */
   readonly config: LiveConfig
+  /**
+   * 同一份解析结果按**普通值**读（非 volatile 字段没有 `.get()`）：用来断言「写入被拒后，非 volatile 参数的
+   * 运行时取值没变」。
+   */
+  readonly plain: Record<string, unknown>
+  /** 这条 profile 的 patch 文件（`cordis.patch.yml`）；断言「被拒的写入没落盘」要按字节比它。 */
+  readonly patchPath: string
   dispose(): Promise<void>
 }
 
@@ -74,9 +83,15 @@ export function cleanupProfiles(): void {
  * 装一条最小 profile：settings + 编辑器 + 工具运行时 + 被测插件各一行。
  * @param config - 被测插件那一行的 profile 配置（用户层）。
  * @param llm - 可选的假 route；给出时 profile 里就有 `llm` 服务，摘要路径可以真的发出请求。
+ * @param services - 可选的额外服务：给出时在装载测试 bundle 之前跑一次，用来放 `spillStore` 这类替身
+ *   （有损精简要写出回退入口，没有存储后端就会放弃）。
  * @returns 该 profile 的能力对象。
  */
-export async function bootProfile(config: Record<string, unknown>, llm?: FakeRoute): Promise<LiveFixture> {
+export async function bootProfile(
+  config: Record<string, unknown>,
+  llm?: FakeRoute,
+  services?: (root: Context) => void,
+): Promise<LiveFixture> {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-result-clipper-')))
   roots.push(home)
   const dir = join(home, 'profiles', 'test')
@@ -112,6 +127,7 @@ export async function bootProfile(config: Record<string, unknown>, llm?: FakeRou
     root.provide('profileContext', profile)
     // `llm` 是按名取自 context 的（插件每次处理结果都 `ctx.get('llm')`），所以替身照服务面挂上即可。
     if (llm !== undefined) root.provide('llm', llm as never)
+    services?.(root)
     Object.assign(root.loader.builtins, {
       editor: ConfigEditor,
       settings: Settings,
@@ -120,9 +136,12 @@ export async function bootProfile(config: Record<string, unknown>, llm?: FakeRou
       'result-clipper': plugin,
     })
   })
+  const entry = [...ctx.loader.entries()].find(candidate => candidate.options.id === PREFERENCE_NAMESPACE)
   return {
     ctx,
     config: resolvedConfig(ctx),
+    plain: entry?.fiber?.config as unknown as Record<string, unknown>,
+    patchPath: profile.patchPath,
     dispose: async () => { await ctx.fiber.dispose() },
   }
 }
@@ -142,7 +161,8 @@ function resolvedConfig(ctx: Context): LiveConfig {
     || config.privacyReasoningEffort === undefined || config.privacyConfirmedLocal === undefined
     || config.failurePolicy === undefined
     || config.summaryPrompt === undefined || config.admissionPrompt === undefined
-    || config.privacyPrompt === undefined) {
+    || config.privacyPrompt === undefined || config.condense === undefined
+    || config.condenseByCommand === undefined) {
     throw new Error('profile fixture: the result-clipper row has no resolved volatile config')
   }
   return config as LiveConfig

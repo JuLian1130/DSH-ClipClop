@@ -12,9 +12,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
-import { exec, textTool } from './support/host.ts'
+import { exec, textOf, textTool } from './support/host.ts'
 import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
 import type { LiveFixture } from './support/profile.ts'
+import { FakeSpill } from './support/spill.ts'
 
 const open: LiveFixture[] = []
 const paths: string[] = []
@@ -159,5 +160,76 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
     expect(fixture.config.summaryPrompt.get()).toBe('只看目标')
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'unset', path: ['summaryPrompt'] }])
     expect(fixture.config.summaryPrompt.get()).toBe('')
+  })
+})
+
+/**
+ * 一段带颜色序列与 CRLF 的正文：四条通用形状变换里只有**无损**的那两条（剥 ANSI、去 \r）会动它，所以它不依赖
+ * 存储后端就能被替换——这正是「页面上那个总开关一写就生效」的观察面。
+ */
+const COLOURED_BODY = '\u001b[31mline\u001b[0m\r\n'.repeat(200)
+
+/** 一条请求 200 行窗口的 `sed` 调用；200 行互不相同的正文只有命令族会收窄（通用链不动它）。 */
+const SED_BODY = Array.from({ length: 200 }, (_, index) => `row-${String(index).padStart(3, '0')}`).join('\n')
+const SED_COMMAND = "sed -n '1,200p' f"
+
+describe('票 19：设置页上那两个精简开关同样保存即生效', () => {
+  it('写入「工具结果精简」后下一条结果立刻被精简（不重挂载）', async () => {
+    const logPath = join(tempRoot(), 'debug.jsonl')
+    // 总开关默认开，这里先显式关掉：这一条测的是「把它勾上」这一个写入带来的行为变化。
+    const fixture = await bootProfile({
+      summarize: false, privacyGate: false, condense: false, debug: true, debugPath: logPath,
+    })
+    open.push(fixture)
+    fixture.ctx.tools.register(textTool('bash', COLOURED_BODY))
+    const before = await fixture.ctx.tools.execute(exec('bash'))
+    expect(textOf(before.content)).toBe(COLOURED_BODY)
+    expect(readFileSync(logPath, 'utf8')).toContain('"condense-off"')
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['condense'], value: true }])
+    expect(fixture.config.condense.get()).toBe(true)
+    const after = await fixture.ctx.tools.execute(exec('bash'))
+    expect(textOf(after.content)).not.toBe(COLOURED_BODY)
+    expect(textOf(after.content)).toContain('line')
+    expect(readFileSync(logPath, 'utf8').trimEnd().split('\n')).toHaveLength(2)
+  })
+
+  it('写入「按命令语义精简」后下一条结果立刻按命令语义收窄（不重挂载）', async () => {
+    const logPath = join(tempRoot(), 'debug.jsonl')
+    const spill = new FakeSpill()
+    const fixture = await bootProfile(
+      { summarize: false, privacyGate: false, condenseByCommand: false, debug: true, debugPath: logPath },
+      undefined,
+      (root) => { root.provide('spillStore', spill as never) },
+    )
+    open.push(fixture)
+    fixture.ctx.tools.register(textTool('bash', SED_BODY))
+    // 「按命令语义精简」默认关：命令族不参与分派，通用链也不动这 200 行——正文原样。
+    const before = await fixture.ctx.tools.execute(exec('bash', undefined, { command: SED_COMMAND }))
+    expect(textOf(before.content)).toBe(SED_BODY)
+    expect(spill.saves).toHaveLength(0)
+
+    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['condenseByCommand'], value: true }])
+    expect(fixture.config.condenseByCommand.get()).toBe(true)
+    const after = await fixture.ctx.tools.execute(exec('bash', undefined, { command: SED_COMMAND }))
+    expect(textOf(after.content)).not.toBe(SED_BODY)
+    // 有损替换写出了回退入口，入口指向的正是替换前的完整正文。
+    expect(spill.saves).toHaveLength(1)
+    expect(spill.saves[0]!.content).toBe(SED_BODY)
+  })
+
+  it('写非 volatile 的精简参数被宿主拒绝：运行时取值与 profile 文件都不变', async () => {
+    const fixture = await bootProfile({ condenseMinUnits: 123 })
+    open.push(fixture)
+    const before = readFileSync(fixture.patchPath)
+    expect(fixture.plain.condenseMinUnits).toBe(123)
+
+    // 设置页那两个开关走 volatile 路径；非 volatile 参数只写在配置文件里，从设置写入的路径过来会被直接拒。
+    await expect(fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [
+      { op: 'set', path: ['condenseMinUnits'], value: 7 },
+    ])).rejects.toThrow(/condenseMinUnits.*not volatile/)
+
+    expect(fixture.plain.condenseMinUnits).toBe(123)
+    expect(readFileSync(fixture.patchPath).equals(before)).toBe(true)
   })
 })

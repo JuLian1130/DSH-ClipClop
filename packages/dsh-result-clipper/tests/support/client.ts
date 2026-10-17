@@ -39,6 +39,8 @@ export interface StubSection {
   summaryPrompt: string
   admissionPrompt: string
   privacyPrompt: string
+  condense: boolean
+  condenseByCommand: boolean
 }
 
 /** section 缺席时控件读到的默认值（与 host 半 schema 的默认一致）。 */
@@ -68,6 +70,9 @@ export const SECTION_DEFAULTS: StubSection = {
   summaryPrompt: '',
   admissionPrompt: '',
   privacyPrompt: '',
+  // 工具结果精简：总开关默认开、按命令语义默认关（与 host 半 schema 的默认一致）。
+  condense: true,
+  condenseByCommand: false,
 }
 
 /** 一次原子写入里的一个字段操作（形状与 settings 的 `SettingsPathOpView` 一致）。 */

@@ -15,6 +15,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as plugin from '../src/index.ts'
 import { Config, inject, name } from '../src/index.ts'
+import { CONDENSE_DEFAULTS } from '../src/condense.ts'
 import { exec, textOf, textTool } from './support/host.ts'
 
 const contexts: Context[] = []
@@ -139,6 +140,36 @@ describe('配置契约', () => {
     const result = await ctx.tools.execute(exec('bash'))
     expect(result.isError).toBe(false)
     expect(textOf(result.content)).toBe('unchanged')
+  })
+
+  it('票 15：六个通用精简参数都是非 volatile 的普通值，写在配置文件里可读、改值即生效', async () => {
+    const { fiber } = await load({})
+    // 六个参数只影响配置文件里的 A/B，不进设置页（计划 §4.5）：装载后是**普通值**，没有 `.get()`。
+    const config = fiber.config as unknown as Record<string, unknown>
+    expect(config.condenseMinUnits).toBe(CONDENSE_DEFAULTS.minUnits)
+    expect(config.condenseMinNetGainUnits).toBe(CONDENSE_DEFAULTS.minNetGainUnits)
+    expect(config.condenseHeadLines).toBe(CONDENSE_DEFAULTS.headLines)
+    expect(config.condenseTailLines).toBe(CONDENSE_DEFAULTS.tailLines)
+    expect(config.condenseMaxLines).toBe(CONDENSE_DEFAULTS.maxLines)
+    expect(config.condenseMaxLineChars).toBe(CONDENSE_DEFAULTS.maxLineChars)
+    expect(Object.hasOwn(config, 'condenseMinUnits')).toBe(true)
+
+    // 写在配置文件里可读、改值即按其取值生效：A/B 就是逐档改这几个值各跑一遍。
+    const tuned = await load({
+      condenseMinUnits: 64,
+      condenseMinNetGainUnits: 12,
+      condenseHeadLines: 10,
+      condenseTailLines: 40,
+      condenseMaxLines: 80,
+      condenseMaxLineChars: 120,
+    })
+    const tunedConfig = tuned.fiber.config as unknown as Record<string, unknown>
+    expect(tunedConfig.condenseMinUnits).toBe(64)
+    expect(tunedConfig.condenseMinNetGainUnits).toBe(12)
+    expect(tunedConfig.condenseHeadLines).toBe(10)
+    expect(tunedConfig.condenseTailLines).toBe(40)
+    expect(tunedConfig.condenseMaxLines).toBe(80)
+    expect(tunedConfig.condenseMaxLineChars).toBe(120)
   })
 
   it('票 16：分派层的五个字段——两个开关的默认值与三个封顶参数', async () => {

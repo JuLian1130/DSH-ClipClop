@@ -418,6 +418,8 @@ describe('票 15 判据 1：精简层只作用于自己的工具集', () => {
   it.each(['read', 'web_fetch', 'glob'])(
     '%s 的文本结果逐字未变，装与不装精简层写出同一条记录、且记录里没有 condense 字段',
     async (toolName) => {
+      // 这一条同时是票 19 的阴性对照：`read` / `web_fetch` 的决策自票 15 交付（主仓 `69eba3a`）起逐字未变——
+      // 两臂相等只证明「装与不装同一条」，下面这行字面量才把「决策本身是什么」钉住（差一个字段即红）。
       const withLayer = await mounted()
       withLayer.fixture.ctx.tools.register(textTool(toolName, LONG_LINES_BODY))
       const result = await withLayer.fixture.ctx.tools.execute(exec(toolName))
@@ -429,6 +431,9 @@ describe('票 15 判据 1：精简层只作用于自己的工具集', () => {
       expect(textOf(result.content)).toBe(LONG_LINES_BODY)
       expect(textOf(other.content)).toBe(LONG_LINES_BODY)
       expect(withoutDuration(readRecords(withLayer.path))).toEqual(withoutDuration(readRecords(withoutLayer.path)))
+      expect(readRecords(withLayer.path)).toEqual([
+        expect.objectContaining({ toolName, action: 'unmodified', reason: 'not-candidate' }),
+      ])
       expect(readRecords(withLayer.path)[0]).not.toHaveProperty('condense')
     },
   )

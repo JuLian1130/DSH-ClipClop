@@ -21,7 +21,8 @@ import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ResultClipperCardInjected, ResultClipperCardProps } from '../src/client/card.tsx'
 import type { ResultClipperTabProps } from '../src/client/tab.tsx'
 import { DEFAULT_ADMISSION_RULE, DEFAULT_PRIVACY_RULE, DEFAULT_SUMMARY_RULE } from '../src/rules.ts'
-import { en } from '../src/client/locales.ts'
+import { Config } from '../src/config.ts'
+import { en, zh } from '../src/client/locales.ts'
 import { mountClient } from './support/client.ts'
 import type { ClientFixture, StubCatalogProvider, StubForm, StubSection } from './support/client.ts'
 
@@ -262,7 +263,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   it('page 视图显示数据流向与端点归属提示，控件读 schema 的默认值', async () => {
     // 准入组默认是收起的，要看到它的控件得先启用（默认折叠的用例在下面单列）。
     const { container, fixture } = await renderPage({ admissionJudge: true })
-    expect(container.textContent).toContain('摘要与隐私分别把工具正文发送给各自所选 route')
+    expect(container.textContent).toContain('摘要与隐私会分别把工具正文发送给它们各自所选的模型')
     // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，三个 provider 行同样各指一次。
     expect(container.textContent).toContain(fixture.t('modelSourceHint'))
     expect(container.textContent).toContain('设置 → 模型')
@@ -307,8 +308,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 三个能力开关都不在任何一组里：否则它们会被自己折叠起来。
     expect(groupOf(container, '摘要模型').querySelector('#plugin-config-result-clipper-summarize')).toBeNull()
     expect(groupOf(container, '隐私闸门模型').querySelector('#plugin-config-result-clipper-privacy-enabled')).toBeNull()
-    // 总开关那一行之上是一条横线，加上三组分隔线：一共四条。
-    expect([...container.querySelectorAll('hr')]).toHaveLength(4)
+    // 总开关那一行之上是一条横线，加上三组分隔线与精简开关那一行之前的一条：一共五条。
+    expect([...container.querySelectorAll('hr')]).toHaveLength(5)
     // 每个分组都有一行「这是做什么的」。
     for (const [title, hint] of [
       ['摘要模型', 'summaryGroupHint'],
@@ -1079,7 +1080,7 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
 
 describe('票 15/16/17：精简参数只写在配置文件里，设置页上没有它们', () => {
   it('19 个非 volatile 字段在页面上没有任何控件（阴性对照），既有控件照旧渲染', async () => {
-    const { container } = await renderCard()
+    const { container, face } = await renderCard()
     const ids = [...container.querySelectorAll('[id]')].map(node => node.getAttribute('id') ?? '')
 
     // 阳性对照：页面确实把既有配置项渲染成了控件，否则下面几条阴性断言是空转的。
@@ -1110,7 +1111,140 @@ describe('票 15/16/17：精简参数只写在配置文件里，设置页上没�
       'condense-raw-dump-hits',
     ]) {
       expect(ids.some(id => id.includes(field))).toBe(false)
+      // 读数面同样不许出现它们：页面只绑定它自己有的那两个开关（`condense` / `condenseByCommand`）。
+      expect(Object.keys(face.hooks)).not.toContain(field.replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase()))
     }
   })
 })
 
+
+describe('票 19：设置页上的两个精简开关与整页文案', () => {
+  it('两个开关都在页面上，默认值读得出来：总开关勾着、「按命令语义精简」不勾', async () => {
+    const { fixture, container } = await renderCard({ privacyGate: false })
+    const master = (): HTMLInputElement =>
+      container.querySelector('#plugin-config-result-clipper-condense input') as HTMLInputElement
+    const byCommand = (): HTMLInputElement | null =>
+      container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement | null
+
+    expect(master().checked).toBe(true)
+    expect(byCommand()?.checked).toBe(false)
+    // 两个开关各自带一句「按自己的需求该怎么设」。
+    expect(container.textContent).toContain(fixture.t('condenseHint'))
+    expect(container.textContent).toContain(fixture.t('condenseByCommandHint'))
+  })
+
+  it('镜像里没有这两个键时也读 host 半 schema 的默认（总开关开、按命令语义关）', async () => {
+    const { container } = await renderCard({
+      privacyGate: false,
+      condense: undefined as unknown as boolean,
+      condenseByCommand: undefined as unknown as boolean,
+    })
+    expect((container.querySelector('#plugin-config-result-clipper-condense input') as HTMLInputElement).checked).toBe(true)
+    expect((container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('两个开关都保存即生效：各点一下当场写回一个字段，不经过任何「保存」', async () => {
+    const { fixture, container } = await renderCard({ privacyGate: false })
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-condense-by-command input')!)
+    await settle()
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-condense input')!)
+    await settle()
+
+    expect(fixture.form.mutations).toEqual([
+      [{ op: 'set', path: ['condenseByCommand'], value: true }],
+      [{ op: 'set', path: ['condense'], value: false }],
+    ])
+    expect(fixture.form.value).toMatchObject({ condense: false, condenseByCommand: true })
+    // 关掉总开关后「按命令语义精简」收起：它只在总开关开着时有意义。
+    expect(container.querySelector('#plugin-config-result-clipper-condense-by-command')).toBeNull()
+
+    // 再勾回来：它跟着总开关一起回来，且读回的是已保存的取值。
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-condense input')!)
+    await settle()
+    expect((container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('Host 拒绝时该开关下面立刻出现 role="alert"，且不装作已生效', async () => {
+    const { fixture, container } = await renderCard({ privacyGate: false })
+    fixture.form.accepted = false
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-condense input')!)
+    await settle()
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(fixture.t('failedHint'))
+    expect(fixture.form.value.condense).toBe(true)
+    expect((container.querySelector('#plugin-config-result-clipper-condense input') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('整页文案里没有本插件自己的参数名与机制名（机械负向检查）', () => {
+    // 名字清单来自 host 半的 schema，不是手抄：新增一个精简字段这里自动跟上。
+    const schemaFields = Object.keys((Config as unknown as { dict: Record<string, unknown> }).dict)
+    const condenseFields = schemaFields.filter(field => field.startsWith('condense'))
+    // 阳性对照：清单确实是从 schema 上取到的（21 个精简字段），否则下面的扫描是空转的。
+    expect(condenseFields).toContain('condenseByCommand')
+    expect(condenseFields.length).toBeGreaterThanOrEqual(21)
+
+    const forbidden = [
+      ...condenseFields,
+      // 机制名、取值名与实现细节。
+      'extract', 'volatile', 'spill', 'baseURL', 'Host', '安全外壳', 'route',
+      'summary-off', 'rule-summary-off', 'condense-off', 'condense-abstained', 'condense-not-shorter',
+      'not-candidate', 'whole-result', 'exact-text', 'read-back', 'not-shorter', 'failed-window', 'passthrough',
+    ]
+    for (const [locale, dictionary] of [['zh', zh], ['en', en]] as const) {
+      for (const [key, text] of Object.entries(dictionary)) {
+        for (const name of forbidden) {
+          expect(text, `${locale}.${key} 里出现了内部名字「${name}」`).not.toContain(name)
+        }
+      }
+    }
+  })
+
+  it('页面按字段表逐一对照：读数键与控件 id 就是这一批，差一个即红', async () => {
+    const { container, face } = await renderCard({ admissionJudge: true })
+    expect(Object.keys(face.hooks).sort()).toEqual([
+      'admissionJudge', 'admissionModel', 'admissionPrompt', 'admissionProvider', 'admissionReasoningEffort',
+      'condense', 'condenseByCommand',
+      'debug', 'debugPath', 'dryRun',
+      'failurePolicy', 'maxSummarizeTokens', 'minInlineTokens', 'modelCatalog',
+      'privacyConfirmedLocal', 'privacyGate', 'privacyModel', 'privacyPrompt', 'privacyProvider',
+      'privacyReasoningEffort', 'routeModel', 'routeProvider', 'ruleSummary',
+      'summarize', 'summaryPrompt', 'summaryReasoningEffort', 'webFetchPrivacyGate',
+    ].sort())
+
+    // 控件 id 是「哪个控件绑哪个字段」的那半边：新加控件必须同时出现在这张表上。
+    const ids = new Set([...container.querySelectorAll('[id]')]
+      .map(node => node.getAttribute('id') ?? '')
+      .filter(id => id.startsWith('plugin-config-result-clipper-')))
+    expect([...ids].sort()).toEqual([
+      'plugin-config-result-clipper-summarize',
+      'plugin-config-result-clipper-rule-summary',
+      'plugin-config-result-clipper-route-provider',
+      'plugin-config-result-clipper-route-model',
+      'plugin-config-result-clipper-summary-effort',
+      'plugin-config-result-clipper-min-inline',
+      'plugin-config-result-clipper-max-summarize',
+      'plugin-config-result-clipper-summary-prompt',
+      'plugin-config-result-clipper-admission-enabled',
+      'plugin-config-result-clipper-admission-provider',
+      'plugin-config-result-clipper-admission-model',
+      'plugin-config-result-clipper-admission-effort',
+      'plugin-config-result-clipper-admission-prompt',
+      'plugin-config-result-clipper-privacy-enabled',
+      'plugin-config-result-clipper-privacy-provider',
+      'plugin-config-result-clipper-privacy-model',
+      'plugin-config-result-clipper-privacy-effort',
+      'plugin-config-result-clipper-privacy-confirmed',
+      'plugin-config-result-clipper-webfetch-gate',
+      // 分段控件的两个选项各自也带一个 id（原语自己生成的）。
+      'plugin-config-result-clipper-failure-policy',
+      'plugin-config-result-clipper-failure-policy-passthrough',
+      'plugin-config-result-clipper-failure-policy-block',
+      'plugin-config-result-clipper-privacy-prompt',
+      'plugin-config-result-clipper-debug',
+      'plugin-config-result-clipper-dry-run',
+      'plugin-config-result-clipper-debug-path',
+      'plugin-config-result-clipper-condense',
+      'plugin-config-result-clipper-condense-by-command',
+    ].sort())
+  })
+})

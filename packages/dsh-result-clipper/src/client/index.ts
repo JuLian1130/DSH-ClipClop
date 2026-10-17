@@ -1,7 +1,7 @@
 /**
  * dsh-result-clipper 的浏览器半：把本插件的全部设置注册成包详情页里的一块配置区（`plugins.bundle.config`）——
  * 三项能力（摘要、摘要准入判断、隐私闸门）的开关与它们各自的 route、推理档位、提示词与阈值，加诊断组的 debug、
- * 干跑与日志路径。
+ * 干跑与日志路径，以及工具结果精简的两个开关（总开关与「按命令语义精简」；它们的参数只在配置文件里，不上页面）。
  *
  * **设置只有一个座位**（设计文档「配置面与设置座位」）：包详情页的配置区。浏览器半另外往「设置 → 内置插件」注册
  * 一个**只做指路**的页签——它没有任何控件、也不注入业务面，只写一句「设置在哪、为什么不在这一页」。曾经那一页
@@ -93,6 +93,8 @@ interface PreferenceSection {
   summaryPrompt: string
   admissionPrompt: string
   privacyPrompt: string
+  condense: boolean
+  condenseByCommand: boolean
 }
 
 /**
@@ -159,6 +161,10 @@ export function apply(ctx: Context): void {
           debug: booleanField(form, 'debug'),
           dryRun: booleanField(form, 'dryRun'),
           debugPath: stringField(form, 'debugPath'),
+          // 工具结果精简的两个开关：都是 volatile（保存即生效）；镜像里还没有这个键时按 host 半 schema 的默认显示
+          // （总开关开、按命令语义关）。
+          condense: booleanField(form, 'condense', true),
+          condenseByCommand: booleanField(form, 'condenseByCommand'),
           modelCatalog: catalog,
         },
         saveFields: (ops: readonly ResultClipperSettingOp[]) => form.mutate(ops),
@@ -177,7 +183,8 @@ export function apply(ctx: Context): void {
  */
 function booleanField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summarize' | 'ruleSummary' | 'privacyGate' | 'webFetchPrivacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal',
+  field: 'summarize' | 'ruleSummary' | 'privacyGate' | 'webFetchPrivacyGate' | 'admissionJudge' | 'debug' | 'dryRun' | 'privacyConfirmedLocal'
+    | 'condense' | 'condenseByCommand',
   fallback = false,
 ): ObservableSnapshot<boolean> {
   return {
