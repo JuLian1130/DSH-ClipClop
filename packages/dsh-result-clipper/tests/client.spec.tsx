@@ -308,8 +308,12 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 三个能力开关都不在任何一组里：否则它们会被自己折叠起来。
     expect(groupOf(container, '摘要模型').querySelector('#plugin-config-result-clipper-summarize')).toBeNull()
     expect(groupOf(container, '隐私闸门模型').querySelector('#plugin-config-result-clipper-privacy-enabled')).toBeNull()
-    // 总开关那一行之上是一条横线，加上三组分隔线与精简开关那一行之前的一条：一共五条。
-    expect([...container.querySelectorAll('hr')]).toHaveLength(5)
+    // 位置契约：两个精简开关排在诊断分组之后（配置区末尾），子开关紧跟总开关。
+    const ordered = [...container.querySelectorAll('[id^="plugin-config-result-clipper-"]')].map(node => node.id)
+    expect(ordered.indexOf('plugin-config-result-clipper-condense'))
+      .toBeLessThan(ordered.indexOf('plugin-config-result-clipper-condense-by-command'))
+    expect(ordered.lastIndexOf('plugin-config-result-clipper-debug-path'))
+      .toBeLessThan(ordered.indexOf('plugin-config-result-clipper-condense'))
     // 每个分组都有一行「这是做什么的」。
     for (const [title, hint] of [
       ['摘要模型', 'summaryGroupHint'],
