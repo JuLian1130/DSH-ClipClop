@@ -130,6 +130,8 @@ describe('sedWindowLines · 请求的窗口行数', () => {
     expect(sedWindowLines("sed -n 's/x/y/w /tmp/out;1,200p' f")).toBeUndefined()
     // 阳性对照：`w` 之前真有窗口时照数，`w` 之后的行尾内容不再算。
     expect(sedWindowLines("sed -n '1,100p;s/x/y/w /tmp/out;1,200p' f")).toBe(100)
+    // `w` 的文件名只吃到**本行**行尾：换行之后是真窗口时照数（下一行是新命令）。
+    expect(sedWindowLines("sed -n 's/x/y/w /tmp/out\n1,200p' f")).toBe(200)
   })
 
   it('真窗口一条都不漏：真地址与替换文本 / 块 / 多脚本混在一起时照数', () => {
