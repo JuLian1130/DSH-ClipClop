@@ -17,8 +17,9 @@
  *    处理之后的那一份，不是原始投影——否则一条被 spill 压到 5 KB 的结果会被换成 40 KB 的「精简」结果，
  *    与「节省进入上下文的 token」正好相反。
  * 2. **有损替换的回退入口开销算进被比较的那一侧**（计划 §4.1 #1「先拼后比」）。入口说明的实际值写盘前取不到
- *    （`saveText` 才给出 `locator`），所以这里用它的**预留上界** {@link CondenseParams.entryReserveChars} 计价，
- *    与既有摘要路径的裁决 A 同一个办法；上界性质使「真写了入口 ⟹ 实际总长仍更短」成立。
+ *    （`saveText` 才给出 `locator`），所以本层写入口时用它的**预留上界** {@link CondenseParams.entryReserveChars}
+ *    计价，与既有摘要路径的裁决 A 同一个办法；上界性质使「真写了入口 ⟹ 实际总长仍更短」成立。正文已有上游入口
+ *    时没有新增说明文字，直接比较正文。
  * 3. **两把尺子是一把**（计划 §4.1 表后的「两把尺子必须是一把」）。尺寸下限与净收益阈值都用插件既有的
  *    `@deepseek-ai/dsh-token-meter/estimate`，不引入第二套估算口径。
  *
@@ -134,9 +135,16 @@ export type CondenseVerdict =
   | {
     readonly kind: 'condensed'
     readonly text: string
-    readonly lossy: boolean
-    /** 有损替换的入口归属；无损替换时不存在。 */
-    readonly entry?: 'own' | 'upstream'
+    readonly lossy: false
+    /** 这次真正改动了正文的规则，按施加顺序。 */
+    readonly rules: readonly CondenseRuleId[]
+  }
+  | {
+    readonly kind: 'condensed'
+    readonly text: string
+    readonly lossy: true
+    /** 有损替换的入口归属：本层写，或正文里已有上游入口。 */
+    readonly entry: 'own' | 'upstream'
     /** 这次真正改动了正文的规则，按施加顺序。 */
     readonly rules: readonly CondenseRuleId[]
   }
@@ -169,20 +177,33 @@ const ANSI = new RegExp(
 const POSITION_NOTICE_MARKER = ' stored at: '
 
 /**
+ * 正文末尾的上游位置说明（含开头的 `\n\n`）。
+ * @param text - 下游正文。
+ * @returns 末尾的说明块；没有时为 `undefined`。
+ */
+function trailingPositionNotice(text: string): string | undefined {
+  const trimmed = text.trimEnd()
+  if (!trimmed.endsWith(')')) return undefined
+  const start = trimmed.lastIndexOf('\n\n(')
+  if (start < 0) return undefined
+  const notice = trimmed.slice(start)
+  return notice.includes(POSITION_NOTICE_MARKER) ? notice : undefined
+}
+
+/**
  * 正文末尾是否已经有一条上游位置说明。
  * @param text - 下游正文。
- * @returns 末尾是 `\n\n(` 开头、含 {@link POSITION_NOTICE_MARKER} 的块时为真。
+ * @returns 末尾有 {@link trailingPositionNotice} 时为真。
  */
 function hasPositionNotice(text: string): boolean {
-  const trimmed = text.trimEnd()
-  if (!trimmed.endsWith(')')) return false
-  const start = trimmed.lastIndexOf('\n\n(')
-  if (start < 0) return false
-  return trimmed.slice(start).includes(POSITION_NOTICE_MARKER)
+  return trailingPositionNotice(text) !== undefined
 }
 
 /** bash 工具追加的截断说明；路径不是 `(unavailable)` 时它就是一条指向完整输出的上游入口。 */
 const TRUNCATED_NOTICE = /\[output truncated; full output: ([^\]]*)\]/g
+
+/** 截断说明没有可用的完整输出路径时写入的占位符。 */
+const UNAVAILABLE_PATH = '(unavailable)'
 
 /** bash 工具在非零退出时追加的尾部标记；留在 `compactDiff` 的输入里会让它把整段当成非 diff。 */
 const EXIT_MARKER = /\n\[exit code: \d+\]$/
@@ -198,13 +219,10 @@ const EXIT_MARKER = /\n\[exit code: \d+\]$/
 function splitForCompactDiff(text: string): { readonly core: string, readonly tail: string } {
   let core = text
   let tail = ''
-  const trimmed = core.trimEnd()
-  if (trimmed.endsWith(')')) {
-    const start = trimmed.lastIndexOf('\n\n(')
-    if (start >= 0 && trimmed.slice(start).includes(POSITION_NOTICE_MARKER)) {
-      tail = trimmed.slice(start)
-      core = trimmed.slice(0, start)
-    }
+  const notice = trailingPositionNotice(core)
+  if (notice !== undefined) {
+    tail = notice
+    core = core.trimEnd().slice(0, -notice.length)
   }
   const cut = core.trimEnd()
   const exit = EXIT_MARKER.exec(cut)
@@ -229,7 +247,7 @@ function splitForCompactDiff(text: string): { readonly core: string, readonly ta
 function hasUpstreamEntry(body: string, composed: string): boolean {
   if (hasPositionNotice(body) && composed.includes(POSITION_NOTICE_MARKER)) return true
   for (const match of body.matchAll(TRUNCATED_NOTICE)) {
-    if (match[1] !== '(unavailable)' && composed.includes(match[0])) return true
+    if (match[1] !== UNAVAILABLE_PATH && composed.includes(match[0])) return true
   }
   return false
 }
@@ -412,12 +430,7 @@ export function condenseText(
   if (after >= before || before - after < params.minNetGainUnits) {
     return { kind: 'not-shorter', rules: applied }
   }
+  if (!lossy) return { kind: 'condensed', text: composed, lossy: false, rules: applied }
   const entry: 'own' | 'upstream' = upstream ? 'upstream' : 'own'
-  return {
-    kind: 'condensed',
-    text: composed,
-    lossy,
-    ...lossy ? { entry } : {},
-    rules: applied,
-  }
+  return { kind: 'condensed', text: composed, lossy: true, entry, rules: applied }
 }

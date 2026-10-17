@@ -59,6 +59,13 @@ function pick(
   return selectFamily(toolName, factMap, rules)
 }
 
+/** 已发布的三族规则表：需要真实规则的用例共用这一份。 */
+const families = builtinRules({
+  gitDiff: () => GIT_DIFF_DEFAULTS,
+  sedWindow: () => SED_WINDOW_DEFAULTS,
+  rawDump: () => RAW_DUMP_DEFAULTS,
+})
+
 describe('票 16 判据 3：有序规则表与首个命中者胜', () => {
   it('两条夹具规则都能命中时，声明在前的那一条接手', () => {
     const rules = [rule('^git diff'), rule('^git')]
@@ -182,13 +189,6 @@ describe('票 16 判据 5：脚手架与管道不参与分派', () => {
 })
 
 describe('票 20 · 平台面与按族守卫', () => {
-  /** 已发布的三族规则表：截断/退出码的判据要落在真实规则上，而不是夹具上。 */
-  const families = builtinRules({
-    gitDiff: () => GIT_DIFF_DEFAULTS,
-    sedWindow: () => SED_WINDOW_DEFAULTS,
-    rawDump: () => RAW_DUMP_DEFAULTS,
-  })
-
   it('判据 13：同一条命令串在 pwsh 上不入分派、在 bash 上命中', () => {
     const rules = [rule('^git diff')]
     expect(pick('bash', facts({ command: 'git diff --stat', format: 'text' }), rules)).toBe(rules[0])
@@ -249,12 +249,6 @@ describe('票 17 判据 2/3：`match` 谓词通道', () => {
 })
 
 describe('票 17 判据 2/3：已发布的三族规则表', () => {
-  const families = builtinRules({
-    gitDiff: () => GIT_DIFF_DEFAULTS,
-    sedWindow: () => SED_WINDOW_DEFAULTS,
-    rawDump: () => RAW_DUMP_DEFAULTS,
-  })
-
   /** 一条命令串在真实规则表上落到哪一族。 */
   const familyOf = (command: string): string | undefined =>
     pick('bash', facts({ command, format: 'text', truncated: false }), families)?.family

@@ -275,8 +275,8 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 
 **票 20（守卫放宽）的验证，2026-10-17**，观察面是纯函数用例 + 插件级端到端 + 语料扫描：
 
-- **上游入口不写第二条**：301 行正文 + `(... stored at: ...)` 的 `condenseText` 返回 `condensed` / `entry: 'upstream'`，输出末尾逐字保留说明；同一输入在无 spill 后端的流水线上仍被替换（`tests/condense.spec.ts`、`tests/condense-pipeline.spec.ts`）。命令族（`rawDump`）命中带说明的正文时同样不追加本层入口，`spill.saves` 为 0（`tests/dispatch-pipeline.spec.ts`）。
+- **上游入口不写第二条**：301 行正文 + `(... stored at: ...)` 的 `condenseText` 返回 `condensed` / `entry: 'upstream'`，输出末尾逐字保留说明；同一输入在无 spill 后端的流水线上仍被替换（`tests/condense.spec.ts`、`tests/dispatch-pipeline.spec.ts`）。三族命中带说明的正文时同样不追加本层入口，`spill.saves` 为 0（`rawDump` / `sedWindow` / `compactDiff` 各一条，均在 `tests/dispatch-pipeline.spec.ts`；真实 `compactDiff` 规则的 `entry: 'upstream'` 在 `tests/condense.spec.ts`）。
 - **截断按族**：`truncated: true` 时 `compactDiff` 不接、`sedWindow` / `rawDump` 接（`tests/dispatch.spec.ts`）；带路径的截断说明当上游入口，`(unavailable)` 时写本层入口（`tests/dispatch-pipeline.spec.ts`）。
 - **退出码不再挡族**：`exitCode: 1` 时三族照常命中；合法 diff + `[exit code: 1]` 被 `compactDiff` 收窄且标记保留；不是 diff 的失败正文由 handler 放弃后落通用链（`tests/dispatch-pipeline.spec.ts`）。
 - **语料**：通用链 `condensed` 1,157（票 15 口径 1,006；+151 = 148 条位置说明守卫放行 + 3 条上游入口不预留后过线）、`abstained` 0、`not-shorter` 412，幂等违反 0；`compactDiff` / `sedWindow` / `rawDump` 的语料读数不变（语料正文没有这些尾部块，`truncated` 事实也拿不到）。
-- **门禁**：四 workspace typecheck 全过、`pnpm test` 29 文件 / 532 用例全绿。
+- **门禁**：四 workspace typecheck 全过、`pnpm test` 29 文件 / 536 用例全绿。

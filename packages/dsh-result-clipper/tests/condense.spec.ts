@@ -22,6 +22,10 @@ import {
   type CondenseRule,
 } from '../src/condense.ts'
 import { composeEntry } from '../src/entry.ts'
+import { builtinRules, condenseRuleOf } from '../src/dispatch.ts'
+import { GIT_DIFF_DEFAULTS } from '../src/gitdiff.ts'
+import { RAW_DUMP_DEFAULTS, SED_WINDOW_DEFAULTS } from '../src/glance.ts'
+import { GIT_DIFF_BODY } from './support/gitdiff.ts'
 
 /** 默认参数下的一次精简判定。 */
 const at = (over: Partial<CondenseParams> = {}): CondenseParams => ({ ...CONDENSE_DEFAULTS, ...over })
@@ -213,6 +217,7 @@ describe('票 20 · 上游入口与尾部标记', () => {
     expect(out.kind).toBe('condensed')
     if (out.kind !== 'condensed') return
     expect(out.lossy).toBe(true)
+    if (!out.lossy) return
     expect(out.entry).toBe('upstream')
     expect(out.text.endsWith(notice)).toBe(true)
     // 上游那一条已经指向完整结果：不再追加本层入口。
@@ -224,6 +229,7 @@ describe('票 20 · 上游入口与尾部标记', () => {
     expect(out.kind).toBe('condensed')
     if (out.kind !== 'condensed') return
     expect(out.lossy).toBe(true)
+    if (!out.lossy) return
     expect(out.entry).toBe('own')
   })
 
@@ -241,7 +247,7 @@ describe('票 20 · 上游入口与尾部标记', () => {
     expect(out.kind).toBe('condensed')
     if (out.kind !== 'condensed') return
     expect(out.lossy).toBe(false)
-    expect(out.entry).toBeUndefined()
+    expect('entry' in out).toBe(false)
     expect(out.text.endsWith(notice)).toBe(true)
   })
 
@@ -250,6 +256,7 @@ describe('票 20 · 上游入口与尾部标记', () => {
     const kept = condenseText('bash', withPath, at())
     expect(kept.kind).toBe('condensed')
     if (kept.kind !== 'condensed') return
+    if (!kept.lossy) return
     expect(kept.entry).toBe('upstream')
     expect(kept.text.endsWith('[output truncated; full output: /tmp/full.txt]')).toBe(true)
 
@@ -257,6 +264,7 @@ describe('票 20 · 上游入口与尾部标记', () => {
     const own = condenseText('bash', unavailable, at())
     expect(own.kind).toBe('condensed')
     if (own.kind !== 'condensed') return
+    if (!own.lossy) return
     expect(own.entry).toBe('own')
   })
 
@@ -276,7 +284,27 @@ describe('票 20 · 上游入口与尾部标记', () => {
     if (out.kind !== 'condensed') return
     expect(seen[0]).not.toContain('[exit code: 1]')
     expect(out.text.endsWith('[exit code: 1]')).toBe(true)
+    if (!out.lossy) return
     expect(out.entry).toBe('own')
+  })
+
+  it('真实 compactDiff 规则也把上游说明当入口、不写第二条', () => {
+    const rules = builtinRules({
+      gitDiff: () => GIT_DIFF_DEFAULTS,
+      sedWindow: () => SED_WINDOW_DEFAULTS,
+      rawDump: () => RAW_DUMP_DEFAULTS,
+    })
+    const diff = rules.find(rule => rule.family === 'compactDiff')
+    expect(diff).toBeDefined()
+    const body = `${GIT_DIFF_BODY}${notice}`
+    const out = condenseText('bash', body, at(), [condenseRuleOf(diff!)])
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    expect(out.lossy).toBe(true)
+    if (!out.lossy) return
+    expect(out.entry).toBe('upstream')
+    expect(out.text.endsWith(notice)).toBe(true)
+    expect(out.text).not.toContain('精简版')
   })
 
   it('规则抛异常时整体放弃、交回下游正文（不与「没变短」混同）', () => {

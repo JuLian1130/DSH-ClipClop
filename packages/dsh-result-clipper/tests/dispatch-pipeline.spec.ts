@@ -659,6 +659,38 @@ describe('票 20 · 上游入口与截断按族', () => {
     })
   })
 
+  it('sedWindow 命中带上游说明的正文时也只留上游入口', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', `${SED_WINDOW_BODY}${notice}`))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, SED_WINDOW_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toContain('…[中段省略 ')
+    expect(text).toContain(notice.trim())
+    expect(text).not.toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(0)
+    expect(readRecords(path)[0]).toMatchObject({
+      action: 'condensed',
+      condense: { family: 'sedWindow', rules: ['sedWindow'] },
+    })
+  })
+
+  it('compactDiff 命中带上游说明的正文时也只留上游入口', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', `${GIT_DIFF_BODY}${notice}`))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toMatch(AGGREGATE_LINE)
+    expect(text).toContain(notice.trim())
+    expect(text).not.toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(0)
+    expect(readRecords(path)[0]).toMatchObject({
+      action: 'condensed',
+      condense: { family: 'compactDiff', rules: ['compactDiff'] },
+    })
+  })
+
   it('截断只挡 compactDiff；rawDump 照常接手，带路径的截断说明当上游入口', async () => {
     const marker = '\n[output truncated; full output: /tmp/full.txt]'
     const { fixture, path } = await mounted({ condenseByCommand: true })
@@ -671,6 +703,20 @@ describe('票 20 · 上游入口与截断按族', () => {
     expect(text).not.toContain('精简版')
     expect(fixture.spill?.saves).toHaveLength(0)
     expect(readRecords(path)[0]).toMatchObject({ action: 'condensed', condense: { family: 'rawDump' } })
+  })
+
+  it('截断的 sedWindow 同样接手，带路径的截断说明当上游入口', async () => {
+    const marker = '\n[output truncated; full output: /tmp/full.txt]'
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', `${SED_WINDOW_BODY}${marker}`, { truncated: true }))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, SED_WINDOW_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toContain('…[中段省略 ')
+    expect(text).toContain(marker.trim())
+    expect(text).not.toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(0)
+    expect(readRecords(path)[0]).toMatchObject({ action: 'condensed', condense: { family: 'sedWindow' } })
   })
 
   it('截断说明的路径是 `(unavailable)` 时不算上游入口：照常写本层入口', async () => {
