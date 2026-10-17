@@ -14,10 +14,10 @@
  * 3. **脚手架不参与**（判据 5）：`cd X && echo "标题" && 真命令 | head` 按**首个实质命令**匹配规则；目录切换、
  *    纯变量赋值与标题回显都是脚手架，管道右侧（`| head`）也不是产出正文的命令。
  *
- * 两条**守卫**在选族之前拦下整族（判据 6、7）：输入已被工具自身截断时不接族（理由：命令族 handler 会输出
- * 跨文件聚合量，而只有尾部片段时那些是假事实）；命令以非零退出码结束时也不接族（失败的输出往往正是要精读的
- * 错误正文）。两者都只放弃**命令族那一步**，通用形状变换照常生效——所以这里的返回值是「没有族接手」，
- * 调用方落回通用链。
+ * 两条旧守卫不再拦整族（票 20）：**输入已被截断**只阻止 `compactDiff`——它的跨文件聚合量在残文上是假事实，
+ * 由规则自己的 `facts: { truncated: false }` 拒绝；`sedWindow` / `rawDump` 不输出跨文件聚合量，可以接手。
+ * **非零退出码**不再整族挡下：`git diff --exit-code` 这类合法 diff 也会返回非 0，交给各族的正文守卫判断；
+ * `exitCode` 仍进事实 map，供 debug 观察。
  *
  * @module
  */
@@ -215,10 +215,11 @@ function satisfies(facts: Facts, required: Readonly<Partial<Record<FactName, Fac
 }
 
 /**
- * 选出接手这次结果的族规则：平台面 → 两条守卫 → 正文形态 → 首个实质命令 → 规则表按序取首个命中者。
+ * 选出接手这次结果的族规则：平台面 → 正文形态 → 首个实质命令 → 规则表按序取首个命中者。
  *
  * 顺序即判据，每一步都能独立观察：平台面（判据 13）只认 `bash`，`pwsh` 上即使命令串是 unix 命令也不接族；
- * 守卫拦的是整族（判据 6、7）；正文形态不是单张文本块时没有可收窄的对象；命令事实缺失时没有可匹配的命令串。
+ * 正文形态不是单张文本块时没有可收窄的对象；命令事实缺失时没有可匹配的命令串。**输入截断不再在这里拦整族**：
+ * 需要完整输入的那一族用 `facts` 自己声明（票 20）。
  * @param toolName - 工具名。
  * @param facts - 这次结果的事实 map。
  * @param rules - 已装载的规则表（{@link compileRules} 的产物）。
@@ -232,11 +233,6 @@ export function selectFamily(
   // 平台面：命令族规则只认 unix 命令串，因而只在 `bash` 结果上求值（票 14 原型把规则注册在 ("bash","pwsh")
   // 上是测量产物，不是生产门禁）。
   if (toolName !== 'bash') return undefined
-  // 守卫一：输入已被工具自身截断——只有尾部片段时跨文件聚合量是假事实。
-  if (facts.get('truncated') === true) return undefined
-  // 守卫二：非零退出码。**事实缺失时不由它挡下**——缺失是「不知道」，与「知道它失败了」不是一回事。
-  const exitCode = facts.get('exitCode')
-  if (typeof exitCode === 'number' && exitCode !== 0) return undefined
   // 正文形态：不是恰好一张文本块时，压成一块会改变结果的形状，不在命令族的判据里。
   if (facts.get('format') !== 'text') return undefined
   // 缺失的事实永不匹配：没有命令事实就没有可匹配的命令串。
@@ -290,6 +286,9 @@ export function builtinRules(params: FamilyParams): readonly FamilyRule[] {
     {
       family: 'compactDiff',
       command: GIT_DIFF_COMMAND,
+      // 只有这一族输出跨文件聚合量（每文件 `+N -M`、文件清单）；输入已被工具自身截断时那些量是假事实。
+      // 另外两族只保留可见正文的头尾与命中行，`truncated` 不挡它们（票 20）。
+      facts: { truncated: false },
       lossy: true,
       apply: (text: string): string | undefined => compactDiff(text, params.gitDiff()),
     },

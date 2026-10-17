@@ -11,9 +11,9 @@
  * （`DSH_CONDENSE_TS_GLANCE_DUMP` 可覆盖），与 `verify_sed_dump.py` 的 `--dump` 一致。
  *
  * **这份语料缺两列事实**：会话日志的 `tool/result` 不带 `value`（`packages/core/tools/src/index.ts:575` 明写
- * 「deliberately omitted from durable events」），所以 `exitCode` 与 `stdout.truncated` 都拿不到——两条守卫在
- * 离线读数里**恒不触发**，这份读数因此**等于原型口径、不等价于生产口径**（dump 里这两个字段恒为 null 是同一
- * 事实的镜像）。
+ * 「deliberately omitted from durable events」），所以 `exitCode` 与 `stdout.truncated` 都拿不到——`compactDiff`
+ * 的截断守卫在离线读数里**恒不触发**；退出码已不再挡族（票 20），只在运行期经 `facts` 观察。这份读数因此
+ * **等于原型口径、不等价于生产口径**（dump 里这两个字段恒为 null 是同一事实的镜像）。
  *
  * 除导出外，本文件还常驻**两条判据 4 的不变量断言**（本体是这两族的收窄形态，不是实现细节）：
  *
@@ -344,9 +344,11 @@ describe.skipIf(!corpusRoot)('票 17 判据 4：两族的语料门槛导出口�
           }
 
           const replaced = verdict?.kind === 'condensed' ? verdict : undefined
+          // 上游入口已经存在时不写本层入口，预留不参与比较（票 20）。
+          const entryChars = replaced?.lossy === true && replaced.entry !== 'upstream' ? ENTRY_RESERVE : 0
           const afterUnits = replaced === undefined
             ? beforeUnits
-            : estimateUnits(replaced.text + 'x'.repeat(replaced.lossy ? ENTRY_RESERVE : 0))
+            : estimateUnits(replaced.text + 'x'.repeat(entryChars))
 
           // 常驻不变量：只对本票两族的收窄结果成立（`compactDiff` 的形态由票 16 的用例钉）。
           if (family !== null && replaced !== undefined && (GLANCE_FAMILIES as readonly string[]).includes(family)) {
@@ -362,10 +364,10 @@ describe.skipIf(!corpusRoot)('票 17 判据 4：两族的语料门槛导出口�
             outcome,
             family,
             afterUnits,
-            entryChars: replaced?.lossy === true ? ENTRY_RESERVE : 0,
+            entryChars,
             sha256: replaced === undefined ? null : createHash('sha256').update(replaced.text, 'utf8').digest('hex'),
             chars: replaced === undefined ? 0 : replaced.text.length,
-            // 语料没有这两列事实：恒 null 是「两条守卫在离线读数里不触发」的镜像。
+            // 语料没有这两列事实：恒 null 是「截断守卫在离线读数里不触发、退出码不再挡族」的镜像。
             exitCode: null,
             truncated: null,
           }))

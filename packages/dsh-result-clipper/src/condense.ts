@@ -127,11 +127,16 @@ export type CondenseVerdict =
   | { readonly kind: 'abstained' }
   /** 改了，但过不了净收益闸门：交回下游正文。`rules` 记下**命中**（改动了正文）的规则——「为什么这条大结果没变短」的答案就在这里。 */
   | { readonly kind: 'not-shorter'; readonly rules: readonly CondenseRuleId[] }
-  /** 替换：`text` 是精简后的正文，`lossy` 为真时必须写出回退入口。 */
+  /**
+   * 替换：`text` 是精简后的正文。`lossy` 为真时 `entry` 指出回退入口的归属——本层写（`own`）或正文里
+   * 已经有一条上游入口（`upstream`，不再追加第二条）。
+   */
   | {
     readonly kind: 'condensed'
     readonly text: string
     readonly lossy: boolean
+    /** 有损替换的入口归属；无损替换时不存在。 */
+    readonly entry?: 'own' | 'upstream'
     /** 这次真正改动了正文的规则，按施加顺序。 */
     readonly rules: readonly CondenseRuleId[]
   }
@@ -174,6 +179,59 @@ function hasPositionNotice(text: string): boolean {
   const start = trimmed.lastIndexOf('\n\n(')
   if (start < 0) return false
   return trimmed.slice(start).includes(POSITION_NOTICE_MARKER)
+}
+
+/** bash 工具追加的截断说明；路径不是 `(unavailable)` 时它就是一条指向完整输出的上游入口。 */
+const TRUNCATED_NOTICE = /\[output truncated; full output: ([^\]]*)\]/g
+
+/** bash 工具在非零退出时追加的尾部标记；留在 `compactDiff` 的输入里会让它把整段当成非 diff。 */
+const EXIT_MARKER = /\n\[exit code: \d+\]$/
+
+/**
+ * `compactDiff` 的输入必须是纯 diff：把末尾的上游位置说明与退出标记剥下来，变换后按原顺序回贴。
+ *
+ * 这两个块是工具 / spill 写给模型看的元数据，本身不是 diff 内容；族 handler 看见它们会整体放弃。剥下来只影响
+ * 解析，不影响模型最终看到的正文——`condenseText` 会把它们原样接回精简结果之后。
+ * @param text - 下游正文。
+ * @returns 纯 diff 的部分与要回贴的尾部块。
+ */
+function splitForCompactDiff(text: string): { readonly core: string, readonly tail: string } {
+  let core = text
+  let tail = ''
+  const trimmed = core.trimEnd()
+  if (trimmed.endsWith(')')) {
+    const start = trimmed.lastIndexOf('\n\n(')
+    if (start >= 0 && trimmed.slice(start).includes(POSITION_NOTICE_MARKER)) {
+      tail = trimmed.slice(start)
+      core = trimmed.slice(0, start)
+    }
+  }
+  const cut = core.trimEnd()
+  const exit = EXIT_MARKER.exec(cut)
+  if (exit !== null) {
+    tail = cut.slice(exit.index) + tail
+    core = cut.slice(0, exit.index)
+  }
+  return { core, tail }
+}
+
+/**
+ * 这次有损替换是否已经有一条上游入口可回退。
+ *
+ * 两条来源：正文末尾的 `(... stored at: ...)`（spill-policy / `grep` / `glob`），以及 bash 的
+ * `[output truncated; full output: <path>]`（路径不是 `(unavailable)` 时）。**还必须确认它真的留在替换结果里**：
+ * 尾部预算与 `compactDiff` 的回贴都会留住它，但如果某条规则把它裁掉了，就不能假装还有入口——那时交回 `false`，
+ * 由本层写自己的入口。
+ * @param body - 下游正文。
+ * @param composed - 精简后、已接回尾部块的正文。
+ * @returns 已有上游入口时为真。
+ */
+function hasUpstreamEntry(body: string, composed: string): boolean {
+  if (hasPositionNotice(body) && composed.includes(POSITION_NOTICE_MARKER)) return true
+  for (const match of body.matchAll(TRUNCATED_NOTICE)) {
+    if (match[1] !== '(unavailable)' && composed.includes(match[0])) return true
+  }
+  return false
 }
 
 /**
@@ -244,18 +302,16 @@ function dedupAdjacent(text: string): string {
  * 阈值而非保留量（本仓票 15 已把这条读法写死）。单行截断把标记也算进 2000 字符预算，于是产出恰好 <= 2000，
  * 第二遍不再触发；行封顶的产出是 250 行上下，同样不再触发——这条有损规则因此也是幂等的。
  *
- * **守卫**：会丢掉内容、而下游正文已经带着一条上游位置说明（spill-policy / `grep` / `glob` 写的）时放弃整层。
- * 盖掉那条说明就是盖掉指向上游**完整**输出的唯一线索，只留下本层保留片段里的副本，对模型是净损失；本层
- * 又不能在保留片段里同时留两条位置说明（票 15 的「至多一个可下钻入口」）。
+ * **上游位置说明**：它通常在正文末尾，`tailLines` 的尾部预算会把它留住；留住的那一条由 `condenseText` 识别为
+ * 上游入口，调用方不再写本层入口（票 20）。这条规则因此不再因为说明的存在而放弃。
  * @param text - 下游正文。
  * @param params - 精简参数。
- * @returns 封顶后的正文；守卫放弃时交回 `undefined`（不触发封顶时原样交回）。
+ * @returns 封顶后的正文；不触发封顶时原样交回。
  */
 function tailCap(text: string, params: CondenseParams): string | undefined {
   const lines = text.split('\n')
   const overLongLine = lines.some(line => line.length > params.maxLineChars)
   if (lines.length <= params.maxLines && !overLongLine) return text
-  if (hasPositionNotice(text)) return undefined
   let capped = lines
   let truncated = 0
   if (overLongLine) {
@@ -298,7 +354,8 @@ export function generalRules(params: CondenseParams): readonly GeneralRule[] {
  * （计划 §4.1 #2 的「拒绝 no-op」）；守卫放弃是 `abstained`；改动过不了闸门是 `not-shorter`。
  *
  * 闸门用**预留上界**代替入口说明的实际长度（写盘前取不到），所以「真写了入口 ⟹ 实际总长仍严格更短」成立：
- * 调用方只要在 `lossy` 为真时先写入口、再按写成的说明拼正文，就不会出现「先写后弃」。
+ * 调用方只要在 `lossy` 为真且 `entry === 'own'` 时先写入口、再按写成的说明拼正文，就不会出现「先写后弃」。
+ * 正文里已有上游入口时替换不会新增说明文字，闸门直接比较正文（票 20）。
  * @param toolName - 工具名；不在 {@link CONDENSE_TOOLS} 里时直接 `unchanged`。
  * @param body - **模型本来会看到的正文**（下游含 spill 处理之后的那一份）。
  * @param params - 精简参数。
@@ -318,7 +375,12 @@ export function condenseText(
   const before = estimateUnits(body)
   if (before < params.minUnits) return { kind: 'unchanged' }
 
-  let text = body
+  // `compactDiff` 的解析器要求整段都是 diff：末尾的上游位置说明与退出标记先剥下来，变换后回贴。
+  // 通用链与另外两族不需要这条——它们的头尾预算会把尾部块留住（票 20）。
+  const compactDiff = rules.length === 1 && rules[0]?.id === 'compactDiff'
+  const split = compactDiff ? splitForCompactDiff(body) : { core: body, tail: '' }
+
+  let text = split.core
   const applied: CondenseRuleId[] = []
   let lossy = false
   for (const rule of rules) {
@@ -336,14 +398,26 @@ export function condenseText(
       if (rule.lossy) lossy = true
     }
   }
-  if (text === body) return { kind: 'unchanged' }
+  if (text === split.core) return { kind: 'unchanged' }
 
-  const after = lossy ? unitsWithReserve(text, params.entryReserveChars) : estimateUnits(text)
+  const composed = text + split.tail
+  const upstream = lossy && hasUpstreamEntry(body, composed)
+  // 有上游入口时没有本层入口的开销，预留不参与比较（票 20）；否则仍用预留上界。
+  const after = lossy
+    ? upstream ? estimateUnits(composed) : unitsWithReserve(composed, params.entryReserveChars)
+    : estimateUnits(composed)
   // 两道判据，缺一不可：**不严格更短就交回下游正文**——这一条由机制本身保证，任何配置都关不掉它（计划 §4.1 #2
   // 的「不可配置关闭」指的正是它，否则把阈值配成 0 或负数就能让本层交出更长或等长的正文）；以及省幅要过阈值，
   // 那一条才是配置里的 `minNetGainUnits`。
   if (after >= before || before - after < params.minNetGainUnits) {
     return { kind: 'not-shorter', rules: applied }
   }
-  return { kind: 'condensed', text, lossy, rules: applied }
+  const entry: 'own' | 'upstream' = upstream ? 'upstream' : 'own'
+  return {
+    kind: 'condensed',
+    text: composed,
+    lossy,
+    ...lossy ? { entry } : {},
+    rules: applied,
+  }
 }

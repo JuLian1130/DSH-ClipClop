@@ -75,7 +75,7 @@ Desktop profile 由 Electron 管理时，应在该 profile 目录中使用其安
 
 ## 工具结果精简与 A/B 对照
 
-精简层是**确定性的**：不发模型请求、不改写语义，每次都能说明被删掉的是什么（[`docs/dsh-result-clipper-pipeline.md`](docs/dsh-result-clipper-pipeline.md) 是行为的权威描述）。它先跑四条通用形状变换（剥 ANSI 颜色、去 `\r`、相邻重复行去重、尾部偏置封顶）；「按命令语义精简」打开后才会按命令族分派：`git diff` 的改动视图、请求大窗口的 `sed`、整份原始转储（`cat` / `ls` / `head` / `tail` / `nl`）。所有有损的替换都会写出指向完整原文的入口。
+精简层是**确定性的**：不发模型请求、不改写语义，每次都能说明被删掉的是什么（[`docs/dsh-result-clipper-pipeline.md`](docs/dsh-result-clipper-pipeline.md) 是行为的权威描述）。它先跑四条通用形状变换（剥 ANSI 颜色、去 `\r`、相邻重复行去重、尾部偏置封顶）；「按命令语义精简」打开后才会按命令族分派：`git diff` 的改动视图、请求大窗口的 `sed`、整份原始转储（`cat` / `ls` / `head` / `tail` / `nl`）。所有有损的替换都有一条指向完整原文的入口：正文里已有上游入口（spill / `grep` / `glob` 的位置说明，或 bash 的截断说明）时保留那一条，否则本层写出自己的入口。输入被工具自身截断时，`git diff` 族不接手（避免输出假的跨文件汇总），`sed` / 转储两族照常。
 
 **设置页上只有两个开关**，都在配置区最下面：
 
@@ -134,7 +134,7 @@ Desktop profile 由 Electron 管理时，应在该 profile 目录中使用其安
 
 ### A/B 看什么
 
-debug 记录里的结果取值与 `condense` 观测就是对照的读数：命中替换记 `condensed`（观测里带命中的规则与「输入是否已被工具自身截断」），总开关关记 `condense-off`，有损替换写不出回退入口记 `condense-abstained`，过不了净收益闸门记 `condense-not-shorter`；「一处都没改动」时这一层不表态，取值由下游决定。摘要在精简之后才判：被精简过的结果不再进摘要路（隐私判断照旧跑在精简后的正文上）。
+debug 记录里的结果取值与 `condense` 观测就是对照的读数：命中替换记 `condensed`（观测里带命中的规则与「输入是否已被工具自身截断」），总开关关记 `condense-off`，有损替换且没有上游入口、本层入口又写不成记 `condense-abstained`，过不了净收益闸门记 `condense-not-shorter`；「一处都没改动」时这一层不表态，取值由下游决定。摘要在精简之后才判：被精简过的结果不再进摘要路（隐私判断照旧跑在精简后的正文上）。
 
 ## 摘要准入判断器
 

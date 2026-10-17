@@ -204,11 +204,19 @@ describe('票 15 · 尺寸下限与净收益闸门', () => {
   })
 })
 
-describe('票 15 · 忠实性守卫与平台中立', () => {
-  it('下游正文已带位置说明时不做有损封顶，整体放弃、原样交回', () => {
-    const notice = '\n\n(Full grep result stored at: /tmp/grep-results.txt. Use read with offset/limit to inspect.)'
+describe('票 20 · 上游入口与尾部标记', () => {
+  const notice = '\n\n(Full grep result stored at: /tmp/grep-results.txt. Use read with offset/limit to inspect.)'
+
+  it('下游正文已带位置说明时继续精简，并原样保留上游入口', () => {
     const body = `${block(301)}${notice}`
-    expect(condenseText('grep', body, at())).toEqual({ kind: 'abstained' })
+    const out = condenseText('grep', body, at())
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    expect(out.lossy).toBe(true)
+    expect(out.entry).toBe('upstream')
+    expect(out.text.endsWith(notice)).toBe(true)
+    // 上游那一条已经指向完整结果：不再追加本层入口。
+    expect(out.text).not.toContain('精简版')
   })
 
   it('同一份正文没有位置说明时照常精简（阳性对照）', () => {
@@ -216,16 +224,59 @@ describe('票 15 · 忠实性守卫与平台中立', () => {
     expect(out.kind).toBe('condensed')
     if (out.kind !== 'condensed') return
     expect(out.lossy).toBe(true)
+    expect(out.entry).toBe('own')
   })
 
-  it('不触发封顶时位置说明不影响无损变换（没有丢内容，也就不需要第二个入口）', () => {
-    const notice = '\n\n(Full grep result stored at: /tmp/grep-results.txt. Use read with offset/limit to inspect.)'
+  it('上游入口已经存在时不把本层入口的预留算进闸门', () => {
+    const body = `${block(301)}${notice}`
+    // 把本层入口预留抬到 1024 单位（4096 字符）：没有上游入口时过不了闸门；上游入口不算这条预留。
+    expect(condenseText('grep', body, at({ minUnits: 0, entryReserveChars: 4096 })).kind).toBe('condensed')
+    expect(condenseText('grep', block(301), at({ minUnits: 0, entryReserveChars: 4096 })))
+      .toEqual({ kind: 'not-shorter', rules: ['tail-cap'] })
+  })
+
+  it('不触发封顶时上游说明不影响无损变换（没有丢内容，也就不需要入口）', () => {
     const body = `${ansiBlock(20, 30)}${notice}`
     const out = condenseText('grep', body, at())
     expect(out.kind).toBe('condensed')
     if (out.kind !== 'condensed') return
     expect(out.lossy).toBe(false)
+    expect(out.entry).toBeUndefined()
     expect(out.text.endsWith(notice)).toBe(true)
+  })
+
+  it('带路径的截断说明视为上游入口；`(unavailable)` 不算', () => {
+    const withPath = `${block(301)}\n[output truncated; full output: /tmp/full.txt]`
+    const kept = condenseText('bash', withPath, at())
+    expect(kept.kind).toBe('condensed')
+    if (kept.kind !== 'condensed') return
+    expect(kept.entry).toBe('upstream')
+    expect(kept.text.endsWith('[output truncated; full output: /tmp/full.txt]')).toBe(true)
+
+    const unavailable = `${block(301)}\n[output truncated; full output: (unavailable)]`
+    const own = condenseText('bash', unavailable, at())
+    expect(own.kind).toBe('condensed')
+    if (own.kind !== 'condensed') return
+    expect(own.entry).toBe('own')
+  })
+
+  it('compactDiff 先剥下退出标记、替换后原样回贴', () => {
+    const seen: string[] = []
+    const rule: CondenseRule = {
+      id: 'compactDiff',
+      lossy: true,
+      apply: (text: string): string => {
+        seen.push(text)
+        return `${text.split('\n').slice(0, 50).join('\n')}\n…[族收窄]`
+      },
+    }
+    const body = `${block(301)}\n[exit code: 1]`
+    const out = condenseText('bash', body, at(), [rule])
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    expect(seen[0]).not.toContain('[exit code: 1]')
+    expect(out.text.endsWith('[exit code: 1]')).toBe(true)
+    expect(out.entry).toBe('own')
   })
 
   it('规则抛异常时整体放弃、交回下游正文（不与「没变短」混同）', () => {

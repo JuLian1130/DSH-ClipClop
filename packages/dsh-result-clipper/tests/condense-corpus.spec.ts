@@ -193,7 +193,7 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
           const verdict = condenseText(name, text, CONDENSE_DEFAULTS)
           tally.verdicts[verdict.kind]++
           if (verdict.kind !== 'condensed') return
-          const after = verdict.lossy
+          const after = verdict.lossy && verdict.entry !== 'upstream'
             ? units(verdict.text + 'x'.repeat(CONDENSE_DEFAULTS.entryReserveChars))
             : units(verdict.text)
           dumpLine(JSON.stringify({

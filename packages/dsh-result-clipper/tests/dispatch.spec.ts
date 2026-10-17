@@ -181,22 +181,41 @@ describe('票 16 判据 5：脚手架与管道不参与分派', () => {
   })
 })
 
-describe('票 16 判据 13/7/6：平台面与两条守卫', () => {
+describe('票 20 · 平台面与按族守卫', () => {
+  /** 已发布的三族规则表：截断/退出码的判据要落在真实规则上，而不是夹具上。 */
+  const families = builtinRules({
+    gitDiff: () => GIT_DIFF_DEFAULTS,
+    sedWindow: () => SED_WINDOW_DEFAULTS,
+    rawDump: () => RAW_DUMP_DEFAULTS,
+  })
+
   it('判据 13：同一条命令串在 pwsh 上不入分派、在 bash 上命中', () => {
     const rules = [rule('^git diff')]
     expect(pick('bash', facts({ command: 'git diff --stat', format: 'text' }), rules)).toBe(rules[0])
     expect(pick('pwsh', facts({ command: 'git diff --stat', format: 'text' }), rules)).toBeUndefined()
   })
 
-  it('判据 7：输入已被工具自身截断时不接族', () => {
-    const rules = [rule('^git diff')]
-    expect(pick('bash', facts({ command: 'git diff', format: 'text', truncated: true }), rules)).toBeUndefined()
+  it('截断只挡 compactDiff（跨文件聚合量），sed 大窗口与原始转储照常接', () => {
+    expect(pick('bash', facts({ command: 'git diff HEAD', format: 'text', truncated: true }), families))
+      .toBeUndefined()
+    expect(pick('bash', facts({ command: "sed -n '1,101p' f", format: 'text', truncated: true }), families)?.family)
+      .toBe('sedWindow')
+    expect(pick('bash', facts({ command: 'cat big', format: 'text', truncated: true }), families)?.family)
+      .toBe('rawDump')
+    // 阴性对照：完整输入上 compactDiff 照常接。
+    expect(pick('bash', facts({ command: 'git diff HEAD', format: 'text', truncated: false }), families)?.family)
+      .toBe('compactDiff')
+  })
+
+  it('规则要求的事实在场才命中：truncated:false 缺失时不匹配（判据 2 仍成立）', () => {
+    const rules = [rule('^git diff', { facts: { truncated: false } })]
+    expect(pick('bash', facts({ command: 'git diff', format: 'text' }), rules)).toBeUndefined()
     expect(pick('bash', facts({ command: 'git diff', format: 'text', truncated: false }), rules)).toBe(rules[0])
   })
 
-  it('判据 6：非零退出码不接族；缺失退出码事实时不由它挡下', () => {
+  it('非零退出码不再整族挡下；缺失退出码事实同样不挡', () => {
     const rules = [rule('^git diff')]
-    expect(pick('bash', facts({ command: 'git diff', format: 'text', exitCode: 1 }), rules)).toBeUndefined()
+    expect(pick('bash', facts({ command: 'git diff', format: 'text', exitCode: 1 }), rules)).toBe(rules[0])
     expect(pick('bash', facts({ command: 'git diff', format: 'text', exitCode: 0 }), rules)).toBe(rules[0])
     expect(pick('bash', facts({ command: 'git diff', format: 'text' }), rules)).toBe(rules[0])
   })
@@ -238,7 +257,7 @@ describe('票 17 判据 2/3：已发布的三族规则表', () => {
 
   /** 一条命令串在真实规则表上落到哪一族。 */
   const familyOf = (command: string): string | undefined =>
-    pick('bash', facts({ command, format: 'text' }), families)?.family
+    pick('bash', facts({ command, format: 'text', truncated: false }), families)?.family
 
   it('规则顺序是 compactDiff → sedWindow → rawDump', () => {
     expect(families.map(family => family.family)).toEqual(['compactDiff', 'sedWindow', 'rawDump'])

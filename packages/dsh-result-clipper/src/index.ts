@@ -411,14 +411,17 @@ async function process(
           condenseReason = 'condense-not-shorter'
           condense = { ...condense, rules: verdict.rules }
         } else if (verdict.kind === 'condensed') {
-          // 有损替换必须先把**替换前**的完整正文写进回退入口（计划 §4.1 #3）。写不成（没有存储后端、写入抛错、
-          // 没有会话归属）一律交回下游正文，且不留下入口（计划 §7.4 第 1 条）。干跑不写盘，只预报配置层面的
-          // 那一半：没有存储后端时真实运行同样写不成入口。
-          const store = verdict.lossy ? ctx.get('spillStore') : undefined
+          // 有损替换必须有一条可回退的入口：本层写，或正文里已经有一条上游入口（票 20）。上游那条指向完整
+          // 输出，比本层指向下游正文的入口更好；两条入口会让模型面对互相竞争的说明（规格故事 69）。所以
+          // `entry === 'upstream'` 时既不写盘、也不要求 spill 后端存在。写不成（没有存储后端、写入抛错、没有
+          // 会话归属）一律交回下游正文，且不留下入口（计划 §7.4 第 1 条）。干跑不写盘，只预报配置层面的那一半：
+          // 没有存储后端时真实运行同样写不成入口。
+          const needsOwnEntry = verdict.lossy && verdict.entry !== 'upstream'
+          const store = needsOwnEntry ? ctx.get('spillStore') : undefined
           const written = store === undefined || dryRun
             ? undefined
             : await writeEntry(store, exec, exec.name, body, 'condense').catch((): undefined => undefined)
-          if (verdict.lossy && (store === undefined || (!dryRun && written === undefined))) {
+          if (needsOwnEntry && (store === undefined || (!dryRun && written === undefined))) {
             // 观测字段保持上面那份（本次没有正文被替换，`rules` 就是空的）。
             condenseReason = 'condense-abstained'
           } else {

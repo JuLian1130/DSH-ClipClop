@@ -73,10 +73,10 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | 2 | 总开关 `condense` 关着 | `condense-off` | 正文逐字未变 |
 | 3 | 估算大小 < 尺寸下限（128 单位） | 不表态 | 「低于下限的调用一个都不触发」；也不写回退入口 |
 | 4 | 四条规则一处都没改动（`unchanged`） | 不表态 | `not-shorter` 只留给「改了但过不了闸门」 |
-| 5 | 忠实性守卫放弃（规则抛异常；或有损封顶会盖掉下游已有的位置说明） | `condense-abstained` | 原样交回下游正文，**不与 `failed` 混同** |
-| 6 | 改了，但省的不到净收益阈值（24 单位，有损时含回退入口预留 256 字符） | `condense-not-shorter` | 交回下游正文 |
+| 5 | 忠实性守卫放弃（规则抛异常；族 handler 判定正文形态不满足；有损换本层入口写不成） | `condense-abstained` | 原样交回下游正文，**不与 `failed` 混同**；正文已有上游入口时不再整层放弃（票 20） |
+| 6 | 改了，但省的不到净收益阈值（24 单位；有损且要写本层入口时含预留 256 字符） | `condense-not-shorter` | 交回下游正文；上游入口已存在时不加这条预留 |
 | 7 | 改了且过了闸门，**无损** | `condensed` | 正文换成精简结果；**不写存储、不写入口** |
-| 8 | 改了且过了闸门，**有损** | `condensed` | 先把替换前的完整正文写进 spill（`kind: 'condense'` 的入口说明）；**写不成 → 回第 5 行**（`condense-abstained`，不留入口） |
+| 8 | 改了且过了闸门，**有损** | `condensed` | 本层写入口时先把替换前的完整正文写进 spill（`kind: 'condense'`）；**写不成 → 回第 5 行**。正文已有上游入口时保留它、不写第二条 |
 
 命中第 7、8 行之后**跳过整条摘要路**（规格「工具结果精简的共存」用户故事 62）：不再判候选、不查 memo、不发准入
 与摘要请求；隐私路照跑（它是闸门不是摘要能力），判 `sensitive`/`block` 策略失效时仍然是 `rejected`。
@@ -205,9 +205,9 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 
 | 取值 | 含义 | 必要条件 |
 | --- | --- | --- |
-| `condensed` | 正文已替换成**精简结果**（有损时带入口说明）；精简过的结果不再进摘要路 | 精简工具 + 过了尺寸下限与净收益闸门（§1.0.1 第 7、8 行） |
+| `condensed` | 正文已替换成**精简结果**（有损时带入口说明，或保留上游已有的入口）；精简过的结果不再进摘要路 | 精简工具 + 过了尺寸下限与净收益闸门（§1.0.1 第 7、8 行） |
 | `condense-off` | 精简总开关关着 | 精简工具 |
-| `condense-abstained` | 忠实性守卫放弃（规则抛异常 / 有损封顶会盖掉下游已有的位置说明 / 有损入口写不成） | 精简工具 |
+| `condense-abstained` | 忠实性守卫放弃（规则抛异常 / 族 handler 形态守卫放弃 / 有损入口写不成） | 精简工具 |
 | `condense-not-shorter` | 改了，但省的不到净收益阈值 | 精简工具 |
 | `summarized` | 正文已替换成「摘要 + 入口说明」 | 见 §2.1 |
 | `rejected` | 已拦截（原生 `block` + 固定文案） | 隐私路：`sensitive`，或策略 `block` 下的失效 |
@@ -315,19 +315,23 @@ id（按施加顺序，`unchanged` 时为空数组），`truncated` 是**输入�
 （摘要路已经不跑了）。这是「精简过的结果不再摘要」的**有意推论**：精简已经把它压到不值得再发一次模型请求的
 程度；模型真要那份原文，出口是声明整份（`WHOLE_RESULT`）或按入口读回，不是要求摘要。
 
-### 4.11 至多一个可下钻入口（票 15）
+### 4.11 至多一个可下钻入口（票 15，票 20 放宽）
 
 一条结果里只该有一个指向完整正文的位置说明，否则模型要在两个互相竞争的位置之间选。上游可能已经放了一个：
 spill-policy 写 `Full formatted result stored at: …`、native `grep` 写 `Full grep result stored at: …`、
 native `glob` 写 `Full sorted result stored at: …`（三者共用 ` stored at: ` 这一段，都收在正文末尾的
-`\n\n(...)` 块里）。
+`\n\n(...)` 块里）；bash 自己还会写 `[output truncated; full output: <path>]`。
 
-- **无损精简**（剥 ANSI / 去 `\r` / 游程去重）：不写入口，正文里的那份说明原样留着 → 仍然只有一个。
-- **有损封顶会盖掉它**：那种情况下本层**放弃**（`condense-abstained`），不写自己的入口。理由是不对称的：上游那条
-  说明指向**完整**输出，本层的入口只指向被保留的头尾片段，盖掉它等于让模型失去取回全文的唯一线索。
+- **无损精简**（剥 ANSI / 去 `\r` / 游程去重）：不写入口，正文里的说明原样留着 → 仍然只有一个。
+- **有损精简**：先看正文里是否已有上游入口（位置说明，或路径不是 `(unavailable)` 的截断说明）。有就保留它、
+  **不写本层入口**（也不再要求 spill 后端存在）；没有才写本层的入口。上游那条指向**完整**输出，比本层指向
+  保留片段的入口更好；两条入口会让模型面对互相竞争的说明（票 20 起不再因此整层放弃）。
+- **`compactDiff` 的解析例外**：它的输入必须是纯 diff，所以末尾的位置说明与 `[exit code: N]` 先剥下、替换后
+  原样回贴（票 20）；其余规则不需要剥——尾部预算会留住这些块。
 
-这条识别依赖上游三处写入点的文案约定（DSH `>= 0.2.0-rc.2` 的三处），**是假设不是契约**：上游改文案时这里会漏认，
-后果是本来该放弃的那次封顶照做、正文里可能出现两处位置说明。失效方向已记在 `src/condense.ts` 的常量注释里。
+识别依赖上游文案约定（spill 三处 + bash 截断/退出标记），**是假设不是契约**：上游改文案时这里会漏认，后果是
+本层可能追加第二条入口（位置说明漏认）或把 `(unavailable)` 当可用入口（截断说明漏认）。失效方向已记在
+`src/condense.ts` 的常量注释里。
 
 ## 5. 改这里的表要同步什么
 
@@ -338,7 +342,7 @@ native `glob` 写 `Full sorted result stored at: …`（三者共用 ` stored at
 | 输出预算 / 上限 / 抢救与截断的边界 | `src/summary.ts`（`summarizeBudget` / `SUMMARY_CEILING_TOKENS` / `salvageSummary`）、设计文档「长度约束」与「摘要」、本文 §4.8 |
 | `extract` 的必填性、哨兵与跳过写法 | `src/extract.ts`（`EXTRACT_DESCRIPTION` / 三段说明 / `isWholeResult`）、`src/privacy.ts`（`ReminderReason`）、本文 §4.9 |
 | 开关语义 | `src/config.ts`、`src/client/card.tsx` 与 `src/client/locales.ts`（中英）、README 的配置一节 |
-| 精简的规则、参数、判定顺序与闸门口径 | `packages/dsh-result-clipper/src/condense.ts`（规则表、尺寸下限、净收益阈值、封顶参数、位置说明守卫）、`docs/dsh-result-clipper-design.md`「工具结果精简」、本文 §1.0.1 与 §3 |
+| 精简的规则、参数、判定顺序与闸门口径 | `packages/dsh-result-clipper/src/condense.ts`（规则表、尺寸下限、净收益阈值、封顶参数、上游入口识别与尾部标记回贴）、`docs/dsh-result-clipper-design.md`「工具结果精简」、本文 §1.0.1 与 §3 |
 | 精简的工具集或回退入口文案 | `src/condense.ts`（`CONDENSE_TOOLS`）、`src/entry.ts`（`composeEntry` 的 `condense` 措辞）、本文 §0 与 §4.11 |
 | 提示词契约（外壳、schema、动作集合） | `src/summary.ts` / `src/privacy.ts` / `src/extract.ts`、本文 §4.3 |
 

@@ -10,9 +10,9 @@
  * `/tmp/dsh-condense`；那里没有语料才整文件跳过。
  *
  * **这份语料缺两列事实**：会话日志的 `tool/result` 不带 `value`（`packages/core/tools/src/index.ts:575` 明写
- * 「deliberately omitted from durable events」），所以 `exitCode` 与 `stdout.truncated` 都拿不到——两条守卫在
- * 离线读数里**恒不触发**，这份读数因此**等于原型口径、不等价于生产口径**（dump 里这两个字段恒为 null 是同一
- * 事实的镜像，`facts` 里也照实缺这两项）。
+ * 「deliberately omitted from durable events」），所以 `exitCode` 与 `stdout.truncated` 都拿不到——`compactDiff`
+ * 的截断守卫在离线读数里**恒不触发**；退出码已不再挡族（票 20），只在运行期经 `facts` 观察。这份读数因此
+ * **等于原型口径、不等价于生产口径**（dump 里这两个字段恒为 null 是同一事实的镜像，`facts` 里也照实缺这两项）。
  *
  * 除导出外，本文件还常驻一条**判据 8 的不变量断言**：族收窄后正文里每个文件的 `  +N -M`，必须等于该文件在输入里
  * 真实的增删行数（含被明细封顶与整体截断略过的那些），且明细里出现的每一行都逐字来自输入。期望值由本文件
@@ -224,9 +224,11 @@ describe.skipIf(!corpusRoot)('票 16 判据 8/12：真实语料上的「计数�
           }
 
           const replaced = verdict?.kind === 'condensed' ? verdict : undefined
+          // 上游入口已经存在时不写本层入口，预留不参与比较（票 20）。
+          const entryChars = replaced?.lossy === true && replaced.entry !== 'upstream' ? ENTRY_RESERVE : 0
           const afterUnits = replaced === undefined
             ? beforeUnits
-            : estimateUnits(replaced.text + 'x'.repeat(replaced.lossy ? ENTRY_RESERVE : 0))
+            : estimateUnits(replaced.text + 'x'.repeat(entryChars))
 
           // 判据 8 的常驻不变量：聚合量必须等于该文件真实的增删行数，明细必须是输入里的原行。
           if (family !== null && replaced !== undefined) {
@@ -264,10 +266,10 @@ describe.skipIf(!corpusRoot)('票 16 判据 8/12：真实语料上的「计数�
             outcome,
             family,
             afterUnits,
-            entryChars: replaced?.lossy === true ? ENTRY_RESERVE : 0,
+            entryChars,
             sha256: replaced === undefined ? null : createHash('sha256').update(replaced.text, 'utf8').digest('hex'),
             chars: replaced === undefined ? 0 : replaced.text.length,
-            // 语料没有这两列事实：恒 null 是「两条守卫在离线读数里不触发」的镜像。
+            // 语料没有这两列事实：恒 null 是「截断守卫在离线读数里不触发、退出码不再挡族」的镜像。
             exitCode: null,
             truncated: null,
           }))

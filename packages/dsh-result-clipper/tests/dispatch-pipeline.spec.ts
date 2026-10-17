@@ -55,7 +55,7 @@ const TINY_SAVING_DIFF = [
  */
 const NOT_A_DIFF_BODY = Array.from({ length: 320 }, (_, index) => `line ${index}`).join('\n')
 
-/** 同上，但末尾带一条上游位置说明：通用链的尾部封顶在已有位置说明时同样守卫放弃（`abstained`）。 */
+/** 同上，但末尾带一条上游位置说明：族放弃后通用链接手，说明保留、不再写本层入口（票 20）。 */
 const NOT_A_DIFF_WITH_NOTICE = `${NOT_A_DIFF_BODY}\n\n(original result stored at: /tmp/entry.txt)`
 
 /**
@@ -293,7 +293,7 @@ describe('票 16 判据 13：命令族只在 bash 结果上求值', () => {
   })
 })
 
-describe('票 16 判据 6：非零退出码只放弃命令族那一步', () => {
+describe('票 20 · 非零退出码不再整族挡下', () => {
   it('成功时被这一族接手', async () => {
     const { fixture, path } = await mounted({ condenseByCommand: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { exitCode: 0 }))
@@ -303,15 +303,13 @@ describe('票 16 判据 6：非零退出码只放弃命令族那一步', () => {
     expect(observation(path)).toMatchObject({ family: 'compactDiff' })
   })
 
-  it('非零退出码时不接族，但通用链照常收窄（阳性对照二）', async () => {
+  it('非零退出码时同样被这一族接手', async () => {
     const { fixture, path } = await mounted({ condenseByCommand: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { exitCode: 1 }))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
-    expect(text).not.toMatch(AGGREGATE_LINE)
-    expect(text).toContain('…[省略')
-    expect(observation(path)).not.toHaveProperty('family')
-    expect(observation(path)).toMatchObject({ rules: ['tail-cap'] })
+    expect(text).toMatch(AGGREGATE_LINE)
+    expect(observation(path)).toMatchObject({ family: 'compactDiff', rules: ['compactDiff'] })
   })
 
   it('缺失退出码事实时不由它挡下（缺失不是「失败」）', async () => {
@@ -398,16 +396,20 @@ describe('票 16 判据 10：四个去向逐个从外部观察', () => {
     })
   })
 
-  it('族守卫放弃、通用链也守卫放弃时，取值记 condense-abstained 而不是失败', async () => {
+  it('族守卫放弃后落通用链：上游入口保留，不再追加本层入口（票 20）', async () => {
     const { fixture, path } = await mounted({ condenseByCommand: true })
     fixture.ctx.tools.register(commandTool('bash', NOT_A_DIFF_WITH_NOTICE))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
+    const text = textOf(result.content)
 
-    expect(textOf(result.content)).toBe(NOT_A_DIFF_WITH_NOTICE)
+    expect(text).not.toBe(NOT_A_DIFF_WITH_NOTICE)
+    expect(text).toContain('…[省略')
+    expect(text).toContain('(original result stored at: /tmp/entry.txt)')
+    expect(text).not.toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(0)
     expect(readRecords(path)[0]).toMatchObject({
-      action: 'unmodified',
-      reason: 'condense-abstained',
-      condense: { rules: [], family: 'compactDiff' },
+      action: 'condensed',
+      condense: { rules: ['tail-cap'], family: 'compactDiff' },
     })
   })
 })
@@ -578,17 +580,120 @@ describe('票 17 判据 5：两族的替换都先把完整正文写进回退入�
   })
 })
 
-describe('票 17 判据 6：非零退出码时两族都不接，通用链照常收窄', () => {
-  it('退出码 0 时两族各自接手；退出码 1 时不接族、正文落通用链', async () => {
+describe('票 20 · 非零退出码不再整族挡下，内容守卫照常判断', () => {
+  it('退出码 1 时两族照常接；合法 diff + `[exit code: 1]` 被 compactDiff 收窄且标记保留', async () => {
     for (const one of GLANCE_CASES) {
       const ok = await run({ condenseByCommand: true }, one.body, one.command, { exitCode: 0 })
       expect(ok.condense).toMatchObject({ family: one.family })
 
       const failed = await run({ condenseByCommand: true }, one.body, one.command, { exitCode: 1 })
-      expect(failed.condense).not.toHaveProperty('family')
-      expect(failed.text).not.toContain('…[中段省略 ')
-      expect(failed.record).toMatchObject({ action: 'condensed', condense: { rules: ['tail-cap'] } })
+      expect(failed.condense).toMatchObject({ family: one.family })
+      expect(failed.text).toContain('…[中段省略 ')
     }
+
+    // `git diff --exit-code` 的形态：合法 diff + 尾部退出标记；标记不能阻止解析，也不能被吞掉。
+    const diff = await run(
+      { condenseByCommand: true },
+      `${GIT_DIFF_BODY}\n[exit code: 1]`,
+      GIT_DIFF_ARGS.command,
+      { exitCode: 1 },
+    )
+    expect(diff.condense).toMatchObject({ family: 'compactDiff', rules: ['compactDiff'] })
+    expect(diff.text).toMatch(AGGREGATE_LINE)
+    expect(diff.text).toContain('[exit code: 1]')
+  })
+
+  it('失败的正文不是 diff 时由 handler 放弃、落通用链；错误正文不被退出码整族跳过', async () => {
+    const failed = await run(
+      { condenseByCommand: true },
+      `${NOT_A_DIFF_BODY}\n[exit code: 1]`,
+      GIT_DIFF_ARGS.command,
+      { exitCode: 1 },
+    )
+    expect(failed.condense).toMatchObject({ family: 'compactDiff', rules: ['tail-cap'] })
+    expect(failed.text).toContain('…[省略')
+    expect(failed.text).toContain('[exit code: 1]')
+  })
+})
+
+describe('票 20 · 上游入口与截断按族', () => {
+  const notice = '\n\n(original result stored at: /tmp/entry.txt)'
+
+  it('通用链在上游入口存在时继续收窄，说明保留、不写本层入口', async () => {
+    const { fixture, path } = await mounted()
+    fixture.ctx.tools.register(commandTool('bash', NOT_A_DIFF_WITH_NOTICE))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toContain('…[省略')
+    expect(text).toContain(notice.trim())
+    expect(text).not.toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(0)
+    expect(readRecords(path)[0]).toMatchObject({ action: 'condensed', condense: { rules: ['tail-cap'] } })
+  })
+
+  it('没有 spill 后端时，上游入口本身就够：替换照做、不记放弃', async () => {
+    const { fixture, path } = await mounted({}, null)
+    fixture.ctx.tools.register(commandTool('bash', NOT_A_DIFF_WITH_NOTICE))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toContain('…[省略')
+    expect(text).toContain(notice.trim())
+    expect(readRecords(path)[0]).toMatchObject({ action: 'condensed', condense: { rules: ['tail-cap'] } })
+  })
+
+  it('命令族也不再追加第二条入口：rawDump 命中带上游说明的正文', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', `${RAW_DUMP_BODY}${notice}`))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, RAW_DUMP_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toContain('…[中段省略 ')
+    expect(text).toContain(notice.trim())
+    expect(text).not.toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(0)
+    expect(readRecords(path)[0]).toMatchObject({
+      action: 'condensed',
+      condense: { family: 'rawDump', rules: ['rawDump'] },
+    })
+  })
+
+  it('截断只挡 compactDiff；rawDump 照常接手，带路径的截断说明当上游入口', async () => {
+    const marker = '\n[output truncated; full output: /tmp/full.txt]'
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', `${RAW_DUMP_BODY}${marker}`, { truncated: true }))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, RAW_DUMP_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toContain('…[中段省略 ')
+    expect(text).toContain(marker.trim())
+    expect(text).not.toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(0)
+    expect(readRecords(path)[0]).toMatchObject({ action: 'condensed', condense: { family: 'rawDump' } })
+  })
+
+  it('截断说明的路径是 `(unavailable)` 时不算上游入口：照常写本层入口', async () => {
+    const marker = '\n[output truncated; full output: (unavailable)]'
+    const { fixture } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', `${RAW_DUMP_BODY}${marker}`, { truncated: true }))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, RAW_DUMP_ARGS))
+    const text = textOf(result.content)
+
+    expect(text).toContain('…[中段省略 ')
+    expect(text).toContain(marker.trim())
+    expect(text).toContain('精简版')
+    expect(fixture.spill?.saves).toHaveLength(1)
+  })
+
+  it('截断的 diff 不让 compactDiff 接族，落通用链', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { truncated: true }))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
+
+    expect(textOf(result.content)).toContain('…[省略')
+    expect(readRecords(path)[0]).toMatchObject({ action: 'condensed', condense: { rules: ['tail-cap'] } })
+    expect(readRecords(path)[0]!.condense).not.toHaveProperty('family')
   })
 })
 
