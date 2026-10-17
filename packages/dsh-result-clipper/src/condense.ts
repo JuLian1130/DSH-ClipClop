@@ -33,6 +33,11 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { estimateContent } from '@deepseek-ai/dsh-token-meter/estimate'
 import type { CommandFamilyId } from './dispatch.ts'
 import { ENTRY_RESERVE } from './entry.ts'
+import {
+  isUpstreamNoticeLine,
+  TRUNCATED_NOTICE,
+  UNAVAILABLE_PATH,
+} from './notice.ts'
 
 /**
  * 精简层作用的工具：两个 shell（`bash`、Windows 上是 `pwsh`）与 native `grep`。
@@ -166,17 +171,6 @@ const ANSI = new RegExp(
 )
 
 /**
- * 上游位置说明的识别串：spill-policy 写 `Full formatted result stored at: `、native `grep` 写
- * `Full grep result stored at: `、native `glob` 写 `Full sorted result stored at: `——三者共用 ` stored at: `
- * 这一段，都收在正文末尾的 `\n\n(...)` 块里。
- *
- * **这是一条外部约定假设**（DSH `>= 0.2.0-rc.2` 的三处写入点），不是本插件与它们之间的契约：它们改文案时这里
- * 会漏认，后果是本层追加第二条入口、模型面对两条互相竞争的说明。认到的收益是硬的：上游那条指向**完整输出**，
- * 本层只指向被保留的片段，能复用它就不该再写一条。
- */
-const POSITION_NOTICE_MARKER = ' stored at: '
-
-/**
  * 正文末尾的上游位置说明（含开头的 `\n\n`）。
  * @param text - 下游正文。
  * @returns 末尾的说明块；没有时为 `undefined`。
@@ -187,14 +181,8 @@ function trailingPositionNotice(text: string): string | undefined {
   const start = trimmed.lastIndexOf('\n\n(')
   if (start < 0) return undefined
   const notice = trimmed.slice(start)
-  return notice.includes(POSITION_NOTICE_MARKER) ? notice : undefined
+  return isUpstreamNoticeLine(notice.slice(2)) ? notice : undefined
 }
-
-/** bash 工具追加的截断说明；路径不是 `(unavailable)` 时它就是一条指向完整输出的上游入口。 */
-const TRUNCATED_NOTICE = /\[output truncated; full output: ([^\]]*)\]/g
-
-/** 截断说明没有可用的完整输出路径时写入的占位符。 */
-const UNAVAILABLE_PATH = '(unavailable)'
 
 /** bash 工具在非零退出时追加的尾部标记；留在 `compactDiff` 的输入里会让它把整段当成非 diff。 */
 const EXIT_MARKER = /\n\[exit code: \d+\]$/
@@ -305,19 +293,6 @@ function dedupAdjacent(text: string): string {
 }
 
 /**
- * 这行是不是指向完整输出的尾部元数据（位置说明或截断说明）。
- *
- * 它不参与单行截断：按 `maxLineChars` 截掉路径等于把唯一可回退的入口弄坏（票 20 复审）。不能假设它一定在最后
- * 一行——bash 的 `[exit code: N]` / 超时 / 信号标记可能跟在截断说明之后（上游 `renderResult` 把退出标记放在最后）。
- * @param line - 正文的一行。
- * @returns 是元数据行时为真。
- */
-function isMetadataLine(line: string): boolean {
-  return (line.startsWith('(') && line.includes(POSITION_NOTICE_MARKER))
-    || line.match(TRUNCATED_NOTICE) !== null
-}
-
-/**
  * 尾部偏置封顶：先截超长单行，再在超过 {@link CondenseParams.maxLines} 行时保留头
  * {@link CondenseParams.headLines} + 尾 {@link CondenseParams.tailLines}，中间换成一行省略标记。
  *
@@ -340,7 +315,7 @@ function tailCap(text: string, params: CondenseParams): string | undefined {
   let truncated = 0
   if (overLongLine) {
     capped = capped.map((line) => {
-      if (line.length <= params.maxLineChars || isMetadataLine(line)) return line
+      if (line.length <= params.maxLineChars || isUpstreamNoticeLine(line)) return line
       const mark = `…[单行截断 +${line.length - params.maxLineChars}]`
       truncated++
       return line.slice(0, params.maxLineChars - mark.length) + mark

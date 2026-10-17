@@ -332,7 +332,7 @@ native `glob` 写 `Full sorted result stored at: …`（三者共用 ` stored at
 
 识别依赖上游文案约定（spill 三处 + bash 截断/退出标记），**是假设不是契约**：上游改文案时这里会漏认，后果是
 本层可能追加第二条入口（位置说明漏认）或把 `(unavailable)` 当可用入口（截断说明漏认）。失效方向已记在
-`src/condense.ts` 的常量注释里。
+`src/notice.ts` 的常量注释里（退出标记仍在 `src/condense.ts`）。
 
 ## 5. 改这里的表要同步什么
 

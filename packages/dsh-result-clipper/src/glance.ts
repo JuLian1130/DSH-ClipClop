@@ -2,7 +2,8 @@
  * 两族「glance 兜底」handler：`sed` 大窗口（`sedWindow`）与原始转储（`rawDump`）。
  *
  * 形态与参数照票 14 的测量原型 `docs/dsh-condense-measure/transforms_sed_dump.py`（省幅读数就是它测出来的，所以
- * 形状不自创）：`_keep_head_tail` 的头尾预算 + 中段省略标记 + 2000 字符单行封顶；转储族另加最多 `hits` 条
+ * 形状不自创）：`_keep_head_tail` 的头尾预算 + 中段省略标记 + 2000 字符单行封顶（上游说明行不封，票 20 复审）；
+ * 转储族另加最多 `hits` 条
  * 「有意思的行」。默认值即票 14 实测的那一档（设计文档「票 17 再加两族」）；换一档，门槛读数就不可比。
  *
  * 两处与原型的有意差异：
@@ -21,6 +22,8 @@
  *
  * @module
  */
+
+import { isUpstreamNoticeLine } from './notice.ts'
 
 /** `sed` 大窗口族的参数。 */
 export interface SedWindowParams {
@@ -385,6 +388,9 @@ function splitLines(text: string): string[] {
 
 /**
  * 头 `head` 行 + 省略标记 + 尾 `tail` 行；超长单行截断。
+ *
+ * 上游说明行不参与单行截断：它指向完整输出，切掉路径等于把可回退的入口弄坏（票 20 复审）；判定与通用链共用
+ * {@link isUpstreamNoticeLine}。
  * @param lines - 输入各行。
  * @param head - 头行数。
  * @param tail - 尾行数。
@@ -393,7 +399,9 @@ function splitLines(text: string): string[] {
 function keepHeadTail(lines: readonly string[], head: number, tail: number): string[] | undefined {
   if (head + tail >= lines.length) return undefined
   const cut = lines.map(
-    line => line.length <= LINE_CAP ? line : line.slice(0, LINE_CAP) + LINE_TRUNCATED,
+    line => line.length <= LINE_CAP || isUpstreamNoticeLine(line)
+      ? line
+      : line.slice(0, LINE_CAP) + LINE_TRUNCATED,
   )
   const dropped = lines.length - head - tail
   return [...cut.slice(0, head), `…[中段省略 ${dropped} 行]…`, ...cut.slice(cut.length - tail)]

@@ -343,6 +343,25 @@ describe('票 20 · 上游入口与尾部标记', () => {
     expect(out.text).not.toContain('精简版')
   })
 
+  it.each(['sedWindow', 'rawDump'] as const)('%s 也不截坏超长上游说明，入口归属仍是上游', (family) => {
+    const rules = builtinRules({
+      gitDiff: () => GIT_DIFF_DEFAULTS,
+      sedWindow: () => SED_WINDOW_DEFAULTS,
+      rawDump: () => RAW_DUMP_DEFAULTS,
+    })
+    const rule = rules.find(candidate => candidate.family === family)
+    expect(rule).toBeDefined()
+    const longNotice = `\n\n(Full grep result stored at: /tmp/${'z'.repeat(2100)}.txt)`
+    const out = condenseText('bash', `${block(301)}${longNotice}`, at(), [condenseRuleOf(rule!)])
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    expect(out.lossy).toBe(true)
+    if (!out.lossy) return
+    expect(out.entry).toBe('upstream')
+    expect(out.text).toContain(longNotice.trim())
+    expect(out.text).not.toContain('行已截断')
+  })
+
   it('规则抛异常时整体放弃、交回下游正文（不与「没变短」混同）', () => {
     const throwing: CondenseRule = {
       id: 'strip-ansi',

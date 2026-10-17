@@ -213,7 +213,7 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 
 **落在配置面**：总开关 `condense`（**默认开**，volatile，票 19 已上设置页：配置区最下面的第一个勾选、保存即生效）与六个**非 volatile** 参数（`condenseMinUnits` / `condenseMinNetGainUnits` / `condenseHeadLines` / `condenseTailLines` / `condenseMaxLines` / `condenseMaxLineChars`）：写在配置文件里可读、改值即按其取值生效、设置页完全看不见。票 16 再加五项——**「按命令语义精简」`condenseByCommand`（默认关，volatile，票 19 已上设置页：总开关开着时在它下面一级、同样是保存即生效的勾选；总开关关掉就收起）**，以及四个**非 volatile** 字段：族开关 `condenseGitDiff` 与它的三个封顶参数 `condenseGitDiffMaxHunkLines`（100）/ `condenseGitDiffMaxLines`（200）/ `condenseGitDiffLeadingContext`（3）。**族参数一律按 `condense<族名><参数名>` 平铺**（与 `condenseMinUnits` 同一批、同一命名法），不新增嵌套容器；两个 `maxLines` 是不同层的量（一个是通用链的封顶触发行数，一个是这一族的整体行数上限），靠前缀区分。**票 17 再加九项**，仍是非 volatile：两族开关 `condenseSedWindow` / `condenseRawDump`（**默认都开**，理由与 `condenseGitDiff` 同：总开关打开就该有族接手，这两个开关是给逐个 A/B 用的）与七个数——`condenseSedWindowHeadLines`（20）/ `condenseSedWindowTailLines`（20）/ `condenseSedWindowMinLines`（60）/ `condenseRawDumpHeadLines`（15）/ `condenseRawDumpTailLines`（15）/ `condenseRawDumpMinLines`（60）/ `condenseRawDumpHits`（20）。**参数只到原型 CLI 能拧的那几个**：单行字符上限（2000）原型写死在 `all_rules` 的 `cap_line` 里、不是可拧的量，因而不做成配置项。
 
-**依赖的外部假设**：正文尾部元数据的文案是识别依据，不是契约——上游位置说明（spill-policy / native `grep` / native `glob` 共用 ` stored at: `）、bash 的截断说明 `[output truncated; full output: …]`、退出标记 `[exit code: N]`。上游改文案时这里会漏认：位置说明漏认的后果是本层追加第二条入口；截断说明漏认的后果是把 `(unavailable)` 当可用入口；退出标记漏认的后果是 `compactDiff` 放弃、落通用链。假设写在 `src/condense.ts` 的 `POSITION_NOTICE_MARKER` / `TRUNCATED_NOTICE` / `EXIT_MARKER` 上。
+**依赖的外部假设**：正文尾部元数据的文案是识别依据，不是契约——上游位置说明（spill-policy / native `grep` / native `glob` 共用 ` stored at: `）、bash 的截断说明 `[output truncated; full output: …]`、退出标记 `[exit code: N]`。上游改文案时这里会漏认：位置说明漏认的后果是本层追加第二条入口；截断说明漏认的后果是把 `(unavailable)` 当可用入口；退出标记漏认的后果是 `compactDiff` 放弃、落通用链。假设写在 `src/notice.ts` 的 `POSITION_NOTICE_MARKER` / `TRUNCATED_NOTICE` 与 `src/condense.ts` 的 `EXIT_MARKER` 上；上游说明行的单行截断豁免（通用链与两族共用）也在 `src/notice.ts`。
 
 ### 验证状态
 
@@ -279,4 +279,4 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 - **截断按族**：`truncated: true` 时 `compactDiff` 不接、`sedWindow` / `rawDump` 接（`tests/dispatch.spec.ts`）；带路径的截断说明当上游入口，`(unavailable)` 时写本层入口（`tests/dispatch-pipeline.spec.ts`）。
 - **退出码不再挡族**：`exitCode: 1` 时三族照常命中；合法 diff + `[exit code: 1]` 被 `compactDiff` 收窄且标记保留；不是 diff 的失败正文由 handler 放弃后落通用链（`tests/dispatch-pipeline.spec.ts`）。
 - **语料**：通用链 `condensed` 1,157（票 15 口径 1,006；+151 = 148 条位置说明守卫放行 + 3 条上游入口不预留后过线）、`abstained` 0、`not-shorter` 412，幂等违反 0；`compactDiff` / `sedWindow` / `rawDump` 的语料读数不变（语料正文没有这些尾部块，`truncated` 事实也拿不到）。
-- **门禁**：四 workspace typecheck 全过、`pnpm test` 29 文件 / 536 用例全绿。
+- **门禁**：四 workspace typecheck 全过、`pnpm test` 29 文件 / 539 用例全绿。
