@@ -429,12 +429,12 @@ describe('票 20 · 上游入口与尾部标记', () => {
 })
 
 describe('票 15 · 回退入口说明', () => {
-  it('精简版入口说明用「精简」措辞，并带上 locator 与取回方法', () => {
+  it('精简版入口说明只陈述省略与取回，不评价被丢内容是否重要', () => {
     const entry = composeEntry({ locator: '/tmp/original.txt', retrievalHint: 'Use read with offset/limit.' }, 'bash', 'condense')
-    expect(entry).toContain('/tmp/original.txt')
-    expect(entry).toContain('Use read with offset/limit.')
+    expect(entry).toBe('\n\n（以上为本次 bash 结果的精简版：标记处省略了部分内容；若需要被省略的内容，原文在此：/tmp/original.txt。Use read with offset/limit.）')
     expect(entry).toContain('精简')
     expect(entry).not.toContain('摘要')
+    expect(entry).not.toContain('不承载判断')
     expect(entry.length).toBeLessThanOrEqual(CONDENSE_DEFAULTS.entryReserveChars)
   })
 

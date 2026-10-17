@@ -186,9 +186,9 @@ function commandTool(
   })
 }
 
-describe('票 16 判据 1：默认关，关着时命令族那一步不发生', () => {
-  it('默认部署下同一份 diff 只走通用链：没有族 id，正文是尾部封顶的形态', async () => {
-    const { fixture, path } = await mounted()
+describe('票 21：命令族默认开，显式关着时那一步不发生', () => {
+  it('显式关掉后同一份 diff 只走通用链：没有族 id，正文是尾部封顶的形态', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: false })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -198,8 +198,8 @@ describe('票 16 判据 1：默认关，关着时命令族那一步不发生', (
     expect(observation(path)).toMatchObject({ rules: ['tail-cap'] })
   })
 
-  it('打开后同一份输入被命令族收窄（阳性对照），且比通用链更短', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+  it('默认部署下同一份输入被命令族收窄（阳性对照），且比通用链更短', async () => {
+    const { fixture, path } = await mounted()
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -211,7 +211,7 @@ describe('票 16 判据 1：默认关，关着时命令族那一步不发生', (
 
   it('族没命中的调用，开关两态下的通用链取舍一字不差', async () => {
     const bodies: string[] = []
-    for (const config of [{}, { condenseByCommand: true }]) {
+    for (const config of [{ condenseByCommand: false }, { condenseByCommand: true }]) {
       const { fixture, path } = await mounted(config)
       fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
       // 命令串不落任何一族（票 17 起 `ls -la` 是 `rawDump` 族的，不能再拿它当「族没命中」的样本）。

@@ -175,8 +175,8 @@ describe('配置契约', () => {
   it('票 16：分派层的五个字段——两个开关的默认值与三个封顶参数', async () => {
     const { fiber } = await load({})
     expect(fiber.config?.condense.get()).toBe(true)
-    // 「按命令语义精简」默认关：命令族那一步是**有损**的，要不要由用户决定。
-    expect(fiber.config?.condenseByCommand.get()).toBe(false)
+    // 「按命令语义精简」默认开：与总开关一致，有损替换有回退入口、模型要整份/逐字时整层让路。
+    expect(fiber.config?.condenseByCommand.get()).toBe(true)
     // 四个非 volatile 字段装载后是**普通值**（没有 `.get()`）——设置页只保留 volatile 字段，所以它们不回页面；
     // 默认值取票 14 实测的那一档（明细 100 / 整体 200 / 前导 3），换一档门槛读数就不可比。
     const config = fiber.config as unknown as Record<string, unknown>
@@ -187,13 +187,13 @@ describe('配置契约', () => {
 
     // 写在配置文件里可读、改值即按其取值生效（这是「非 volatile 只影响 A/B」的可观察面）。
     const tuned = await load({
-      condenseByCommand: true,
+      condenseByCommand: false,
       condenseGitDiff: false,
       condenseGitDiffMaxHunkLines: 7,
       condenseGitDiffMaxLines: 60,
       condenseGitDiffLeadingContext: 0,
     })
-    expect(tuned.fiber.config?.condenseByCommand.get()).toBe(true)
+    expect(tuned.fiber.config?.condenseByCommand.get()).toBe(false)
     const tunedConfig = tuned.fiber.config as unknown as Record<string, unknown>
     expect(tunedConfig.condenseGitDiff).toBe(false)
     expect(tunedConfig.condenseGitDiffMaxHunkLines).toBe(7)

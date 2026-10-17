@@ -70,9 +70,9 @@ export const SECTION_DEFAULTS: StubSection = {
   summaryPrompt: '',
   admissionPrompt: '',
   privacyPrompt: '',
-  // 工具结果精简：总开关默认开、按命令语义默认关（与 host 半 schema 的默认一致）。
+  // 工具结果精简：两个开关都默认开（与 host 半 schema 的默认一致）。
   condense: true,
-  condenseByCommand: false,
+  condenseByCommand: true,
 }
 
 /** 一次原子写入里的一个字段操作（形状与 settings 的 `SettingsPathOpView` 一致）。 */

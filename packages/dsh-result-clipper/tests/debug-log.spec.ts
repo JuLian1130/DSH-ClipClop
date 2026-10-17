@@ -89,7 +89,7 @@ describe('票 02 第 4 条：开启时按追加写产出元数据记录', () => 
       judgeInputTokens: null,
       extract: false,
       // 精简层考虑过这条 bash 结果（工具与正文形态都符合），但正文低于尺寸下限，一条规则都没命中。
-      condense: { rules: [], truncated: false },
+      condense: expect.objectContaining({ rules: [], truncated: false }),
       action: 'unmodified',
       reason: 'summary-off',
     })

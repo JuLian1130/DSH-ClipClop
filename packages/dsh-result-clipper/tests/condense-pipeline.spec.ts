@@ -20,6 +20,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PostToolDecision, ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { Config } from '../src/index.ts'
+import { WHOLE_RESULT } from '../src/extract.ts'
 import { exec, mount, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { AGGREGATE_LINE, GIT_DIFF_ARGS, GIT_DIFF_BODY } from './support/gitdiff.ts'
@@ -136,9 +137,48 @@ describe('票 15 判据 1：默认部署下大 shell 结果就变短', () => {
       expect.objectContaining({
         toolName: 'bash',
         action: 'condensed',
-        condense: { rules: ['tail-cap'], truncated: false },
+        condense: expect.objectContaining({ rules: ['tail-cap'], truncated: false }),
       }),
     ])
+  })
+})
+
+describe('票 21：模型要整份/逐字时精简层让路', () => {
+  it('WHOLE_RESULT：超过单行封顶的结果逐字透传，不写入口，记录 whole-result 且没有精简观测', async () => {
+    const spill = new FakeSpill()
+    const { fixture, path } = await mounted({ condenseByCommand: true }, undefined, spill)
+    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'cat f', extract: WHOLE_RESULT }))
+
+    expect(textOf(result.content)).toBe(LONG_BODY)
+    expect(spill.saves).toHaveLength(0)
+    const [record] = readRecords(path)
+    expect(record).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'whole-result', extract: true }))
+    expect(record).not.toHaveProperty('condense')
+  })
+
+  it('逐字要求：命令族也不接手，记录 exact-text', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(textTool('bash', GIT_DIFF_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, {
+      ...GIT_DIFF_ARGS,
+      extract: 'verbatim lines 20-40',
+    }))
+
+    expect(textOf(result.content)).toBe(GIT_DIFF_BODY)
+    const [record] = readRecords(path)
+    expect(record).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'exact-text', extract: true }))
+    expect(record).not.toHaveProperty('condense')
+  })
+
+  it('WHOLE_RESULT：打开命令族也不收窄 diff，正文逐字不变', async () => {
+    const { fixture, path } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(textTool('bash', GIT_DIFF_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { ...GIT_DIFF_ARGS, extract: WHOLE_RESULT }))
+
+    expect(textOf(result.content)).toBe(GIT_DIFF_BODY)
+    expect(readRecords(path)[0]).toEqual(expect.objectContaining({ action: 'unmodified', reason: 'whole-result' }))
+    expect(readRecords(path)[0]).not.toHaveProperty('condense')
   })
 })
 
@@ -155,7 +195,7 @@ describe('票 15 判据 1：总开关关掉即透传', () => {
       expect.objectContaining({
         action: 'unmodified',
         reason: 'condense-off',
-        condense: { rules: [], truncated: false },
+        condense: expect.objectContaining({ rules: [], truncated: false }),
       }),
     ])
   })
@@ -175,7 +215,7 @@ describe('票 15 判据 2：有损但回退入口写不成时必须返回原文'
       expect.objectContaining({
         action: 'unmodified',
         reason: 'condense-abstained',
-        condense: { rules: [], truncated: false },
+        condense: expect.objectContaining({ rules: [], truncated: false }),
       }),
     ])
   })
@@ -246,7 +286,7 @@ describe('票 15 判据 10：干跑只预报，不替换、不写回退入口、
       expect.objectContaining({
         action: 'condensed',
         dryRun: true,
-        condense: { rules: ['tail-cap'], truncated: false },
+        condense: expect.objectContaining({ rules: ['tail-cap'], truncated: false }),
       }),
     ])
 
@@ -367,7 +407,7 @@ describe('票 15 判据 10：四个去向各有一条，且「一处都没改动
         action: 'unmodified',
         reason: 'condense-not-shorter',
         // 命中的规则照记：闸门挡下的是「替换」，不是「哪条规则命中过」——这是「为什么没变短」的答案。
-        condense: { rules: ['dedup-adjacent'], truncated: false },
+        condense: expect.objectContaining({ rules: ['dedup-adjacent'], truncated: false }),
       }),
     ])
   })
@@ -383,7 +423,7 @@ describe('票 15 判据 10：四个去向各有一条，且「一处都没改动
         action: 'unmodified',
         reason: 'not-candidate',
         // 本层考虑过这条结果（精简工具 + 一张文本块），所以观测字段照写。
-        condense: { rules: [], truncated: false },
+        condense: expect.objectContaining({ rules: [], truncated: false }),
       }),
     ])
   })
@@ -462,7 +502,7 @@ describe('票 15 判据 10：记下输入是否已被工具自身截断', () => 
     const result = await fixture.ctx.tools.execute(exec('bash'))
 
     expect(textOf(result.content)).toContain('精简版')
-    expect(readRecords(path)[0]!.condense).toEqual({ rules: ['tail-cap'], truncated: true })
+    expect(readRecords(path)[0]!.condense).toEqual(expect.objectContaining({ rules: ['tail-cap'], truncated: true }))
   })
 
   it('只有严格 true 才算截断：形状不认识的取值一律为 false', async () => {
@@ -476,8 +516,8 @@ describe('票 15 判据 10：记下输入是否已被工具自身截断', () => 
     textBlocks.fixture.ctx.tools.register(textTool('bash', LONG_LINES_BODY))
     await textBlocks.fixture.ctx.tools.execute(exec('bash'))
 
-    expect(readRecords(other.path)[0]!.condense).toEqual({ rules: ['tail-cap'], truncated: false })
-    expect(readRecords(textBlocks.path)[0]!.condense).toEqual({ rules: ['tail-cap'], truncated: false })
+    expect(readRecords(other.path)[0]!.condense).toEqual(expect.objectContaining({ rules: ['tail-cap'], truncated: false }))
+    expect(readRecords(textBlocks.path)[0]!.condense).toEqual(expect.objectContaining({ rules: ['tail-cap'], truncated: false }))
   })
 })
 

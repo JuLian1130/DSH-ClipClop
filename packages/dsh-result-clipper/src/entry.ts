@@ -73,8 +73,9 @@ export type RewriteKind = 'summary' | 'condense'
  * 下一次调用、43% 是整文件一把读回。旧约束「必须在正文最前」的依据是旧结果裁剪器只保头 4096 / 尾 1024
  * （阈值 8192 字符）：本替换结果只有几百字符，远低于阈值，且裁剪器头尾都留，放末尾同样不会被裁掉。
  *
- * 精简那条路的措辞不同（票 15）：被替换掉的不是「模型的改写」而是**被丢掉的正文**，所以不能叫摘要——用户与
- * 模型都该看出这份入口指向的是被压掉的那一份原文。取回语义（`read` 该 `locator`）两条路一致。
+ * 精简那条路的措辞不同（票 15/21）：被替换掉的不是「模型的改写」而是**被丢掉的正文**，所以不能叫摘要——用户与
+ * 模型都该看出这份入口指向的是被压掉的那一份原文。兜底段不判断被丢内容是否重要（对 `sedWindow` / `rawDump`
+ * 的中段不成立），只指出省略发生在标记处并给出取回方法；取回语义（`read` 该 `locator`）两条路一致。
  * @param ref - 存储后端返回的入口。
  * @param toolName - 产生这条结果的工具名。
  * @param kind - 这次替换是摘要还是精简；默认摘要（既有调用点不变）。
@@ -82,7 +83,7 @@ export type RewriteKind = 'summary' | 'condense'
  */
 export function composeEntry(ref: EntryRef, toolName: string, kind: RewriteKind = 'summary'): string {
   if (kind === 'condense') {
-    return `\n\n（以上为本次 ${toolName} 结果的精简版，被丢掉的都是不承载判断的重复与超长部分；需要逐字内容时原文在此：${ref.locator}。${ref.retrievalHint}）`
+    return `\n\n（以上为本次 ${toolName} 结果的精简版：标记处省略了部分内容；若需要被省略的内容，原文在此：${ref.locator}。${ref.retrievalHint}）`
   }
   return `\n\n（以上为本次 ${toolName} 结果的摘要，够用就不必再读；需要逐字核对时原文在此：${ref.locator}。${ref.retrievalHint}）`
 }

@@ -359,10 +359,16 @@ async function process(
   // 要替换掉的那段**模型即将看到的投影**是下游决策的正文；附加上下文与图片块只影响隐私判断的文本投影。
   let visible = decision.content ?? result.content
 
+  // 故事 60：模型明确要整份或逐字原文时，精简层不介入。`extract` 跟着摘要总开关走，所以这条模型级出口只在
+  // 摘要开着时存在（关掉摘要时没有这个参数，用户级出口是精简总开关，见 README）。放在精简块之前而不是替换后：
+  // 有损替换一旦写出入口就没有无痕回退路径（计划 §7.4 第 1 条）。
+  const modelWantsWholeOrExact = goal !== undefined && (isWholeResult(goal) || wantsExactText(goal))
+
   // —— 本票（15）精简层：在 block 判定之后、隐私判断之前（计划 §2.1 第 1、2 条）——
   // 只在正文恰好是一张文本块时考虑：多块正文压成一块会改变结果的形状，不在本层的判据里（此时不表态，取值
   // 交给既有词表）。`body` 取下游正文，尺寸下限、净收益闸门与全部变换都以它为基准，不是 `result` 的原始投影。
-  if (isCondenseTool(exec.name) && visible.length === 1 && visible[0]?.type === 'text') {
+  // 模型要整份/逐字时整层让路，由下面的摘要路返回原文（故事 60）。
+  if (!modelWantsWholeOrExact && isCondenseTool(exec.name) && visible.length === 1 && visible[0]?.type === 'text') {
     const body = visible[0].text
     // 输入截断事实在 `try` 外取一次：无论走哪条路（含异常兜底）都要写进观测，且它本身不参与取舍。
     const truncated = truncatedOf(result)

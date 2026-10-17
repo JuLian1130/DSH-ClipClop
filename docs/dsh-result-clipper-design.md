@@ -107,7 +107,7 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 - **换 provider 时 model 跟着走，隐私组的确认位跟着 route 作废**：model 属于某一对 (provider, model)，换 provider 后旧的 model id 通常在新 route 上不存在——那样会留下一个「（不在目录里）」的孤儿取值，host 侧只会当失败路径处理。所以 provider 改动时若当前 model 不在新 provider 的候选里就清空它（provider 被清空时同样清空）；目录读不到（候选为空）时不猜，保留手填值，免得把「手工填 provider + model」的部署变成不可配置。同一条 helper 还负责隐私组的「已确认为本地」：那个确认是对**具体 route** 的声明，而 host 侧只读这个裸布尔（`src/index.ts:313`，不校验它对应哪条 route），所以隐私组 provider 或 model 一变，确认位就在草稿里清掉、必须重新勾选——否则换一条没确认过的 route 会沿用旧确认继续放行，把敏感正文发往外部网络。判据在 `card.tsx` 的 `changeRoute`（三个角色共用一份；`confirm` 只有隐私组传）。写入用的是同一次原子保存：确认位与被改的 route 一起落库，不存在「route 生效了、确认还没失效」的中间态。
 - **端点与凭据为什么不进插件配置**（票 12 核实）：`GenerateOptions` 只有 `provider`、`model`、`reasoningEffort` 等字段，**没有 `baseURL` 或 `apiKey`**（`packages/llm/llm/src/types.ts:511-553`），所以插件无法把一个端点塞进某次请求；route 由适配器按自己的 profile 建立，pi-ai 适配器的 profile 才带 `baseURL`、`api` 与 `apiKeyEnv`（`packages/llm/llm-pi-ai/src/config.ts` 的 profile schema；`packages/llm/llm-pi-ai/src/index.ts` 的 `resolveApiKey` 走 credentials seam），而 GUI 的「设置 → 模型」页就是给自定义 route 填 `baseURL` 与 API key 的入口（`packages/client/ui-settings-models/src/client/CustomProviderCard.tsx`）。要三个角色用不同端点，就在那里建三条 route，再在插件里按角色各选一条。
 - **三个角色各自成组**：配置区按「摘要模型 / 摘要准入判断模型 / 隐私闸门模型 / 诊断」分组，每个角色的 route（`provider` 与 `model` 并排）、推理档位与提示词规则正文同属该组；摘要的两个阈值也归摘要组，组间用一条横线隔开。分组是座位约定的一部分：看一个角色的设置不需要跨组找控件。
-- **工具结果精简的两个开关在配置区最下面、最后一条横线之后**（2026-10-17，票 19）：「工具结果精简」（总开关，默认开）与它下面一级的「按命令语义精简」（默认关）都是**保存即生效**的单字段写入——它们不折叠任何承载「保存」按钮的组，这一层也没有别的参数需要草稿。总开关关掉时子开关收起（它只在这一层已经介入时才有意义），并保留这一层自己的说明。**这一层只有这两个字段上页面**：六个通用参数与三族的开关和参数都是非 volatile，页面不注入它们的读数、也没有任何控件（见下面「落在配置面」）。
+- **工具结果精简的两个开关在配置区最下面、最后一条横线之后**（2026-10-17，票 19）：「工具结果精简」（总开关，默认开）与它下面一级的「按命令语义精简」（默认开）都是**保存即生效**的单字段写入——它们不折叠任何承载「保存」按钮的组，这一层也没有别的参数需要草稿。总开关关掉时子开关收起（它只在这一层已经介入时才有意义），并保留这一层自己的说明。**这一层只有这两个字段上页面**：六个通用参数与三族的开关和参数都是非 volatile，页面不注入它们的读数、也没有任何控件（见下面「落在配置面」）。
 - **摘要准入判断的启用位在准入组之上、且保存即生效**（2026-10-05 改）：它是「先有一条 route 才有意义」的开关，但**不能放进它自己折叠的那一组**——取消勾选会把承载「保存」按钮的那一组一起收起，那次改动就永远存不下去。所以它单独一行、在那一组之上，走与摘要、隐私两个能力开关同一条立即写入路径（`saveFields` 的单字段 `mutate`）；同一字段仍只有一条写入路径。未启用时整组（标题、route、档位、提示词、保存 / 恢复默认）都不渲染，勾选后展开。**规则摘要开关（`ruleSummary`）留在摘要组里当第一个勾选**：它折叠的是同一组内的两个控件（规则正文），组本身与它的保存按钮还在，走草稿没有上面那个问题。**debug 与干跑留在诊断组的草稿里**：它们不折叠任何东西，与同组的日志路径一起点「保存」写回；判断干跑生不生效的那句提示读的是**已保存**的取值。
 - **缩排表示从属关系，每级 32px（2026-10-05）**：「摘要模型」与「隐私闸门模型」两组各比它们上面那个能力开关退 32px；「启用摘要准入判断」与摘要组同层（退 32px），它下面的准入组再退 32px（合计 64px）。16px 在真机上几乎看不出层级，所以每级加到两格。诊断组没有上级开关，保持顶格。
 - **现在用不到的规则正文只读，且是灰字（2026-10-05）**：「自动摘要大内容」不勾时「摘要提示词规则正文」不会被用到，控件 `disabled`、字色换 `--dsw-alias-label-tertiary`、指针换 `not-allowed`，并在框下写一句为什么。**只改字色不改底色**：浅色主题下 `--dsw-alias-bg-layer-2` 与 `--dsw-alias-bg-layer-1` 是同一个值，换底色在浅色下根本看不出来。
@@ -162,7 +162,7 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 
 ## 工具结果精简
 
-**定位**：把工具结果里不承载判断的机械形状（格式控制序列、进度条的刷新过程、成片重复行、超长正文的头尾）按确定性规则压掉。**不调用模型、不改内容的语义、每次都能说明被删掉的是什么**；不读 `spillPath`、不做 I/O、不新增会话事件（计划 §3.3）。
+**定位**：把工具结果里的机械形状（格式控制序列、进度条的刷新过程、成片重复行）与超长正文的固定形态（只留头尾/窗口头尾）按确定性规则压掉。**不调用模型、不改内容的语义、每次都能说明被删掉的是什么**；不读 `spillPath`、不做 I/O、不新增会话事件（计划 §3.3）。
 
 **插在哪**（票 15 落地）：`tools/post-execute` 里 `await next()` → `block` 判定之后 → **精简** → 隐私判断 → 摘要路。隐私判的是精简后的正文，因为它必须等于模型真正会看到的投影；下游已 `block` 的结果没有正文可改，照旧记 `not-candidate`。判定顺序、四个去向与所有例外在 `docs/dsh-result-clipper-pipeline.md` §1.0.1、§4.10、§4.11 写死，本节只写机制与参数。
 
@@ -185,7 +185,7 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 
 **层序（票 16 写死，票 17 沿用）**：**分派在先，且分派与族 handler 判的都是下游正文。** 命中某一族时**只跑那一族**、不再叠一遍通用链；未命中（或该族关着、被族守卫放弃、`compactDiff` 的截断事实不满足）才落通用链。四个理由：① 票 14 的三个数（`compact_diff` 37.0% / `sed` 69.0% / 原始转储 68.7%）都是在**下游正文**上测的；② 通用链先跑会把 >300 行的窗口先裁到 251 行，票 17 的「≥101 行大窗口」与「不丢窗口内的内容」在残文上无从判定；③ 用户故事 76 的「叠加生效」指的是**打开命令族开关不会把通用链这个能力关掉**（未命中的调用照旧走它），不是同一条结果上跑两遍；④ 命中之后再叠一遍通用链，这条链里**唯一的有损规则**（>300 行的尾部封顶）会把 `+`/`-` 行整段丢掉，直接破坏「不丢任何增删行」——所以命中时不再叠链不是图省事，是这一族的忠实性要求。
 
-**命令族 handler（激进，默认关，按族开关）**：票 16 只落一族 **`compactDiff`**（`git diff`；`git show` 半边实测触发 0 次，因而**明确记为只覆盖 `git diff`**）。形态与参数照计划 §4.4 第 1 行：每文件累计 `+N -M`；保留**完整** `@@` 头（含尾部函数/符号上下文）；每 hunk 明细封顶 `max_hunk_lines = 100` 行；整体行数上限 `max_lines = 200`；前导上下文**每 hunk ≤3 行**、全 diff ≤ `max_lines / 10`，两者都**不计入** `max_lines`。两处与票 14 原型**有意不同**：① **无 hunk 的文件不得被压成空壳**——只有权限变更（`old mode` / `new mode`）、重命名或复制（`rename from` / `rename to` / `copy from` / `copy to` / `similarity index`）、二进制变更（`Binary files … differ`）的文件，收窄后至少留下那一行变化类型，**有 hunk 的文件同样适用**（同一文件既改权限又改正文时权限行也必须在）；② `diff --git` 的**引号路径**必须无歧义还原成真实路径——Git 默认 `core.quotepath`，中文文件名必然带引号，形态是 `"a/\344\270\255"` 这样的 UTF-8 八进制转义，观察面是**呈现出来的文件名逐字等于真实路径**；引号不闭合、转义非法或切分有歧义时保留完整原文件头，不把那段增减量归到别的文件名下。守卫不满足（不是 unified diff、hunk 外有无法识别的行、hunk 未耗尽）即整次放弃、退回通用链。实现在 `src/gitdiff.ts`（纯函数，守卫放弃交回 `undefined`）。
+**命令族 handler（激进，默认开，按族开关）**：票 16 只落一族 **`compactDiff`**（`git diff`；`git show` 半边实测触发 0 次，因而**明确记为只覆盖 `git diff`**）。形态与参数照计划 §4.4 第 1 行：每文件累计 `+N -M`；保留**完整** `@@` 头（含尾部函数/符号上下文）；每 hunk 明细封顶 `max_hunk_lines = 100` 行；整体行数上限 `max_lines = 200`；前导上下文**每 hunk ≤3 行**、全 diff ≤ `max_lines / 10`，两者都**不计入** `max_lines`。两处与票 14 原型**有意不同**：① **无 hunk 的文件不得被压成空壳**——只有权限变更（`old mode` / `new mode`）、重命名或复制（`rename from` / `rename to` / `copy from` / `copy to` / `similarity index`）、二进制变更（`Binary files … differ`）的文件，收窄后至少留下那一行变化类型，**有 hunk 的文件同样适用**（同一文件既改权限又改正文时权限行也必须在）；② `diff --git` 的**引号路径**必须无歧义还原成真实路径——Git 默认 `core.quotepath`，中文文件名必然带引号，形态是 `"a/\344\270\255"` 这样的 UTF-8 八进制转义，观察面是**呈现出来的文件名逐字等于真实路径**；引号不闭合、转义非法或切分有歧义时保留完整原文件头，不把那段增减量归到别的文件名下。守卫不满足（不是 unified diff、hunk 外有无法识别的行、hunk 未耗尽）即整次放弃、退回通用链。实现在 `src/gitdiff.ts`（纯函数，守卫放弃交回 `undefined`）。
 
 `sedWindow`（`sed` 大窗口）与 `rawDump`（`cat` / `ls` / `head` / `tail` / `nl`）两族的**名字与命名法**在此定死，规则、字段与实测读数已随**票 17** 落地，见下。
 
@@ -207,11 +207,11 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 
 **四个去向与诊断**：动作 `condensed` 与 `summarized` / `rejected` / `unmodified` 并列；`unmodified` 新增 `condense-off`（总开关关）/ `condense-abstained`（守卫放弃）/ `condense-not-shorter`（改了但过不了闸门）。本层「一处都没改动」时不表态，交给既有词表。记录里另有 `condense` 字段：`rules`（真正改动了正文的规则 id，票 16 起也可能是**命令族 id**）与 `truncated`（输入是否已被工具自身截断，取自 `bash`/`pwsh` 结果的 `value.stdout` / `stderr`）；票 16 再加两项——`family`（本次**选中的命令族**）与 `facts`（分派事实的扁平 map，**缺的事实不在里面**）。没有族接手时 `family` 不存在：未命中、该族关着、`compactDiff` 因截断事实不满足而被规则拒绝，三种在诊断里是同一个样子，要分开看结果取值与 `facts` 里那条决定性的事实；族被选中但**它的守卫放弃了**时 `family` 在、`rules` 记的是随后通用链里真正改动正文的 id（守卫放弃落通用链，见层序）。
 
-**干跑**：判定照算、取值照写，但不替换正文、不写回退入口、不记台账，交回下游决策。这不是可选项——「按命令语义精简」默认关，而干跑是用户决定要不要打开它的唯一工具。
+**干跑**：判定照算、取值照写，但不替换正文、不写回退入口、不记台账，交回下游决策。它不是可选项——用来在打开或调整这一层之前看清会发生什么；票 21 起「按命令语义精简」默认开，干跑仍是排查单条结果与 A/B 的观察面。
 
 **与摘要的关系（规格「共存」）**：精简过的结果**不再进摘要路**（不再判候选、不查 memo、不发准入与摘要请求），隐私路照跑。同一份结果不该被程序削一遍、再被模型改写一遍；这同时消掉「摘要的 `replace` 把精简后的正文当原文写进存储、于是有损封顶的入口变成无人引用的副本」这个矛盾。
 
-**落在配置面**：总开关 `condense`（**默认开**，volatile，票 19 已上设置页：配置区最下面的第一个勾选、保存即生效）与六个**非 volatile** 参数（`condenseMinUnits` / `condenseMinNetGainUnits` / `condenseHeadLines` / `condenseTailLines` / `condenseMaxLines` / `condenseMaxLineChars`）：写在配置文件里可读、改值即按其取值生效、设置页完全看不见。票 16 再加五项——**「按命令语义精简」`condenseByCommand`（默认关，volatile，票 19 已上设置页：总开关开着时在它下面一级、同样是保存即生效的勾选；总开关关掉就收起）**，以及四个**非 volatile** 字段：族开关 `condenseGitDiff` 与它的三个封顶参数 `condenseGitDiffMaxHunkLines`（100）/ `condenseGitDiffMaxLines`（200）/ `condenseGitDiffLeadingContext`（3）。**族参数一律按 `condense<族名><参数名>` 平铺**（与 `condenseMinUnits` 同一批、同一命名法），不新增嵌套容器；两个 `maxLines` 是不同层的量（一个是通用链的封顶触发行数，一个是这一族的整体行数上限），靠前缀区分。**票 17 再加九项**，仍是非 volatile：两族开关 `condenseSedWindow` / `condenseRawDump`（**默认都开**，理由与 `condenseGitDiff` 同：总开关打开就该有族接手，这两个开关是给逐个 A/B 用的）与七个数——`condenseSedWindowHeadLines`（20）/ `condenseSedWindowTailLines`（20）/ `condenseSedWindowMinLines`（60）/ `condenseRawDumpHeadLines`（15）/ `condenseRawDumpTailLines`（15）/ `condenseRawDumpMinLines`（60）/ `condenseRawDumpHits`（20）。**参数只到原型 CLI 能拧的那几个**：单行字符上限（2000）原型写死在 `all_rules` 的 `cap_line` 里、不是可拧的量，因而不做成配置项。
+**落在配置面**：总开关 `condense`（**默认开**，volatile，票 19 已上设置页：配置区最下面的第一个勾选、保存即生效）与六个**非 volatile** 参数（`condenseMinUnits` / `condenseMinNetGainUnits` / `condenseHeadLines` / `condenseTailLines` / `condenseMaxLines` / `condenseMaxLineChars`）：写在配置文件里可读、改值即按其取值生效、设置页完全看不见。票 16 再加五项——**「按命令语义精简」`condenseByCommand`（默认开，volatile，票 19 已上设置页：总开关开着时在它下面一级、同样是保存即生效的勾选；总开关关掉就收起）**，以及四个**非 volatile** 字段：族开关 `condenseGitDiff` 与它的三个封顶参数 `condenseGitDiffMaxHunkLines`（100）/ `condenseGitDiffMaxLines`（200）/ `condenseGitDiffLeadingContext`（3）。**族参数一律按 `condense<族名><参数名>` 平铺**（与 `condenseMinUnits` 同一批、同一命名法），不新增嵌套容器；两个 `maxLines` 是不同层的量（一个是通用链的封顶触发行数，一个是这一族的整体行数上限），靠前缀区分。**票 17 再加九项**，仍是非 volatile：两族开关 `condenseSedWindow` / `condenseRawDump`（**默认都开**，理由与 `condenseGitDiff` 同：总开关打开就该有族接手，这两个开关是给逐个 A/B 用的）与七个数——`condenseSedWindowHeadLines`（20）/ `condenseSedWindowTailLines`（20）/ `condenseSedWindowMinLines`（60）/ `condenseRawDumpHeadLines`（15）/ `condenseRawDumpTailLines`（15）/ `condenseRawDumpMinLines`（60）/ `condenseRawDumpHits`（20）。**参数只到原型 CLI 能拧的那几个**：单行字符上限（2000）原型写死在 `all_rules` 的 `cap_line` 里、不是可拧的量，因而不做成配置项。
 
 **依赖的外部假设**：正文尾部元数据的文案是识别依据，不是契约——上游位置说明（spill-policy / native `grep` / native `glob` 共用 ` stored at: `）、bash 的截断说明 `[output truncated; full output: …]`、退出标记 `[exit code: N]`。上游改文案时这里会漏认：位置说明漏认的后果是本层追加第二条入口；截断说明漏认的后果是把 `(unavailable)` 当可用入口；退出标记漏认的后果是 `compactDiff` 放弃、落通用链。假设写在 `src/notice.ts` 的 `POSITION_NOTICE_MARKER` / `TRUNCATED_NOTICE` 与 `src/condense.ts` 的 `EXIT_MARKER` 上；上游说明行的单行截断豁免（通用链与两族共用）也在 `src/notice.ts`。
 
@@ -266,7 +266,7 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 
 **票 19（设置页控件与 README）的验证，2026-10-17**，观察面全在插件级用例（本票没有语料读数）：
 
-- **两个开关在页面上、且保存即生效**：`tests/client.spec.tsx` 断言两个勾选都在（总开关勾着、按命令语义不勾）、各自带一句「按自己的需求该怎么设」、各点一下当场写回一个字段且不经过任何「保存」、总开关关掉时子开关收起再勾回来跟着回来；`tests/settings-live.spec.ts` 在**真 profile** 上写 `condense` 后下一条结果立刻被精简（无损的 ANSI/CRLF 正文被替换）、写 `condenseByCommand` 后同一条 `sed -n '1,200p' f` 的结果立刻被命令族收窄并写出指向完整原文的回退入口——两臂都没有重挂载。
+- **两个开关在页面上、且保存即生效**：`tests/client.spec.tsx` 断言两个勾选都在（两个都勾着）、各自带一句「按自己的需求该怎么设」、各点一下当场写回一个字段且不经过任何「保存」、总开关关掉时子开关收起再勾回来跟着回来；`tests/settings-live.spec.ts` 在**真 profile** 上写 `condense` 后下一条结果立刻被精简（无损的 ANSI/CRLF 正文被替换）、写 `condenseByCommand` 后同一条 `sed -n '1,200p' f` 的结果立刻被命令族收窄并写出指向完整原文的回退入口——两臂都没有重挂载。
 - **非 volatile 字段仍不在页面上，写在配置文件里可读且按其取值生效**：`tests/client.spec.tsx` 的字段表逐项扫描（19 个字段既没有控件 id、也不在注入读数里），`tests/entry-config.spec.ts` 逐字段对照默认值与显式覆盖（票 15 的六个通用参数在本票补进闭合表，票 16/17 的十三个原本就有），`tests/full-closure.spec.ts` 的逐字段默认/覆盖/恢复默认三轮把两个开关也纳入；**「按其取值生效」另有 19 档行为对照**（`tests/condense-pipeline.spec.ts`）：只改一个字段、同一条结果交回给模型的正文就随之改变（三族各自带 `condenseByCommand: true` 的前置），对照表的字段集与 schema 上的非 volatile 字段集一一相等（加字段不补对照即红）。
 - **整页文案按 `AGENTS.md`「插件页面文案」过了一遍**：机械负向检查拿 host schema 里的 21 个 `condense*` 字段名，加上 `extract` / `volatile` / `spill` / `baseURL` / `Host` / 「安全外壳」/ 裸 `route` 与诊断取值名逐个扫中英两本字典（唯一豁免是英文的 `summaryGroupHint`——那句是用户逐字定死的文案、本来就有 "route"），**一处在文案里出现就红**（`tests/client.spec.tsx`）；「命令族」按 `CONTEXT.md` 用词，不写「命令类型」；人工通读改掉了裸 `route`（改用「模型」）、`baseURL`、「Host 拒绝了这次写入」、「安全外壳」等不合规句，并给两个新开关各写一句「推荐怎么设、不这样设会怎样」。
 - **写非 volatile 路径被宿主拒绝、且页面给出失败提示**：`tests/settings-write-guard.spec.tsx` 用**真 profile 的 `settings`** 做写入口，在卡片的提交边界上多带一条 `condenseMinUnits` 的 `set`——宿主整次拒绝（`is not volatile`），该字段的运行时取值不变、profile patch 字节不变、页面出现失败提示且不装作已生效；阳性对照是同一条边界**不带**那一条时写入被接受并落盘。
@@ -280,3 +280,11 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 - **退出码不再挡族**：`exitCode: 1` 时三族照常命中；合法 diff + `[exit code: 1]` 被 `compactDiff` 收窄且标记保留；不是 diff 的失败正文由 handler 放弃后落通用链（`tests/dispatch-pipeline.spec.ts`）。
 - **语料**：通用链 `condensed` 1,157（票 15 口径 1,006；+151 = 148 条位置说明守卫放行 + 3 条上游入口不预留后过线）、`abstained` 0、`not-shorter` 412，幂等违反 0；`compactDiff` / `sedWindow` / `rawDump` 的语料读数不变（语料正文没有这些尾部块，`truncated` 事实也拿不到）。
 - **门禁**：四 workspace typecheck 全过、`pnpm test` 全绿。
+
+**票 21（按命令语义精简默认开）的验证，2026-10-17**，观察面是插件级端到端 + 页面用例 + 语料扫描：
+
+- **默认开与显式关**：schema 默认值改为 `true`；设置页两个勾选默认都勾着，点一下写回 `false`；显式 `condenseByCommand: false` 仍只走通用链。`tests/entry-config.spec.ts`、`tests/full-closure.spec.ts`、`tests/client.spec.tsx`、`tests/dispatch-pipeline.spec.ts`。
+- **整份/逐字让路**：`WHOLE_RESULT` 与逐字要求下，超过单行封顶的 5000 字符单行结果和可被 `compactDiff` 收窄的 diff 都逐字交回；`spill.saves` 为 0，记录 `whole-result` / `exact-text` 且没有 `condense` 字段。`tests/condense-pipeline.spec.ts` 三条用例。
+- **入口说明中性化**：精简兜底段逐字断言为「…标记处省略了部分内容；若需要被省略的内容，原文在此：…」，不含「不承载判断」，长度仍不超过 `ENTRY_RESERVE`；摘要那条逐字未变。`tests/condense.spec.ts`。
+- **语料**：默认值只改采纳面，不改单条判定——通用链 `condensed` 1,157 / `abstained` 0 / `not-shorter` 412 / 幂等违反 0；三族 `condensed` 4,327（`compactDiff` 698 / `sedWindow` 1,264 / `rawDump` 2,365）、`abstained` 8,056、`not-shorter` 315，均与票 20 后一致。
+- **门禁**：四 workspace typecheck 全过；`pnpm test` 30 文件 / 559 用例全绿。

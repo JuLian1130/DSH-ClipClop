@@ -334,7 +334,7 @@ describe('票 08 全量闭合二：debug 字段齐全', () => {
       // 这次调用没声明提取目标。
       extract: false,
       // 精简层考虑过这条结果（工具与正文形态都符合），但夹具把尺寸下限抬到它之上，所以一条规则都没命中。
-      condense: { rules: [], truncated: false },
+      condense: expect.objectContaining({ rules: [], truncated: false }),
       action: 'summarized',
     })
   })
@@ -385,9 +385,9 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
     summaryPrompt: '',
     admissionPrompt: '',
     privacyPrompt: '',
-    // 工具结果精简：总开关默认开、按命令语义默认关（票 19 把它们摆上设置页，字段本身由票 15/16 落）。
+    // 工具结果精简：总开关与按命令语义都默认开（票 19 把它们摆上设置页，字段本身由票 15/16/21 落）。
     condense: true,
-    condenseByCommand: false,
+    condenseByCommand: true,
   }
 
   /** 每个字段的显式覆盖值：布尔取反、数字换值、字符串非空、策略取另一支。 */
@@ -415,7 +415,7 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
     admissionPrompt: '只看体积',
     privacyPrompt: '只看我定义的机密',
     condense: false,
-    condenseByCommand: true,
+    condenseByCommand: false,
   }
 
   /** 字段名清单：默认、覆盖、恢复默认三轮共用同一份，少一个字段就少一列断言。 */

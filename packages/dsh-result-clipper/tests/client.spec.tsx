@@ -61,7 +61,9 @@ async function renderCard(
   catalog?: readonly StubCatalogProvider[],
 ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
   const fixture = await mounted(catalog)
-  fixture.form.value = { ...fixture.form.value, summarize: true, privacyGate: true, ...initial }
+  // 显式 `undefined` 表示「镜像里没有这个键」：不覆盖替身里的 host 默认值。
+  const overrides = Object.fromEntries(Object.entries(initial).filter(([, value]) => value !== undefined))
+  fixture.form.value = { ...fixture.form.value, summarize: true, privacyGate: true, ...overrides }
   const entry = only(fixture, 'plugins.bundle.config')
   const face = entry.options.inject!() as ResultClipperCardInjected
   const props = {
@@ -1123,7 +1125,7 @@ describe('票 15/16/17：精简参数只写在配置文件里，设置页上没�
 
 
 describe('票 19：设置页上的两个精简开关与整页文案', () => {
-  it('两个开关都在页面上，默认值读得出来：总开关勾着、「按命令语义精简」不勾', async () => {
+  it('两个开关都在页面上，默认值读得出来：两个都勾着', async () => {
     const { fixture, container } = await renderCard({ privacyGate: false })
     const master = (): HTMLInputElement =>
       container.querySelector('#plugin-config-result-clipper-condense input') as HTMLInputElement
@@ -1131,20 +1133,20 @@ describe('票 19：设置页上的两个精简开关与整页文案', () => {
       container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement | null
 
     expect(master().checked).toBe(true)
-    expect(byCommand()?.checked).toBe(false)
+    expect(byCommand()?.checked).toBe(true)
     // 两个开关各自带一句「按自己的需求该怎么设」。
     expect(container.textContent).toContain(fixture.t('condenseHint'))
     expect(container.textContent).toContain(fixture.t('condenseByCommandHint'))
   })
 
-  it('镜像里没有这两个键时也读 host 半 schema 的默认（总开关开、按命令语义关）', async () => {
+  it('镜像里没有这两个键时也读 host 半 schema 的默认（两个都开）', async () => {
     const { container } = await renderCard({
       privacyGate: false,
       condense: undefined as unknown as boolean,
       condenseByCommand: undefined as unknown as boolean,
     })
     expect((container.querySelector('#plugin-config-result-clipper-condense input') as HTMLInputElement).checked).toBe(true)
-    expect((container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement).checked).toBe(false)
+    expect((container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement).checked).toBe(true)
   })
 
   it('两个开关都保存即生效：各点一下当场写回一个字段，不经过任何「保存」', async () => {
@@ -1155,17 +1157,17 @@ describe('票 19：设置页上的两个精简开关与整页文案', () => {
     await settle()
 
     expect(fixture.form.mutations).toEqual([
-      [{ op: 'set', path: ['condenseByCommand'], value: true }],
+      [{ op: 'set', path: ['condenseByCommand'], value: false }],
       [{ op: 'set', path: ['condense'], value: false }],
     ])
-    expect(fixture.form.value).toMatchObject({ condense: false, condenseByCommand: true })
+    expect(fixture.form.value).toMatchObject({ condense: false, condenseByCommand: false })
     // 关掉总开关后「按命令语义精简」收起：它只在总开关开着时有意义。
     expect(container.querySelector('#plugin-config-result-clipper-condense-by-command')).toBeNull()
 
     // 再勾回来：它跟着总开关一起回来，且读回的是已保存的取值。
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-condense input')!)
     await settle()
-    expect((container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement).checked).toBe(true)
+    expect((container.querySelector('#plugin-config-result-clipper-condense-by-command input') as HTMLInputElement).checked).toBe(false)
   })
 
   it('Host 拒绝时该开关下面立刻出现 role="alert"，且不装作已生效', async () => {
