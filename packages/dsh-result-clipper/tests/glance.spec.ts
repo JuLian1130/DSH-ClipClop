@@ -115,8 +115,11 @@ describe('sedWindowLines · 请求的窗口行数', () => {
     expect(sedWindowLines("sed -n -f 1,100p;2,300p f")).toBeUndefined()
     expect(sedWindowLines('sed -n --file=1,200p f')).toBeUndefined()
     expect(sedWindowLines('sed --silent -f script.sed big.txt')).toBeUndefined()
-    // 同一条命令里另有 `-e`：命令行上确实有一个真脚本，照数。
+    // 同一条命令里另有 `-e`：命令行上确实有真脚本，与 `-e` 在 `-f` 之前还是之后无关。
     expect(sedWindowLines("sed -n -e '1,200p' -f script.sed f")).toBe(200)
+    expect(sedWindowLines("sed -n -f script.sed -e '1,200p' f")).toBe(200)
+    // `--file=` 的操作数在同一个 token 里，不许再吞掉后面那个 `-e`：200 + 299。
+    expect(sedWindowLines("sed -n -e '1,200p' --file=script.sed -e '2,300p' f")).toBe(499)
   })
 
   it('真窗口一条都不漏：真地址与替换文本 / 块 / 多脚本混在一起时照数', () => {
