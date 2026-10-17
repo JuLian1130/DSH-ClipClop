@@ -1,8 +1,9 @@
 /**
- * 票 20 的上游入口不变量矩阵：所有族 × 所有说明形态 × 哪些配置边界。
+ * 票 20 的上游入口不变量矩阵：所有族 × 适用的说明形态 × 哪些配置边界。
  *
  * 判据只有两条，写成矩阵而不是单点例子：① 上游说明逐字留在输出里；② 有上游入口时入口归属是 `upstream`
  * （不写第二条），`(unavailable)` 不算入口。新增一族、一种尾部形态或一个边界，就往这张表里加一行。
+ * `compactDiff` 不列截断形态：`truncated` 事实会先把它拦在族外（`facts: { truncated: false }`）。
  *
  * @module
  */
@@ -50,7 +51,11 @@ const cases: readonly Case[] = [
   { name: '通用链 · 带路径截断说明', family: 'general', body: withTail(TRUNCATED), entry: 'upstream', contains: [TRUNCATED.trim()] },
   { name: '通用链 · (unavailable)', family: 'general', body: withTail(UNAVAILABLE), entry: 'own', contains: [UNAVAILABLE.trim()] },
   { name: 'sedWindow · 超长位置说明', family: 'sedWindow', body: withTail(LONG_POSITION), entry: 'upstream', contains: [LONG_POSITION.trim()] },
+  { name: 'sedWindow · 带路径截断说明', family: 'sedWindow', body: withTail(TRUNCATED), entry: 'upstream', contains: [TRUNCATED.trim()] },
+  { name: 'sedWindow · (unavailable)', family: 'sedWindow', body: withTail(UNAVAILABLE), entry: 'own', contains: [UNAVAILABLE.trim()] },
+  { name: 'rawDump · 位置说明', family: 'rawDump', body: withTail(POSITION), entry: 'upstream', contains: [POSITION.trim()] },
   { name: 'rawDump · 带路径截断说明', family: 'rawDump', body: withTail(TRUNCATED), entry: 'upstream', contains: [TRUNCATED.trim()] },
+  { name: 'rawDump · (unavailable)', family: 'rawDump', body: withTail(UNAVAILABLE), entry: 'own', contains: [UNAVAILABLE.trim()] },
   { name: 'compactDiff · 说明 + 退出标记', family: 'compactDiff', body: `${GIT_DIFF_BODY}\n[exit code: 1]${POSITION}`, entry: 'upstream', contains: ['[exit code: 1]', POSITION.trim()] },
   { name: 'compactDiff · 超长位置说明', family: 'compactDiff', body: `${GIT_DIFF_BODY}${LONG_POSITION}`, entry: 'upstream', contains: [LONG_POSITION.trim()] },
 ]

@@ -343,7 +343,7 @@ native `glob` 写 `Full sorted result stored at: …`（三者共用 ` stored at
 | 输出预算 / 上限 / 抢救与截断的边界 | `src/summary.ts`（`summarizeBudget` / `SUMMARY_CEILING_TOKENS` / `salvageSummary`）、设计文档「长度约束」与「摘要」、本文 §4.8 |
 | `extract` 的必填性、哨兵与跳过写法 | `src/extract.ts`（`EXTRACT_DESCRIPTION` / 三段说明 / `isWholeResult`）、`src/privacy.ts`（`ReminderReason`）、本文 §4.9 |
 | 开关语义 | `src/config.ts`、`src/client/card.tsx` 与 `src/client/locales.ts`（中英）、README 的配置一节 |
-| 精简的规则、参数、判定顺序与闸门口径 | `packages/dsh-result-clipper/src/condense.ts`（规则表、尺寸下限、净收益阈值、封顶参数、上游入口识别与尾部标记回贴）、`docs/dsh-result-clipper-design.md`「工具结果精简」、本文 §1.0.1 与 §3 |
+| 精简的规则、参数、判定顺序与闸门口径 | `packages/dsh-result-clipper/src/condense.ts`（规则表、尺寸下限、净收益阈值、封顶参数、尾部标记回贴）、`src/notice.ts`（上游入口识别）、`docs/dsh-result-clipper-design.md`「工具结果精简」、本文 §1.0.1 与 §3 |
 | 精简的工具集或回退入口文案 | `src/condense.ts`（`CONDENSE_TOOLS`）、`src/entry.ts`（`composeEntry` 的 `condense` 措辞）、本文 §0 与 §4.11 |
 | 提示词契约（外壳、schema、动作集合） | `src/summary.ts` / `src/privacy.ts` / `src/extract.ts`、本文 §4.3 |
 
