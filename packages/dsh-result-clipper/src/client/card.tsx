@@ -1071,9 +1071,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
     <hr style={DIVIDER_STYLE} />
 
-    {/* 工具结果精简自成一层（不发模型请求），两个开关都**保存即生效**；它们不折叠任何承载「保存」按钮的组，
-        这一层也没有别的参数需要草稿——其余参数都是非 volatile，只写在配置文件里，页面上看不见。
-        「按命令语义精简」只在总开关开着时才有意义，从属关系用缩排表示。 */}
+    {/* 这一层只有这两个字段上页面：其余参数都是非 volatile、只写在配置文件里；「按命令语义精简」只在总开关
+        开着时才有意义，从属关系用缩排表示。 */}
     <CheckRow id="plugin-config-result-clipper-condense" label={props.t('condense')}
       hint={props.t('condenseHint')}
       checked={condense}
