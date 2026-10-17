@@ -1,0 +1,39 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Doc evidence lint
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}...${{ github.sha }}"
+          elif [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            RANGE="HEAD~1...HEAD"
+          else
+            RANGE="${{ github.event.before }}...${{ github.sha }}"
+          fi
+          node scripts/check-doc-evidence.mjs --range "$RANGE"
+
+      - run: pnpm -r run build
+      - run: pnpm -r run typecheck
+      - run: pnpm -r --workspace-concurrency=1 test
