@@ -120,6 +120,16 @@ describe('sedWindowLines · 请求的窗口行数', () => {
     expect(sedWindowLines("sed -n -f script.sed -e '1,200p' f")).toBe(200)
     // `--file=` 的操作数在同一个 token 里，不许再吞掉后面那个 `-e`：200 + 299。
     expect(sedWindowLines("sed -n -e '1,200p' --file=script.sed -e '2,300p' f")).toBe(499)
+    // `-f` 之后的首个非选项操作数是**输入文件**：它叫 `1,200p` 也不是脚本。
+    expect(sedWindowLines("sed -n -f script.sed '1,200p'")).toBeUndefined()
+  })
+
+  it('`s` 的 `w` 标志把文件名吃到行尾：文件名里的 `;N,Mp` 不是命令', () => {
+    // 系统 sed 实测：`sed -n 's/x/y/pw /tmp/out;1,200p' f` 退出 0、输出 400 行、建出的文件就带这个分号。
+    expect(sedWindowLines("sed -n 's/x/y/pw /tmp/out;1,200p' f")).toBeUndefined()
+    expect(sedWindowLines("sed -n 's/x/y/w /tmp/out;1,200p' f")).toBeUndefined()
+    // 阳性对照：`w` 之前真有窗口时照数，`w` 之后的行尾内容不再算。
+    expect(sedWindowLines("sed -n '1,100p;s/x/y/w /tmp/out;1,200p' f")).toBe(100)
   })
 
   it('真窗口一条都不漏：真地址与替换文本 / 块 / 多脚本混在一起时照数', () => {

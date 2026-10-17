@@ -125,7 +125,7 @@ function shellTokens(command: string): string[] {
  * 不表态（否则「脚本名叫 `1,200p`」这种文件名会被读成 200 行窗口）。同一条命令里另有 `-e` 时，`-e` 的脚本
  * 照常算——命令行上确实有一个真脚本，与 `-e` 在 `-f` 之前还是之后无关。
  * @param tokens - {@link shellTokens} 切出的操作数（第一个是命令名）。
- * @returns 脚本操作数，按出现顺序；脚本在文件里时为 `undefined`。
+ * @returns 脚本操作数，按出现顺序；脚本**只在**文件里（没有 `-e`）时为 `undefined`。
  */
 function sedScripts(tokens: readonly string[]): string[] | undefined {
   const scripts: string[] = []
@@ -299,6 +299,10 @@ const LINE_TEXT_COMMANDS = '#aicrw'
  *
  * 参数里可以有分号与逗号（`s|x|;1,200p|`）——把整条命令跳过去，它们就不会被当成分段地址，这正是「只在地址
  * 部分取窗口」在替换文本上的落点。
+ *
+ * `s` 的 flags 里出现 `w` 时后面跟一个**文件名**，文件名同样吃到行尾：`sed -n 's/x/y/pw /tmp/out;1,200p' f`
+ * 的文件名就是 `/tmp/out;1,200p`（系统 sed 实测退出 0、输出 400 行、建出的文件带这个分号），那句 `;1,200p`
+ * 不是命令。
  * @param script - 脚本原文。
  * @param at - 命令字母之后的位置（定界符所在处）。
  * @returns 下一个命令边界的位置（`;` / 换行 / `}` / 串尾）。
@@ -307,7 +311,10 @@ function skipSubstitution(script: string, at: number): number {
   const delimiter = script[at]
   if (delimiter === undefined || delimiter === '\\' || delimiter === '\n') return at + 1
   const afterPattern = skipDelimited(script, at + 1, delimiter)
-  return skipToBoundary(script, skipDelimited(script, afterPattern, delimiter))
+  const afterReplacement = skipDelimited(script, afterPattern, delimiter)
+  const flagsEnd = skipToBoundary(script, afterReplacement)
+  const write = script.slice(afterReplacement, flagsEnd).indexOf('w')
+  return write < 0 ? flagsEnd : lineEnd(script, afterReplacement + write)
 }
 
 /**
