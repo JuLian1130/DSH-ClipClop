@@ -15,9 +15,13 @@
  * 漏认的后果是本层追加第二条入口、模型面对两条互相竞争的说明；认到的收益是硬的：上游那条指向**完整输出**，
  * 本层只指向被保留的片段，能复用它就不该再写一条。
  */
-export const POSITION_NOTICE_MARKER = ' stored at: '
+const POSITION_NOTICE_MARKER = ' stored at: '
 
-/** bash 工具追加的截断说明；路径不是 `(unavailable)` 时它就是一条指向完整输出的上游入口。 */
+/**
+ * bash 工具追加的截断说明；路径不是 `(unavailable)` 时它就是一条指向完整输出的上游入口。
+ *
+ * 漏认的后果是把 `(unavailable)` 当成可用入口：本层因此不写自己的入口，模型没有可回退的位置。
+ */
 export const TRUNCATED_NOTICE = /\[output truncated; full output: ([^\]]*)\]/g
 
 /** 截断说明没有可用的完整输出路径时写入的占位符。 */

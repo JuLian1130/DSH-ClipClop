@@ -362,6 +362,17 @@ describe('票 20 · 上游入口与尾部标记', () => {
     expect(out.text).not.toContain('行已截断')
   })
 
+  it('尾部预算只剩 1 行时，说明行本身仍算上游入口', () => {
+    // 前导空行被尾部预算裁掉，但说明那一行还在、路径完整——不能因此改记本层入口。
+    const out = condenseText('grep', `${block(301)}${notice}`, at({ tailLines: 1 }))
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    expect(out.lossy).toBe(true)
+    if (!out.lossy) return
+    expect(out.entry).toBe('upstream')
+    expect(out.text).toContain(notice.trim())
+  })
+
   it('规则抛异常时整体放弃、交回下游正文（不与「没变短」混同）', () => {
     const throwing: CondenseRule = {
       id: 'strip-ansi',

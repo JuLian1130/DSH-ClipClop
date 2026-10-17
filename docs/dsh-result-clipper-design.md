@@ -279,4 +279,4 @@ route 是否配出来决定，插件不替用户把正文发出去。证据与�
 - **截断按族**：`truncated: true` 时 `compactDiff` 不接、`sedWindow` / `rawDump` 接（`tests/dispatch.spec.ts`）；带路径的截断说明当上游入口，`(unavailable)` 时写本层入口（`tests/dispatch-pipeline.spec.ts`）。
 - **退出码不再挡族**：`exitCode: 1` 时三族照常命中；合法 diff + `[exit code: 1]` 被 `compactDiff` 收窄且标记保留；不是 diff 的失败正文由 handler 放弃后落通用链（`tests/dispatch-pipeline.spec.ts`）。
 - **语料**：通用链 `condensed` 1,157（票 15 口径 1,006；+151 = 148 条位置说明守卫放行 + 3 条上游入口不预留后过线）、`abstained` 0、`not-shorter` 412，幂等违反 0；`compactDiff` / `sedWindow` / `rawDump` 的语料读数不变（语料正文没有这些尾部块，`truncated` 事实也拿不到）。
-- **门禁**：四 workspace typecheck 全过、`pnpm test` 29 文件 / 539 用例全绿。
+- **门禁**：四 workspace typecheck 全过、`pnpm test` 29 文件 / 541 用例全绿。

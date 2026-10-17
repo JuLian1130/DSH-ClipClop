@@ -216,16 +216,17 @@ function splitForCompactDiff(text: string): { readonly core: string, readonly ta
  * 这次有损替换是否已经有一条上游入口可回退。
  *
  * 两条来源：正文末尾的 `(... stored at: ...)`（spill-policy / `grep` / `glob`），以及 bash 的
- * `[output truncated; full output: <path>]`（路径不是 `(unavailable)` 时）。**还必须确认整条说明真的留在替换
+ * `[output truncated; full output: <path>]`（路径不是 `(unavailable)` 时）。**还必须确认说明本身真的留在替换
  * 结果里**：尾部预算会留住它、单行截断不碰它，但如果某条规则把它裁掉了，就不能假装还有入口——那时交回
- * `false`，由本层写自己的入口。只认出 ` stored at: ` 不够：路径被切掉的说明指不回完整输出（票 20 复审）。
+ * `false`，由本层写自己的入口。只认出 ` stored at: ` 不够：路径被切掉的说明指不回完整输出（票 20 复审）；
+ * 前导的两个换行只是分隔符，尾部预算只剩 1 行时会被裁掉，不算说明被裁。
  * @param body - 下游正文。
  * @param composed - 精简后、已接回尾部块的正文。
  * @returns 已有上游入口时为真。
  */
 function hasUpstreamEntry(body: string, composed: string): boolean {
   const notice = trailingPositionNotice(body)
-  if (notice !== undefined && composed.includes(notice)) return true
+  if (notice !== undefined && composed.includes(notice.trim())) return true
   for (const match of body.matchAll(TRUNCATED_NOTICE)) {
     if (match[1] !== UNAVAILABLE_PATH && composed.includes(match[0])) return true
   }
