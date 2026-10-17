@@ -11,7 +11,8 @@
  *    于是 `sed -n 's/x/1,200p/p' f` 这种把范围写在**替换文本**里的调用会被误判成大窗口。落地办法是最小命令
  *    走查器（{@link walkScript}）：认地址、认命令字母；`s` / `y` 按定界符跳过两段参数，注释与 `a`/`i`/`c`/`r`/`w`
  *    跳到行尾，其余命令整条跳到下一个边界——替换文本与命令自由文本里的 `N,Mp` 因此都不是地址
- *    （`sed -n 's/x/;1,200p/p' f` 与 `sed -n '1,100p # 1,200p' f` 都不是大窗口）。
+ *    （`sed -n 's/x/;1,200p/p' f` 与 `sed -n '1,100p # 1,200p' f` 都不是大窗口）。`-f` / `--file` 把脚本放在
+ *    文件里，命令行上根本没有脚本，这一族不表态（`sed -n -f '1,200p' f` 里的 `1,200p` 是脚本**文件名**）。
  * 2. 行按 `\n` 切（与 `gitdiff.ts` 同口径）；原型用 `str.splitlines()`，它还在 `\r`、`\v` 等处切。
  *
  * 守卫放弃（正文没兑现、低于尺寸下限）一律交回 `undefined`，调用方据此落回通用链；抛出不在这一层兜——安全层
@@ -118,10 +119,14 @@ function shellTokens(command: string): string[] {
  * 一条 `sed` 命令里的脚本操作数：每个 `-e` / `--expression=` 的值；没有 `-e` 时是**首个非选项操作数**。
  *
  * 多个 `-e` 各自是脚本、地址部分逐条累加——原型扫整段命令串时把它们都算了进去。
+ *
+ * `-f` / `--file` 的脚本在**文件**里、不在命令行上：它的操作数是文件名而不是脚本，所以没有 `-e` 时这一族
+ * 不表态（否则「脚本名叫 `1,200p`」这种文件名会被读成 200 行窗口）。同一条命令里另有 `-e` 时，`-e` 的脚本
+ * 照常算——命令行上确实有一个真脚本。
  * @param tokens - {@link shellTokens} 切出的操作数（第一个是命令名）。
- * @returns 脚本操作数，按出现顺序。
+ * @returns 脚本操作数，按出现顺序；脚本在文件里时为 `undefined`。
  */
-function sedScripts(tokens: readonly string[]): string[] {
+function sedScripts(tokens: readonly string[]): string[] | undefined {
   const scripts: string[] = []
   for (let index = 1; index < tokens.length; index++) {
     const token = tokens[index] as string
@@ -135,6 +140,11 @@ function sedScripts(tokens: readonly string[]): string[] {
     }
     if (token.startsWith('--expression=')) {
       scripts.push(token.slice('--expression='.length))
+      continue
+    }
+    if (token === '-f' || token === '--file' || token.startsWith('--file=')) {
+      if (scripts.length === 0) return undefined
+      index += 1
       continue
     }
     if (token.startsWith('-')) continue
@@ -338,8 +348,11 @@ export function sedWindowLines(command: string): number | undefined {
   if (tokens[0] !== 'sed') return undefined
   if (!tokens.some(token => token === '-n' || token === '--quiet' || token === '--silent')) return undefined
 
+  const scripts = sedScripts(tokens)
+  // 脚本在文件里（`-f` / `--file`）：地址部分看不到，这一族不表态。
+  if (scripts === undefined) return undefined
   const tally: WindowTally = { total: 0, unbounded: false }
-  for (const script of sedScripts(tokens)) walkScript(script, tally)
+  for (const script of scripts) walkScript(script, tally)
   if (tally.unbounded) return UNBOUNDED_WINDOW
   return tally.total === 0 ? undefined : tally.total
 }

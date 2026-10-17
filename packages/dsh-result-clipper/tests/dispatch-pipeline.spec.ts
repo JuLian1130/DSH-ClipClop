@@ -483,7 +483,7 @@ describe('票 17 判据 2：大窗口 `sed` 被收窄；不是区间打印的 `s
     expect(condense).toMatchObject({ family: 'sedWindow', rules: ['sedWindow'] })
   })
 
-  it('阴性：替换 / `-i` 就地编辑 / 范围只写在替换文本里（含替换文本里的分号）——正文 ≥60 行也不落这一族', async () => {
+  it('阴性：替换 / `-i` 就地编辑 / 范围只写在替换文本里 / 脚本在文件里的 `-f`——正文 ≥60 行也不落这一族', async () => {
     const commands = [
       "sed 's/line/LINE/' bigf",
       "sed -i 's/line/LINE/' bigf",
@@ -492,6 +492,8 @@ describe('票 17 判据 2：大窗口 `sed` 被收窄；不是区间打印的 `s
       "sed -n 's/x/;1,200p/p' bigf",
       // GNU sed 把 `p` 后面的 `# 1,200p` 当注释（输出 100 行）：命令的自由文本不是地址（票 17 收口 2）。
       "sed -n '1,100p # 1,200p' bigf",
+      // `-f` 的操作数是脚本**文件名**（内容是替换也一样）：命令行上没有脚本可看（票 17 收口 3）。
+      "sed -n -f '1,200p' bigf",
     ]
     for (const command of commands) {
       const { text, condense } = await run({ condenseByCommand: true }, SED_WINDOW_BODY, command)
