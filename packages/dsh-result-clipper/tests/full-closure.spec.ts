@@ -375,7 +375,7 @@ describe('票 08 全量闭合三：配置默认值、保存即生效与逐字段
     admissionModel: '',
     privacyProvider: '',
     privacyModel: '',
-    minInlineTokens: 1024,
+    minInlineTokens: 512,
     maxSummarizeTokens: 12500,
     summaryReasoningEffort: '',
     admissionReasoningEffort: '',

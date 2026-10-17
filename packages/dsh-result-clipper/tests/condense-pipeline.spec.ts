@@ -460,11 +460,12 @@ describe('票 15 判据 1：精简层只作用于自己的工具集', () => {
     async (toolName) => {
       // 这一条同时是票 19 的阴性对照：`read` / `web_fetch` 的决策自票 15 交付（主仓 `69eba3a`）起逐字未变——
       // 两臂相等只证明「装与不装同一条」，下面这行字面量才把「决策本身是什么」钉住（差一个字段即红）。
-      const withLayer = await mounted()
+      // 摘要候选下限不是本用例的自变量：显式钉回 1024，免得默认值（现 512）把 3,599 字节的正文变成候选。
+      const withLayer = await mounted({ minInlineTokens: 1024 })
       withLayer.fixture.ctx.tools.register(textTool(toolName, LONG_LINES_BODY))
       const result = await withLayer.fixture.ctx.tools.execute(exec(toolName))
 
-      const withoutLayer = await mounted({ condense: false })
+      const withoutLayer = await mounted({ condense: false, minInlineTokens: 1024 })
       withoutLayer.fixture.ctx.tools.register(textTool(toolName, LONG_LINES_BODY))
       const other = await withoutLayer.fixture.ctx.tools.execute(exec(toolName))
 

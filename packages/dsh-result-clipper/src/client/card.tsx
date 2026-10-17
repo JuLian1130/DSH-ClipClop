@@ -665,7 +665,7 @@ const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'routeProvider', kind: 'text' },
   { field: 'routeModel', kind: 'text' },
   { field: 'summaryReasoningEffort', kind: 'text', fallback: '' },
-  { field: 'minInlineTokens', kind: 'number', fallback: 1024 },
+  { field: 'minInlineTokens', kind: 'number', fallback: 512 },
   { field: 'maxSummarizeTokens', kind: 'number', fallback: 12500 },
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
 ]

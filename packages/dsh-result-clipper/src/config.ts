@@ -5,7 +5,7 @@
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
  * 字段的默认值即规格「配置项」的当前默认：**摘要能力开启**（默认只摘要主模型主动请求摘要的调用）、隐私闸门关闭、
  * `web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
- * 隐私 route 未配置、阈值 1024/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
+ * 隐私 route 未配置、阈值 512/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
  * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（`ruleSummary`）、debug 关闭且不
  * 自动改用临时路径、干跑关闭、**工具结果精简开启**、**按命令语义精简开启**、`git diff` / `sed` 大窗口 /
  * 原始转储三族开启。
@@ -215,7 +215,7 @@ export const Config = z.object({
   admissionModel: z.string().default('').volatile(),
   privacyProvider: z.string().default('').volatile(),
   privacyModel: z.string().default('').volatile(),
-  minInlineTokens: z.number().default(1024).volatile(),
+  minInlineTokens: z.number().default(512).volatile(),
   maxSummarizeTokens: z.number().default(12500).volatile(),
   summaryReasoningEffort: effort(),
   admissionReasoningEffort: effort(),

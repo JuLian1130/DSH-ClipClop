@@ -267,9 +267,9 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，三个 provider 行同样各指一次。
     expect(container.textContent).toContain(fixture.t('modelSourceHint'))
     expect(container.textContent).toContain('设置 → 模型')
-    // 默认值来自 schema：阈值 1024 / 12500；三个角色的推理档位默认是空串＝「不推理」（具体 id 按 route 的档位表在
+    // 默认值来自 schema：阈值 512 / 12500；三个角色的推理档位默认是空串＝「不推理」（具体 id 按 route 的档位表在
     // 请求前解析，所以控件上显示的是空项）。
-    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
+    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('512')
     expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
     for (const role of ['summary', 'admission', 'privacy']) {
       expect((container.querySelector(`#plugin-config-result-clipper-${role}-effort`) as HTMLSelectElement).value).toBe('')
@@ -771,7 +771,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
 
     // 档位的内置默认是空串＝「不推理」（具体发哪个 id 由该 route 的档位表在请求前决定）。
     expect((container.querySelector('#plugin-config-result-clipper-summary-effort') as HTMLSelectElement).value).toBe('')
-    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('1024')
+    expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('512')
     expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
     expect((container.querySelector('#plugin-config-result-clipper-summary-prompt') as HTMLTextAreaElement).value)
       .toBe(DEFAULT_SUMMARY_RULE)

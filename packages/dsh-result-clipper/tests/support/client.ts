@@ -59,7 +59,7 @@ export const SECTION_DEFAULTS: StubSection = {
   admissionModel: '',
   privacyProvider: '',
   privacyModel: '',
-  minInlineTokens: 1024,
+  minInlineTokens: 512,
   maxSummarizeTokens: 12500,
   // 档位默认留空＝「不推理」，具体发哪个 id 由该 route 的档位表在请求前决定。
   summaryReasoningEffort: '',

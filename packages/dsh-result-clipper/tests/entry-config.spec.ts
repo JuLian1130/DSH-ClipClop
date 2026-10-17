@@ -68,7 +68,7 @@ describe('配置契约', () => {
     expect(fiber.config?.admissionModel.get()).toBe('')
     expect(fiber.config?.privacyProvider.get()).toBe('')
     expect(fiber.config?.privacyModel.get()).toBe('')
-    expect(fiber.config?.minInlineTokens.get()).toBe(1024)
+    expect(fiber.config?.minInlineTokens.get()).toBe(512)
     expect(fiber.config?.maxSummarizeTokens.get()).toBe(12500)
     // 档位留空＝「不推理」，具体发哪个 id 由该 route 的档位表在请求前决定。
     expect(fiber.config?.summaryReasoningEffort.get()).toBe('')

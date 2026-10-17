@@ -149,7 +149,7 @@ export function apply(ctx: Context): void {
           admissionModel: stringField(form, 'admissionModel'),
           privacyProvider: stringField(form, 'privacyProvider'),
           privacyModel: stringField(form, 'privacyModel'),
-          minInlineTokens: numberField(form, 'minInlineTokens', 1024),
+          minInlineTokens: numberField(form, 'minInlineTokens', 512),
           maxSummarizeTokens: numberField(form, 'maxSummarizeTokens', 12500),
           summaryReasoningEffort: effortField(form, 'summaryReasoningEffort'),
           admissionReasoningEffort: effortField(form, 'admissionReasoningEffort'),

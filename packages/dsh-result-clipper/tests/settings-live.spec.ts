@@ -128,7 +128,7 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
     const fixture = await booted({})
     expect(fixture.config.routeProvider.get()).toBe('')
     expect(fixture.config.privacyProvider.get()).toBe('')
-    expect(fixture.config.minInlineTokens.get()).toBe(1024)
+    expect(fixture.config.minInlineTokens.get()).toBe(512)
     expect(fixture.config.maxSummarizeTokens.get()).toBe(12500)
     // 档位字段默认留空＝「不推理」，具体发哪个 id 在请求前按该 route 的档位表决定。
     expect(fixture.config.summaryReasoningEffort.get()).toBe('')
