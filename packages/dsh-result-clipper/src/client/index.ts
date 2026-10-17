@@ -162,9 +162,9 @@ export function apply(ctx: Context): void {
           dryRun: booleanField(form, 'dryRun'),
           debugPath: stringField(form, 'debugPath'),
           // 工具结果精简的两个开关：都是 volatile（保存即生效）；镜像里还没有这个键时按 host 半 schema 的默认显示
-          // （总开关开、按命令语义关）。
+          // （两个都开）。
           condense: booleanField(form, 'condense', true),
-          condenseByCommand: booleanField(form, 'condenseByCommand'),
+          condenseByCommand: booleanField(form, 'condenseByCommand', true),
           modelCatalog: catalog,
         },
         saveFields: (ops: readonly ResultClipperSettingOp[]) => form.mutate(ops),

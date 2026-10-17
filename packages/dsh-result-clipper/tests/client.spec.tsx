@@ -61,9 +61,7 @@ async function renderCard(
   catalog?: readonly StubCatalogProvider[],
 ): Promise<{ fixture: ClientFixture & { readonly form: StubForm }, container: HTMLElement, face: ResultClipperCardInjected }> {
   const fixture = await mounted(catalog)
-  // 显式 `undefined` 表示「镜像里没有这个键」：不覆盖替身里的 host 默认值。
-  const overrides = Object.fromEntries(Object.entries(initial).filter(([, value]) => value !== undefined))
-  fixture.form.value = { ...fixture.form.value, summarize: true, privacyGate: true, ...overrides }
+  fixture.form.value = { ...fixture.form.value, summarize: true, privacyGate: true, ...initial }
   const entry = only(fixture, 'plugins.bundle.config')
   const face = entry.options.inject!() as ResultClipperCardInjected
   const props = {
