@@ -233,6 +233,42 @@ describe('票 20 · 上游入口与尾部标记', () => {
     expect(out.entry).toBe('own')
   })
 
+  it('上游说明超过单行上限也不被截断：路径仍指得回完整输出', () => {
+    const longNotice = `\n\n(Full grep result stored at: /tmp/${'x'.repeat(160)}.txt)`
+    const out = condenseText('grep', `${block(301)}${longNotice}`, at({ maxLineChars: 80 }))
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    if (!out.lossy) return
+    expect(out.entry).toBe('upstream')
+    expect(out.text.endsWith(longNotice)).toBe(true)
+    expect(out.text).not.toContain('单行截断')
+  })
+
+  it('bash 的长截断说明同样不被单行截断，仍算上游入口（退出标记跟在它后面）', () => {
+    // 上游 `renderResult` 把退出标记放在最后，所以截断说明不是最后一行。
+    const marker = `\n[output truncated; full output: /tmp/${'y'.repeat(160)}.txt]`
+    const out = condenseText('bash', `${block(301)}${marker}\n[exit code: 1]`, at({ maxLineChars: 80 }))
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    if (!out.lossy) return
+    expect(out.entry).toBe('upstream')
+    expect(out.text).toContain(marker)
+    expect(out.text.endsWith('[exit code: 1]')).toBe(true)
+  })
+
+  it('某条规则把说明裁坏时不再假装还有上游入口', () => {
+    const trimTail: CondenseRule = {
+      id: 'tail-cap',
+      lossy: true,
+      apply: (text: string): string => text.slice(0, -20),
+    }
+    const out = condenseText('grep', `${block(301)}${notice}`, at({ minNetGainUnits: 0, entryReserveChars: 0 }), [trimTail])
+    expect(out.kind).toBe('condensed')
+    if (out.kind !== 'condensed') return
+    if (!out.lossy) return
+    expect(out.entry).toBe('own')
+  })
+
   it('上游入口已经存在时不把本层入口的预留算进闸门', () => {
     const body = `${block(301)}${notice}`
     // 把本层入口预留抬到 1024 单位（4096 字符）：没有上游入口时过不了闸门；上游入口不算这条预留。

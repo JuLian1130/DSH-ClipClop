@@ -67,8 +67,9 @@
  *
  * 本票（16）在精简层里加**分派**（`dispatch.ts`）：打开「按命令语义精简」后，先按扁平事实 map 与有序规则表取
  * **首个命中者**，命中某一族时**只跑那一族**（`gitdiff.ts` 的 `compactDiff`），不再叠一遍通用链；未命中、该族
- * 关着、被守卫放弃、非零退出码或输入已被工具自身截断才落通用链。两条守卫与平台面（只认 `bash`）都在
- * `selectFamily` 里；观测字段 `condense.family` / `condense.facts` 只在分派真发生时写。
+ * 关着、被族守卫放弃才落通用链。平台面（只认 `bash`）与命令匹配在 `selectFamily` 里；需要完整输入的族用
+ * `facts` 自己拒绝截断输入，非零退出码不再拦族（票 20）。观测字段 `condense.family` / `condense.facts` 只在
+ * 分派真发生时写。
  *
  * 本票（17）再加两族（`glance.ts`）：`sedWindow`（请求窗口 ≥101 行的 `sed`）与 `rawDump`（`cat` / `ls` /
  * `head` / `tail` / `nl`），规则表顺序 `compactDiff` → `sedWindow` → `rawDump`，命中即只跑那一族。两族各有
@@ -382,8 +383,9 @@ async function process(
           maxLineChars: config.condenseMaxLineChars,
           entryReserveChars: ENTRY_RESERVE,
         }
-        // 票 16：先分派、再决定跑哪一套。事实按**下游正文**现算（计划 §4.2 末尾），三条「不接族」的判据都在
-        // `selectFamily` 里（平台面只认 bash、输入已被截断、非零退出码），三条都只放弃命令族那一步。
+        // 票 16：先分派、再决定跑哪一套。事实按**下游正文**现算（计划 §4.2 末尾）；「不接族」的判据都在
+        // `selectFamily` 里（平台面只认 bash；需要完整输入的族用 `facts` 自守），只放弃命令族那一步——
+        // 票 20 起非零退出码不再拦族。
         // 开关关着时连事实都不摊——那时不发生分派，观测里也就不该有分派事实。
         const facts = config.condenseByCommand.get() ? factsOf(exec, result, body, truncated) : undefined
         // 族开关关着就等于那一族不在表里（票 17 判据 1）：它不接手，这次落通用链。

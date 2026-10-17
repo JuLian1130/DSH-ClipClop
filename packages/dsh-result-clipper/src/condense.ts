@@ -171,8 +171,8 @@ const ANSI = new RegExp(
  * 这一段，都收在正文末尾的 `\n\n(...)` 块里。
  *
  * **这是一条外部约定假设**（DSH `>= 0.2.0-rc.2` 的三处写入点），不是本插件与它们之间的契约：它们改文案时这里
- * 会漏认，后果是**本来该放弃的那次封顶照做**，于是正文里可能同时出现两处位置说明。认到的收益是硬的：有损替换
- * 会盖掉上游那条指向**完整输出**的说明，只留下指向本层保留片段的入口，对模型是净损失。
+ * 会漏认，后果是本层追加第二条入口、模型面对两条互相竞争的说明。认到的收益是硬的：上游那条指向**完整输出**，
+ * 本层只指向被保留的片段，能复用它就不该再写一条。
  */
 const POSITION_NOTICE_MARKER = ' stored at: '
 
@@ -188,15 +188,6 @@ function trailingPositionNotice(text: string): string | undefined {
   if (start < 0) return undefined
   const notice = trimmed.slice(start)
   return notice.includes(POSITION_NOTICE_MARKER) ? notice : undefined
-}
-
-/**
- * 正文末尾是否已经有一条上游位置说明。
- * @param text - 下游正文。
- * @returns 末尾有 {@link trailingPositionNotice} 时为真。
- */
-function hasPositionNotice(text: string): boolean {
-  return trailingPositionNotice(text) !== undefined
 }
 
 /** bash 工具追加的截断说明；路径不是 `(unavailable)` 时它就是一条指向完整输出的上游入口。 */
@@ -237,15 +228,16 @@ function splitForCompactDiff(text: string): { readonly core: string, readonly ta
  * 这次有损替换是否已经有一条上游入口可回退。
  *
  * 两条来源：正文末尾的 `(... stored at: ...)`（spill-policy / `grep` / `glob`），以及 bash 的
- * `[output truncated; full output: <path>]`（路径不是 `(unavailable)` 时）。**还必须确认它真的留在替换结果里**：
- * 尾部预算与 `compactDiff` 的回贴都会留住它，但如果某条规则把它裁掉了，就不能假装还有入口——那时交回 `false`，
- * 由本层写自己的入口。
+ * `[output truncated; full output: <path>]`（路径不是 `(unavailable)` 时）。**还必须确认整条说明真的留在替换
+ * 结果里**：尾部预算会留住它、单行截断不碰它，但如果某条规则把它裁掉了，就不能假装还有入口——那时交回
+ * `false`，由本层写自己的入口。只认出 ` stored at: ` 不够：路径被切掉的说明指不回完整输出（票 20 复审）。
  * @param body - 下游正文。
  * @param composed - 精简后、已接回尾部块的正文。
  * @returns 已有上游入口时为真。
  */
 function hasUpstreamEntry(body: string, composed: string): boolean {
-  if (hasPositionNotice(body) && composed.includes(POSITION_NOTICE_MARKER)) return true
+  const notice = trailingPositionNotice(body)
+  if (notice !== undefined && composed.includes(notice)) return true
   for (const match of body.matchAll(TRUNCATED_NOTICE)) {
     if (match[1] !== UNAVAILABLE_PATH && composed.includes(match[0])) return true
   }
@@ -313,6 +305,19 @@ function dedupAdjacent(text: string): string {
 }
 
 /**
+ * 这行是不是指向完整输出的尾部元数据（位置说明或截断说明）。
+ *
+ * 它不参与单行截断：按 `maxLineChars` 截掉路径等于把唯一可回退的入口弄坏（票 20 复审）。不能假设它一定在最后
+ * 一行——bash 的 `[exit code: N]` / 超时 / 信号标记可能跟在截断说明之后（上游 `renderResult` 把退出标记放在最后）。
+ * @param line - 正文的一行。
+ * @returns 是元数据行时为真。
+ */
+function isMetadataLine(line: string): boolean {
+  return (line.startsWith('(') && line.includes(POSITION_NOTICE_MARKER))
+    || line.match(TRUNCATED_NOTICE) !== null
+}
+
+/**
  * 尾部偏置封顶：先截超长单行，再在超过 {@link CondenseParams.maxLines} 行时保留头
  * {@link CondenseParams.headLines} + 尾 {@link CondenseParams.tailLines}，中间换成一行省略标记。
  *
@@ -321,7 +326,8 @@ function dedupAdjacent(text: string): string {
  * 第二遍不再触发；行封顶的产出是 250 行上下，同样不再触发——这条有损规则因此也是幂等的。
  *
  * **上游位置说明**：它通常在正文末尾，`tailLines` 的尾部预算会把它留住；留住的那一条由 `condenseText` 识别为
- * 上游入口，调用方不再写本层入口（票 20）。这条规则因此不再因为说明的存在而放弃。
+ * 上游入口，调用方不再写本层入口（票 20）。这条规则因此不再因为说明的存在而放弃。**位置说明与截断说明所在的
+ * 行不参与单行截断**：它们指向完整输出，截掉路径等于把入口弄坏（票 20 复审）。
  * @param text - 下游正文。
  * @param params - 精简参数。
  * @returns 封顶后的正文；不触发封顶时原样交回。
@@ -334,7 +340,7 @@ function tailCap(text: string, params: CondenseParams): string | undefined {
   let truncated = 0
   if (overLongLine) {
     capped = capped.map((line) => {
-      if (line.length <= params.maxLineChars) return line
+      if (line.length <= params.maxLineChars || isMetadataLine(line)) return line
       const mark = `…[单行截断 +${line.length - params.maxLineChars}]`
       truncated++
       return line.slice(0, params.maxLineChars - mark.length) + mark
