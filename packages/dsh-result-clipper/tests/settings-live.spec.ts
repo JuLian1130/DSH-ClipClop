@@ -124,7 +124,7 @@ describe('票 02 第 2 条：写设置立刻改变 host 行为', () => {
     expect(lines[1]).toContain('"not-candidate"')
   })
 
-  it('写入三个角色的 route、阈值、推理档位与提示词后引用立刻变化（保存即生效的引用侧）', async () => {
+  it('写入两个角色的 route、阈值、推理档位与提示词后引用立刻变化（保存即生效的引用侧）', async () => {
     const fixture = await booted({})
     expect(fixture.config.routeProvider.get()).toBe('')
     expect(fixture.config.privacyProvider.get()).toBe('')

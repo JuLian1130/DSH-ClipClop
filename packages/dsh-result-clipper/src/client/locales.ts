@@ -25,8 +25,6 @@ export type ResultClipperLocaleKey =
   | 'flowWarning'
   | 'summaryGroup'
   | 'summaryGroupHint'
-  | 'admissionGroup'
-  | 'admissionGroupHint'
   | 'privacyGroup'
   | 'privacyGroupHint'
   | 'diagnosticsGroup'
@@ -40,8 +38,6 @@ export type ResultClipperLocaleKey =
   | 'customValue'
   | 'pickFromCatalog'
   | 'notInCatalog'
-  | 'admissionProvider'
-  | 'admissionModel'
   | 'privacyProvider'
   | 'privacyModel'
   | 'minInlineTokens'
@@ -100,11 +96,9 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   dryRunHint: '勾选后完整走一遍处理、但只写诊断记录：不替换正文、不改会话，也不留下别的东西。需要同时开启 debug 记录并填好日志路径。',
   dryRunInactiveHint: '干跑未生效：debug 记录关闭或日志路径为空，工具结果仍会被照常替换。',
   flowWarning: '摘要与隐私会分别把工具正文发送给它们各自所选的模型。',
-  modelSourceHint: '模型地址与 API key 不在本卡片：先在「设置 → 模型 → 自定义提供方」建好一条（那里填地址与 API key，本地服务填它的地址），再在下面为摘要、准入判断与隐私闸门各选 provider 与 model；三处可以选同一条。',
+  modelSourceHint: '模型地址与 API key 不在本卡片：先在「设置 → 模型 → 自定义提供方」建好一条（那里填地址与 API key，本地服务填它的地址），再在下面为摘要与隐私闸门各选 provider 与 model；准入判断跟随摘要模型，两处可以选同一条。',
   summaryGroup: '摘要模型',
   summaryGroupHint: '主模型不用反复读长正文——节省缓存计费，上下文也更干净，可以提升模型效果。清空等于请求不发，结果原样透传。',
-  admissionGroup: '摘要准入判断模型',
-  admissionGroupHint: '不值得摘要的结果不会再产生摘要请求，省下这部分 token 费用，强烈建议跟随摘要模型。不启用会直接走摘要模型。',
   privacyGroup: '隐私闸门模型',
   privacyGroupHint: '每条工具结果先判一次，判定敏感就在进主模型之前拦下，敏感内容不会发往外部网络，应该设成本地模型。',
   diagnosticsGroup: '诊断',
@@ -118,8 +112,6 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   customValue: '自定义…',
   pickFromCatalog: '从目录里选',
   notInCatalog: '（不在目录里）',
-  admissionProvider: 'provider',
-  admissionModel: 'model',
   privacyProvider: 'provider',
   privacyModel: 'model',
   minInlineTokens: '摘要下限（token）',
@@ -177,11 +169,9 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   dryRunHint: 'Runs the whole handling but only writes diagnostics: the body is not replaced, the session is not changed, and nothing else is left behind. Needs debug records on and a log path filled in.',
   dryRunInactiveHint: 'Dry run is not in effect: debug records are off or the log path is empty, so tool results are still replaced.',
   flowWarning: 'Summarization and the privacy gate each send the tool body to the model they have selected.',
-  modelSourceHint: 'Model endpoints and API keys are not in this card: create the provider first in Settings → Models → custom provider (that is where the address and API key go, and where a local server address is entered), then pick provider and model below for each of the three: summary, admission judge, privacy gate. All three may name the same one.',
+  modelSourceHint: 'Model endpoints and API keys are not in this card: create the provider first in Settings → Models → custom provider (that is where the address and API key go, and where a local server address is entered), then pick provider and model below for the summary and for the privacy gate; the admission judge follows the summary model, and both may name the same one.',
   summaryGroup: 'Summary model',
   summaryGroupHint: 'The main model never has to re-read a long body — that saves cache billing, keeps the context cleaner, and can improve model output. Clearing the route means no request is sent and the tool result is passed through unchanged.',
-  admissionGroup: 'Admission judge model',
-  admissionGroupHint: 'Results not worth summarizing never cost a summary request, saving those tokens — following the summary model is strongly recommended. While it is off, results go straight to summarization.',
   privacyGroup: 'Privacy gate model',
   privacyGroupHint: 'Every tool result is judged first, and a sensitive verdict is blocked before it reaches the main model; sensitive content never leaves for an external network, so point this at a local model.',
   diagnosticsGroup: 'Diagnostics',
@@ -195,8 +185,6 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   customValue: 'Custom…',
   pickFromCatalog: 'Pick from the catalog',
   notInCatalog: ' (not in the catalog)',
-  admissionProvider: 'Provider',
-  admissionModel: 'Model',
   privacyProvider: 'Provider',
   privacyModel: 'Model',
   minInlineTokens: 'Summarize floor (tokens)',

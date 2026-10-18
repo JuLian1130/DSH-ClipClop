@@ -25,14 +25,11 @@ export interface StubSection {
   debugPath: string
   routeProvider: string
   routeModel: string
-  admissionProvider: string
-  admissionModel: string
   privacyProvider: string
   privacyModel: string
   minInlineTokens: number
   maxSummarizeTokens: number
   summaryReasoningEffort: string
-  admissionReasoningEffort: string
   privacyReasoningEffort: string
   privacyConfirmedLocal: boolean
   failurePolicy: 'passthrough' | 'block'
@@ -55,15 +52,12 @@ export const SECTION_DEFAULTS: StubSection = {
   debugPath: '',
   routeProvider: '',
   routeModel: '',
-  admissionProvider: '',
-  admissionModel: '',
   privacyProvider: '',
   privacyModel: '',
   minInlineTokens: 512,
   maxSummarizeTokens: 12500,
   // 档位默认留空＝「不推理」，具体发哪个 id 由该 route 的档位表在请求前决定。
   summaryReasoningEffort: '',
-  admissionReasoningEffort: '',
   privacyReasoningEffort: '',
   privacyConfirmedLocal: false,
   failurePolicy: 'passthrough',

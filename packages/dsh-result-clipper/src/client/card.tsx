@@ -1,8 +1,9 @@
 /**
- * `plugins.bundle.config` 的包详情页配置区：**本插件唯一的设置界面**。摘要、摘要准入判断、隐私闸门三个角色
- * 各自成一组，每组把该角色的 route（provider 与 model）、推理档位与提示词规则正文放在一起；摘要组另带两个
- * 阈值；接着是诊断组——debug 与干跑两个开关加它们的日志路径；最后是**工具结果精简**的两个开关（总开关与它下面
- * 的「按命令语义精简」）。组之间用一条横线隔开。
+ * `plugins.bundle.config` 的包详情页配置区：**本插件唯一的设置界面**。摘要与隐私两个角色各自成一组，每组把该
+ * 角色的 route（provider 与 model）、推理档位与提示词规则正文放在一起；摘要组另带两个阈值与准入判断的规则
+ * 正文；接着是诊断组——debug 与干跑两个开关加它们的日志路径；最后是**工具结果精简**的两个开关（总开关与它下面
+ * 的「按命令语义精简」）。组之间用一条横线隔开。**准入判断不另占一组**：启用位是三态的一半，规则正文在摘要组，
+ * 模型与摘要请求同 route（见下）。
  *
  * **两个能力开关紧挨各自那一组、且一律保存即生效**（`applySwitch`）：摘要开关在摘要组之上、隐私闸门开关在
  * 隐私组之上；两者关掉时，它们下面那一整组（含该组的保存 / 恢复默认）都不显示。走即时写入而不是分组草稿是
@@ -22,11 +23,11 @@
  * 座位约定见设计文档「配置面与设置座位」——**只有一个座位**：本页。插件自己的开关就是「设置某项能力」本身，
  * 所以它们不做成入口页上的一排开关，而是与它们要用的 route、提示词与阈值放在一起。
  *
- * 从属关系用缩排表示（{@link NEST_ONE} / {@link NEST_TWO}，每级 32px）：摘要组比摘要开关退一级；隐私组比隐私
- * 开关退一级；准入组只在三态为「先判断再摘要」时出现，比摘要组再退一级。
+ * 从属关系用缩排表示（{@link NEST_ONE}，每级 32px）：「摘要模型」组比摘要开关退一级；「隐私闸门模型」组比隐私
+ * 开关退一级。准入判断不另占一组：启用位是三态的一半，规则正文在摘要组，模型跟随摘要模型。
  *
  * **端点与凭据不在这里**：DSH 的请求形状只带 `provider` 与 `model`，endpoint、协议与 API key 归 LLM 适配器
- * 按 route 持有（`GenerateOptions` 没有 baseURL / apiKey 字段）。所以卡片顶部与三个 provider 行都把用户指到
+ * 按 route 持有（`GenerateOptions` 没有 baseURL / apiKey 字段）。所以卡片顶部与两个 provider 行都把用户指到
  * 「设置 → 模型 → 自定义提供方」：route 与它的 baseURL / API key 在那里建，这里只按角色选 route。
  *
  * 隐私闸门开启而隐私 route 未确认为本地时，卡片顶部显示常驻警告——它只反映这一静态配置状态，不反映运行期
@@ -61,12 +62,9 @@ export type ResultClipperCardField =
   | 'privacyConfirmedLocal'
   | 'webFetchPrivacyGate'
   | 'failurePolicy'
-  | 'admissionProvider'
-  | 'admissionModel'
   | 'minInlineTokens'
   | 'maxSummarizeTokens'
   | 'summaryReasoningEffort'
-  | 'admissionReasoningEffort'
   | 'privacyReasoningEffort'
   | 'summaryPrompt'
   | 'admissionPrompt'
@@ -100,11 +98,7 @@ export interface ResultClipperCardInjected {
     routeProvider: ObservableSnapshot<string>
     /** 摘要 route 的 model id。 */
     routeModel: ObservableSnapshot<string>
-    /** 准入 route 的 provider；空串表示跟随摘要 route。 */
-    admissionProvider: ObservableSnapshot<string>
-    /** 准入 route 的 model id；空串表示跟随摘要 route。 */
-    admissionModel: ObservableSnapshot<string>
-    /** 摘要准入判断开关：关闭时准入组整组收起，也就没有这一步。 */
+    /** 摘要准入判断的启用位（三态的一半）：关闭时没有这一步。 */
     admissionJudge: ObservableSnapshot<boolean>
     /** 隐私 route 的 provider；空串表示跟随摘要 route。 */
     privacyProvider: ObservableSnapshot<string>
@@ -116,13 +110,11 @@ export interface ResultClipperCardInjected {
     maxSummarizeTokens: ObservableSnapshot<number>
     /** 摘要请求的推理档位。 */
     summaryReasoningEffort: ObservableSnapshot<string>
-    /** 准入请求的推理档位。 */
-    admissionReasoningEffort: ObservableSnapshot<string>
     /** 隐私请求的推理档位。 */
     privacyReasoningEffort: ObservableSnapshot<string>
     /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
     summaryPrompt: ObservableSnapshot<string>
-    /** 摘要总开关（与页签里那一个是同一个键）：关掉时本组与准入组收起，也不覆盖任何工具。 */
+    /** 摘要总开关（与页签里那一个是同一个键）：关掉时本组收起，也不覆盖任何工具。 */
     summarize: ObservableSnapshot<boolean>
     /** 摘要提示词的摘要开关：关掉后只有声明了 `extract` 的调用才摘要。 */
     ruleSummary: ObservableSnapshot<boolean>
@@ -175,7 +167,7 @@ const TITLE_STYLE = { fontSize: 14, lineHeight: '20px' } as const
 /** 说明与失败提示共用的排版。 */
 const HINT_STYLE = { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: '18px' } as const
 
-/** 角色分组的标题排版：三个角色的设置各自成组，标题把该组与其它组分开。 */
+/** 角色分组的标题排版：两个角色的设置各自成组，标题把该组与其它组分开。 */
 const GROUP_STYLE = { margin: '24px 0 0', fontSize: 13, fontWeight: 600, lineHeight: '20px' } as const
 
 /** 分组之间的长横线。 */
@@ -191,13 +183,12 @@ const PAIR_STYLE = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 } 
 const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '12px 0 0' } as const
 
 /**
- * 缩排的两级：用缩进表示从属关系（不是嵌套的子页面，只是视觉层级）。
+ * 缩排：用缩进表示从属关系（不是嵌套的子页面，只是视觉层级）。
  *
- * 一级＝「摘要模型」组（以及「隐私闸门模型」组）从属于它上面那个能力开关；二级＝准入组从属于摘要模型组。
+ * 只有一级：「摘要模型」组（以及「隐私闸门模型」组）从属于它上面那个能力开关。
  * 每级 32px：**缩一格（16px）在真机上几乎看不出来**，两格才读得出层级。
  */
 const NEST_ONE = { marginLeft: 32 } as const
-const NEST_TWO = { marginLeft: 64 } as const
 
 /** 隐私 route 未确认为本地时的常驻警告排版。 */
 const WARNING_STYLE = {
@@ -671,8 +662,7 @@ const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'minInlineTokens', kind: 'number', fallback: 512 },
   { field: 'maxSummarizeTokens', kind: 'number', fallback: 12500 },
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
-  // 准入判断的规则正文：只在三态为「先判断再摘要」时有意义，但它是该模式的规则、跟三态属于同一次保存，
-  // 所以不放在准入组里，而是随本组一次写回。
+  // 准入判断的规则正文：只在三态为「先判断再摘要」时有意义，但它是该模式的规则、跟三态属于同一次保存。
   { field: 'admissionPrompt', kind: 'prompt', fallback: DEFAULT_ADMISSION_RULE },
 ]
 
@@ -698,18 +688,6 @@ function summaryModeOf(ruleSummary: boolean, admissionJudge: boolean): SummaryMo
 function summaryModeFields(mode: SummaryMode): { readonly ruleSummary: boolean; readonly admissionJudge: boolean } {
   return { ruleSummary: mode !== 'off', admissionJudge: mode === 'gated' }
 }
-
-/**
- * 准入组的字段：route 与推理档位。
- *
- * **启用位不在这里**：它是摘要组三态控件的一半（`admissionJudge`）；**规则正文也不在这里**：它同样属于三态，
- * 随摘要组一次保存。本组只在三态（草稿）为「先判断再摘要」时展开，组内这两个字段仍按本组自己的「保存」写回。
- */
-const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
-  { field: 'admissionProvider', kind: 'text' },
-  { field: 'admissionModel', kind: 'text' },
-  { field: 'admissionReasoningEffort', kind: 'text', fallback: '' },
-]
 
 /** 隐私组的字段：web_fetch 是否也判、route、推理档位、确认位、失败策略与提示词。 */
 const PRIVACY_FIELDS: readonly GroupFieldSpec[] = [
@@ -741,9 +719,8 @@ interface RouteFields {
   readonly confirm?: ResultClipperCardField
 }
 
-/** 三条 route 的字段名：`changeRoute` 与三个角色的 route 行共用一份。 */
+/** 两条 route 的字段名：`changeRoute` 与两个角色的 route 行共用一份。 */
 const SUMMARY_ROUTE: RouteFields = { provider: 'routeProvider', model: 'routeModel' }
-const ADMISSION_ROUTE: RouteFields = { provider: 'admissionProvider', model: 'admissionModel' }
 const PRIVACY_ROUTE: RouteFields = {
   provider: 'privacyProvider', model: 'privacyModel', confirm: 'privacyConfirmedLocal',
 }
@@ -751,7 +728,7 @@ const PRIVACY_ROUTE: RouteFields = {
 /**
  * 渲染这个配置区。
  * @param props - 注入的读数与原子写入路径、页面文案。
- * @returns 三个角色分组加诊断组的参数控件。
+ * @returns 摘要、隐私两个角色分组加诊断组的参数控件。
  */
 export function ResultClipperCard(props: ResultClipperCardProps) {
   const privacyGate = props.usePrivacyGate(value => value)
@@ -763,14 +740,11 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const routeProvider = props.useRouteProvider(value => value)
   const routeModel = props.useRouteModel(value => value)
   const admissionJudge = props.useAdmissionJudge(value => value)
-  const admissionProvider = props.useAdmissionProvider(value => value)
-  const admissionModel = props.useAdmissionModel(value => value)
   const privacyProvider = props.usePrivacyProvider(value => value)
   const privacyModel = props.usePrivacyModel(value => value)
   const minInlineTokens = props.useMinInlineTokens(value => value)
   const maxSummarizeTokens = props.useMaxSummarizeTokens(value => value)
   const summaryReasoningEffort = props.useSummaryReasoningEffort(value => value)
-  const admissionReasoningEffort = props.useAdmissionReasoningEffort(value => value)
   const privacyReasoningEffort = props.usePrivacyReasoningEffort(value => value)
   const summaryPrompt = props.useSummaryPrompt(value => value)
   const admissionPrompt = props.useAdmissionPrompt(value => value)
@@ -824,9 +798,6 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     summary.change('ruleSummary', fields.ruleSummary)
     summary.change('admissionJudge', fields.admissionJudge)
   }
-  const admission = useGroupDraft(ADMISSION_FIELDS, {
-    admissionProvider, admissionModel, admissionReasoningEffort,
-  }, props.saveFields)
   const privacy = useGroupDraft(PRIVACY_FIELDS, {
     webFetchPrivacyGate, privacyProvider, privacyModel, privacyReasoningEffort, privacyConfirmedLocal,
     failurePolicy,
@@ -910,7 +881,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
    *   哪条 route），所以 route 任一半变了就清掉草稿里的确认位——否则换一条没确认过的 route 会沿用旧确认继续放行，
    *   把敏感正文发往外部网络。只有隐私组传 `confirm`。
    * - **model 跟着 provider**：换 provider 后当前 model 不是它的候选就清空，不留跨 provider 的残缺配对；provider
-   *   被清空时同样清空（摘要组＝不摘要，另两组＝跟随摘要模型）。目录读不到（候选为空）时不猜，保留手填值，
+   *   被清空时同样清空（摘要组＝不摘要，隐私组＝跟随摘要模型）。目录读不到（候选为空）时不猜，保留手填值，
    *   免得手填 provider + model 的部署变成不可配置。
    */
   const changeRoute = (group: DraftedGroup, route: RouteFields, field: 'provider' | 'model', next: string): void => {
@@ -933,8 +904,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     {privacyGate && !privacyConfirmedLocal
       && <div role="alert" style={WARNING_STYLE}>{props.t('routeUnconfirmedWarning')}</div>}
 
-    {/* 能力开关在各自那一组之上、保存即生效（不走分组草稿）；它关掉时下面「摘要模型」与（三态为「先判断再
-        摘要」时的）「摘要准入判断模型」两组连同各自的保存 / 恢复默认一起收起。 */}
+    {/* 能力开关在各自那一组之上、保存即生效（不走分组草稿）；它关掉时下面的「摘要模型」组连同它的保存 / 恢复
+        默认一起收起。 */}
     <CheckRow id="plugin-config-result-clipper-summarize" label={props.t('summarize')}
       hint={props.t('summarizeHint')}
       checked={summarize}
@@ -993,46 +964,13 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
       {summary.value('ruleSummary') === false && <div style={HINT_STYLE}>{props.t('summaryPromptInactive')}</div>}
       {/* 准入判断的规则正文只在这一模式下有用，但它是该模式的规则：放在本组草稿里，跟三态一起「保存 / 恢复默认」。
           选到「先判断再摘要」就出现（不必先保存三态）；选回其它两项时收起，草稿里的正文仍随本组保存，
-          它只在「先判断再摘要」下被用到，收起不丢用户输入。 */}
+          它只在「先判断再摘要」下被用到，收起不丢用户输入。模型不另选：准入请求与摘要请求走同一条 route。 */}
       {summaryMode === 'gated' && <PromptRow id="plugin-config-result-clipper-admission-prompt"
         label={props.t('admissionPrompt')} hint={props.t('promptHint')}
         value={summary.value('admissionPrompt') as string}
         onChange={next => { summary.change('admissionPrompt', next) }} />}
     </Group>
     </div>
-
-    <hr style={DIVIDER_STYLE} />
-
-    {/* 准入组在三态（草稿）为「先判断再摘要」时展开；它的 route 与档位仍按本组自己的「保存」写回，
-        规则正文与启用位在摘要组。从属关系用缩排表示（准入比摘要模型再退一级）。 */}
-    {summaryMode === 'gated' && <div style={NEST_TWO}>
-    <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
-      <RouteLine
-        provider={{
-          ...routeText, id: 'plugin-config-result-clipper-admission-provider',
-          label: props.t('routeProvider'), hint: props.t('routeProviderHint'),
-          value: admission.value('admissionProvider') as string, options: providerOptions,
-          emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { changeRoute(admission, ADMISSION_ROUTE, 'provider', next) },
-        }}
-        model={{
-          ...routeText, id: 'plugin-config-result-clipper-admission-model',
-          label: props.t('routeModel'), hint: props.t('routeModelHint'),
-          value: admission.value('admissionModel') as string,
-          options: modelOptions(admission.value('admissionProvider') as string),
-          emptyLabel: props.t('followSummaryRoute'),
-          onChange: next => { changeRoute(admission, ADMISSION_ROUTE, 'model', next) },
-        }}
-        effort={effortArgs(
-          // 准入 route 留空时跟随摘要 route（host 半同一判据），所以候选也要按**有效**的那条算。
-          (admission.value('admissionProvider') as string) || (summary.value('routeProvider') as string),
-          (admission.value('admissionModel') as string) || (summary.value('routeModel') as string),
-          admission.value('admissionReasoningEffort') as string,
-          'plugin-config-result-clipper-admission-effort',
-          next => { admission.change('admissionReasoningEffort', next) },
-        )} />
-    </Group>
-    </div>}
     </>}
 
     <hr style={DIVIDER_STYLE} />

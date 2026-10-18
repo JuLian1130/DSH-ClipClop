@@ -79,14 +79,11 @@ interface PreferenceSection {
   debugPath: string
   routeProvider: string
   routeModel: string
-  admissionProvider: string
-  admissionModel: string
   privacyProvider: string
   privacyModel: string
   minInlineTokens: number
   maxSummarizeTokens: number
   summaryReasoningEffort: ReasoningEffort
-  admissionReasoningEffort: ReasoningEffort
   privacyReasoningEffort: ReasoningEffort
   privacyConfirmedLocal: boolean
   failurePolicy: 'passthrough' | 'block'
@@ -143,16 +140,13 @@ export function apply(ctx: Context): void {
           failurePolicy: policyField(form),
           routeProvider: stringField(form, 'routeProvider'),
           routeModel: stringField(form, 'routeModel'),
-          // 准入判断的启用开关跟着它的 route 与提示词一起在准入组里（勾选＝启用，收起＝不启用）。
+          // 准入判断的启用位是三态控件的一半；规则正文也在摘要组，两者随该组一次保存。
           admissionJudge: booleanField(form, 'admissionJudge'),
-          admissionProvider: stringField(form, 'admissionProvider'),
-          admissionModel: stringField(form, 'admissionModel'),
           privacyProvider: stringField(form, 'privacyProvider'),
           privacyModel: stringField(form, 'privacyModel'),
           minInlineTokens: numberField(form, 'minInlineTokens', 512),
           maxSummarizeTokens: numberField(form, 'maxSummarizeTokens', 12500),
           summaryReasoningEffort: effortField(form, 'summaryReasoningEffort'),
-          admissionReasoningEffort: effortField(form, 'admissionReasoningEffort'),
           privacyReasoningEffort: effortField(form, 'privacyReasoningEffort'),
           summaryPrompt: stringField(form, 'summaryPrompt'),
           admissionPrompt: stringField(form, 'admissionPrompt'),
@@ -202,7 +196,7 @@ function booleanField(
 function stringField(
   form: ConfigForm<PreferenceSection>,
   field: 'debugPath' | 'routeProvider' | 'routeModel' | 'summaryPrompt'
-    | 'admissionProvider' | 'admissionModel' | 'admissionPrompt'
+    | 'admissionPrompt'
     | 'privacyProvider' | 'privacyModel' | 'privacyPrompt',
 ): ObservableSnapshot<string> {
   return {
@@ -219,7 +213,7 @@ function stringField(
  */
 function effortField(
   form: ConfigForm<PreferenceSection>,
-  field: 'summaryReasoningEffort' | 'admissionReasoningEffort' | 'privacyReasoningEffort',
+  field: 'summaryReasoningEffort' | 'privacyReasoningEffort',
 ): ObservableSnapshot<ReasoningEffort> {
   return {
     getSnapshot: () => form.getSnapshot().value?.[field] ?? 'off',

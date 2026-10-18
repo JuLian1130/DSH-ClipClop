@@ -4,8 +4,8 @@
  * 字段绝大多数是 `volatile`：settings 的写回路径只接受 volatile 路径（写入拒绝非 volatile 字段），这也正是
  * 「开关与参数保存即生效、不需要重启」的实现方式——host 半每次处理结果时读一次引用，读到的就是当前值。
  * 字段的默认值即规格「配置项」的当前默认：**摘要能力开启**（默认只摘要主模型主动请求摘要的调用）、隐私闸门关闭、
- * `web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
- * 隐私 route 未配置、阈值 512/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
+ * `web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 未配置、
+ * 隐私 route 未配置、阈值 512/12500、摘要与隐私两类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
  * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（`ruleSummary`）、debug 关闭且不
  * 自动改用临时路径、干跑关闭、**工具结果精简开启**、**按命令语义精简开启**、`sed` 大窗口 /
  * 原始转储两族开启、`git diff` 族**默认关闭**。
@@ -26,9 +26,10 @@
  * `glance.ts` 的 `SED_WINDOW_DEFAULTS` / `RAW_DUMP_DEFAULTS`（同样是票 14 实测的那一档）。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
- * 清回空串。三个角色（摘要、摘要准入判断、隐私闸门）各有自己的 route：`routeProvider` / `routeModel` 是摘要
- * route 的键名（票 12 之前它就是「主 route」，语义未变，不为了改名打断已存配置）；准入与隐私的 route 留空时
- * 跟随摘要 route，所以三个角色可以设成同一条，也可以各设一条。
+ * 清回空串。摘要与隐私两个角色各有自己的 route：`routeProvider` / `routeModel` 是摘要
+ * route 的键名（票 12 之前它就是「主 route」，语义未变，不为了改名打断已存配置）；隐私的 route 留空时
+ * 跟随摘要 route，所以两者可以设成同一条，也可以各设一条。**准入判断没有自己的 route**：它与摘要请求
+ * 发往同一条 route，但固定不推理（只回 `yes`/`no`，不随摘要档位思考）。
  *
  * @module
  */
@@ -87,10 +88,6 @@ export interface Config {
   routeProvider?: Volatile<string>
   /** 摘要 route 的 model id；与 provider 一起决定请求发往哪条 route。 */
   routeModel?: Volatile<string>
-  /** 准入 route 的 provider；空串时跟随摘要 route。 */
-  admissionProvider?: Volatile<string>
-  /** 准入 route 的 model id；空串时跟随摘要 route。 */
-  admissionModel?: Volatile<string>
   /** 隐私 route 的 provider；空串时跟随摘要 route。 */
   privacyProvider?: Volatile<string>
   /** 隐私 route 的 model id；空串时跟随摘要 route。 */
@@ -101,8 +98,6 @@ export interface Config {
   maxSummarizeTokens?: Volatile<number>
   /** 摘要请求的推理档位；空串表示不推理（按该 route 的档位表拼出对应 id）。 */
   summaryReasoningEffort?: Volatile<string>
-  /** 准入请求的推理档位；空串表示不推理（按该 route 的档位表拼出对应 id）。 */
-  admissionReasoningEffort?: Volatile<string>
   /** 摘要提示词的规则正文覆盖；空串表示用内置默认。 */
   summaryPrompt?: Volatile<string>
   /** 准入提示词的规则正文覆盖；空串表示用内置默认。 */
@@ -214,14 +209,11 @@ export const Config = z.object({
   dryRun: z.boolean().default(false).volatile(),
   routeProvider: z.string().default('').volatile(),
   routeModel: z.string().default('').volatile(),
-  admissionProvider: z.string().default('').volatile(),
-  admissionModel: z.string().default('').volatile(),
   privacyProvider: z.string().default('').volatile(),
   privacyModel: z.string().default('').volatile(),
   minInlineTokens: z.number().default(512).volatile(),
   maxSummarizeTokens: z.number().default(12500).volatile(),
   summaryReasoningEffort: effort(),
-  admissionReasoningEffort: effort(),
   summaryPrompt: z.string().default('').volatile(),
   admissionPrompt: z.string().default('').volatile(),
   privacyPrompt: z.string().default('').volatile(),

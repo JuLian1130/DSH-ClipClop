@@ -73,7 +73,7 @@ export type UnmodifiedReason =
 /**
  * 准入结论：这次结果有没有进准入判断、判断说了什么。`not-applicable` 覆盖所有没进准入阶段的情形
  * （开关关闭、隐私模式、摘要关闭、未进候选、按入口读回、memo 命中）；`failed` 是进了准入阶段但判断没做成
- * （调用失败、超时、空结果、非法结果，或准入 route 没配出来）——按契约仍然继续摘要，所以它只出现在这条
+ * （调用失败、超时、空结果、非法结果，或摘要 route 没配出来——准入与摘要共用它）——按契约仍然继续摘要，所以它只出现在这条
  * 字段里，与最终的结果取值分开。
  */
 export type AdmissionVerdict = 'yes' | 'no' | 'failed' | 'not-applicable'

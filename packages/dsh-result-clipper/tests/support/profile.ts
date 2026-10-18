@@ -38,14 +38,11 @@ export interface LiveConfig {
   readonly dryRun: { get(): boolean }
   readonly routeProvider: { get(): string }
   readonly routeModel: { get(): string }
-  readonly admissionProvider: { get(): string }
-  readonly admissionModel: { get(): string }
   readonly privacyProvider: { get(): string }
   readonly privacyModel: { get(): string }
   readonly minInlineTokens: { get(): number }
   readonly maxSummarizeTokens: { get(): number }
   readonly summaryReasoningEffort: { get(): ReasoningEffort }
-  readonly admissionReasoningEffort: { get(): ReasoningEffort }
   readonly privacyReasoningEffort: { get(): ReasoningEffort }
   readonly privacyConfirmedLocal: { get(): boolean }
   readonly failurePolicy: { get(): 'passthrough' | 'block' }
@@ -154,10 +151,9 @@ function resolvedConfig(ctx: Context): LiveConfig {
     || config.admissionJudge === undefined || config.debug === undefined || config.debugPath === undefined
     || config.dryRun === undefined
     || config.routeProvider === undefined || config.routeModel === undefined
-    || config.admissionProvider === undefined || config.admissionModel === undefined
     || config.privacyProvider === undefined || config.privacyModel === undefined
     || config.minInlineTokens === undefined || config.maxSummarizeTokens === undefined
-    || config.summaryReasoningEffort === undefined || config.admissionReasoningEffort === undefined
+    || config.summaryReasoningEffort === undefined
     || config.privacyReasoningEffort === undefined || config.privacyConfirmedLocal === undefined
     || config.failurePolicy === undefined
     || config.summaryPrompt === undefined || config.admissionPrompt === undefined

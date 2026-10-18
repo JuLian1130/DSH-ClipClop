@@ -138,7 +138,7 @@ function truncatingListener(limit: number) {
   }
 }
 
-describe('票 07 第 1 条：隐私 route 确认位与三类请求的推理档位', () => {
+describe('票 07 第 1 条：隐私 route 确认位与推理档位', () => {
   it('未确认为本地时不发请求、原文透传、记 failed；确认后同一条结果发一次请求并被替换', async () => {
     const unconfirmed = await mounted({ privacyConfirmedLocal: false })
     unconfirmed.fixture.ctx.tools.register(textTool('bash', LONG_BODY))

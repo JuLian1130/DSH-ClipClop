@@ -64,15 +64,12 @@ describe('配置契约', () => {
     expect(fiber.config?.dryRun.get()).toBe(false)
     expect(fiber.config?.routeProvider.get()).toBe('')
     expect(fiber.config?.routeModel.get()).toBe('')
-    expect(fiber.config?.admissionProvider.get()).toBe('')
-    expect(fiber.config?.admissionModel.get()).toBe('')
     expect(fiber.config?.privacyProvider.get()).toBe('')
     expect(fiber.config?.privacyModel.get()).toBe('')
     expect(fiber.config?.minInlineTokens.get()).toBe(512)
     expect(fiber.config?.maxSummarizeTokens.get()).toBe(12500)
     // 档位留空＝「不推理」，具体发哪个 id 由该 route 的档位表在请求前决定。
     expect(fiber.config?.summaryReasoningEffort.get()).toBe('')
-    expect(fiber.config?.admissionReasoningEffort.get()).toBe('')
     expect(fiber.config?.privacyReasoningEffort.get()).toBe('')
     expect(fiber.config?.summaryPrompt.get()).toBe('')
     expect(fiber.config?.admissionPrompt.get()).toBe('')
@@ -105,13 +102,9 @@ describe('配置契约', () => {
     expect(tuned.fiber.config?.summaryPrompt.get()).toBe('只看目标')
 
     const admitted = await load({
-      admissionJudge: true, admissionProvider: 'local', admissionModel: 'small',
-      admissionReasoningEffort: 'minimal', admissionPrompt: '只看体积',
+      admissionJudge: true, admissionPrompt: '只看体积',
     })
     expect(admitted.fiber.config?.admissionJudge.get()).toBe(true)
-    expect(admitted.fiber.config?.admissionProvider.get()).toBe('local')
-    expect(admitted.fiber.config?.admissionModel.get()).toBe('small')
-    expect(admitted.fiber.config?.admissionReasoningEffort.get()).toBe('minimal')
     expect(admitted.fiber.config?.admissionPrompt.get()).toBe('只看体积')
 
     const gated = await load({

@@ -261,26 +261,25 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   const renderPage = renderCard
 
   it('page 视图显示数据流向与端点归属提示，控件读 schema 的默认值', async () => {
-    // 准入组只在三态为「先判断再摘要」时展开；这个用例用已保存的「先判断再摘要」来看它的控件。
+    // 准入规则正文只在三态为「先判断再摘要」时出现；这个用例用已保存的「先判断再摘要」来看它。
     const { container, fixture } = await renderPage({ ruleSummary: true, admissionJudge: true })
     expect(container.textContent).toContain('摘要与隐私会分别把工具正文发送给它们各自所选的模型')
-    // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，三个 provider 行同样各指一次。
+    // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，两个 provider 行同样各指一次。
     expect(container.textContent).toContain(fixture.t('modelSourceHint'))
     expect(container.textContent).toContain('设置 → 模型')
-    // 默认值来自 schema：阈值 512 / 12500；三个角色的推理档位默认是空串＝「不推理」（具体 id 按 route 的档位表在
+    // 默认值来自 schema：阈值 512 / 12500；摘要与隐私的推理档位默认是空串＝「不推理」（具体 id 按 route 的档位表在
     // 请求前解析，所以控件上显示的是空项）。
     expect((container.querySelector('#plugin-config-result-clipper-min-inline') as HTMLInputElement).value).toBe('512')
     expect((container.querySelector('#plugin-config-result-clipper-max-summarize') as HTMLInputElement).value).toBe('12500')
-    for (const role of ['summary', 'admission', 'privacy']) {
+    for (const role of ['summary', 'privacy']) {
       expect((container.querySelector(`#plugin-config-result-clipper-${role}-effort`) as HTMLSelectElement).value).toBe('')
     }
   })
 
-  it('三个角色各自成组：每组的 route、推理档位与该角色的其余设置都在同一个标题下，组间用长横线隔开', async () => {
+  it('摘要与隐私两个角色各自成组；准入判断不另占一组，规则正文在摘要组里', async () => {
     const { fixture, container } = await renderPage({ ruleSummary: true, admissionJudge: true })
     for (const [title, prefix, role] of [
       ['摘要模型', 'route', 'summary'],
-      ['摘要准入判断模型', 'admission', 'admission'],
       ['隐私闸门模型', 'privacy', 'privacy'],
     ] as const) {
       const group = groupOf(container, title)
@@ -288,13 +287,13 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       expect(group.querySelector(`#plugin-config-result-clipper-${prefix}-model`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-effort`)).not.toBeNull()
     }
+    // 没有单独的准入模型组：准入判断与摘要请求走同一条 route。
+    expect([...container.querySelectorAll('h4')].map(node => node.textContent))
+      .not.toContain('摘要准入判断模型')
     // 两份提示词都在摘要组：摘要正文，以及准入判断的规则正文（它属于三态，跟三态同一次保存）。
     const summary = groupOf(container, '摘要模型')
     expect(summary.querySelector('#plugin-config-result-clipper-summary-prompt')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
-    // 准入组只剩 route 与档位；它的规则正文不在这一组里。
-    expect(groupOf(container, '摘要准入判断模型')
-      .querySelector('#plugin-config-result-clipper-admission-prompt')).toBeNull()
     // 两个能力开关都在各自那一组之上（不在任何组里）；摘要组还带两个阈值；隐私组带确认位与失败策略；
     // 诊断组放 debug 与干跑两个开关加它们的日志路径。
     for (const id of ['summarize', 'privacy-enabled']) {
@@ -322,7 +321,6 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 每个分组都有一行「这是做什么的」。
     for (const [title, hint] of [
       ['摘要模型', 'summaryGroupHint'],
-      ['摘要准入判断模型', 'admissionGroupHint'],
       ['隐私闸门模型', 'privacyGroupHint'],
       ['诊断', 'diagnosticsGroupHint'],
     ] as const) {
@@ -338,9 +336,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(row).toBe(cell('plugin-config-result-clipper-route-model').parentElement)
     expect(row).toBe(cell('plugin-config-result-clipper-summary-effort').parentElement)
     expect(row.style.gridTemplateColumns).toBe('1fr 1fr 1fr')
-    // 准入与隐私两组也是同一行的三格。
-    expect((cell('plugin-config-result-clipper-admission-provider').parentElement as HTMLElement).style.gridTemplateColumns)
-      .toBe('1fr 1fr 1fr')
+    // 隐私组也是同一行的三格。
     expect((cell('plugin-config-result-clipper-privacy-provider').parentElement as HTMLElement).style.gridTemplateColumns)
       .toBe('1fr 1fr 1fr')
 
@@ -381,21 +377,22 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(select.style.backgroundSize).toBe('12px 12px')
   })
 
-  it('三态默认「不自动摘要」：准入组与准入规则正文都不出现；选「先判断再摘要」当场展开，保存时两个字段一次写回', async () => {
+  it('三态默认「不自动摘要」：准入规则正文不出现；选「先判断再摘要」当场出现，保存时两个字段一次写回', async () => {
     const { fixture, container } = await renderPage()
-    // 默认停在第一项；准入组（标题、route、档位）与摘要组里的准入规则正文都不在 DOM 上。
+    // 默认停在第一项；摘要组里的准入规则正文不在 DOM 上，也没有第三个模型分组。
     expect(container.querySelector('#plugin-config-result-clipper-summary-mode-off')!.getAttribute('aria-selected')).toBe('true')
     expect([...container.querySelectorAll('h4')].map(node => node.textContent))
-      .not.toContain(fixture.t('admissionGroup'))
+      .not.toContain('摘要准入判断模型')
     expect(container.querySelector('#plugin-config-result-clipper-admission-prompt')).toBeNull()
 
-    // 选「先判断再摘要」只改草稿：不落盘，但准入组与规则正文当场出现（不必先保存三态）。
+    // 选「先判断再摘要」只改草稿：不落盘，但规则正文当场出现（不必先保存三态）。
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
     expect(fixture.form.mutations).toEqual([])
-    expect(groupOf(container, '摘要准入判断模型')).toBeDefined()
     expect(container.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
+    expect([...container.querySelectorAll('h4')].map(node => node.textContent))
+      .not.toContain('摘要准入判断模型')
 
-    // 保存摘要组：一次原子写回两个字段。准入 route 与规则正文都没改，所以不在这次写入里。
+    // 保存摘要组：一次原子写回两个字段。规则正文没改，所以不在这次写入里。
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
     expect(fixture.form.mutations).toEqual([[
@@ -405,19 +402,18 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ ruleSummary: true, admissionJudge: true })
   })
 
-  it('已保存的「先判断再摘要」展开准入组，缩排比摘要组再退一级', async () => {
+  it('已保存的「先判断再摘要」在摘要组里显示准入规则正文；没有单独的准入组', async () => {
     const { container } = await renderPage({ ruleSummary: true, admissionJudge: true })
     expect(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!.getAttribute('aria-selected')).toBe('true')
-    expect(container.querySelector('#plugin-config-result-clipper-admission-provider')).not.toBeNull()
-    // 规则正文在摘要组（跟三态同一次保存），不在准入组里。
+    expect(container.querySelector('#plugin-config-result-clipper-admission-provider')).toBeNull()
+    // 规则正文在摘要组（跟三态同一次保存）。
     expect(groupOf(container, '摘要模型').querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
-    expect(groupOf(container, '摘要准入判断模型').querySelector('#plugin-config-result-clipper-admission-prompt')).toBeNull()
+    expect([...container.querySelectorAll('h4')].map(node => node.textContent))
+      .not.toContain('摘要准入判断模型')
 
-    // 从属关系用缩排表示，每级 32px（16px 在真机上几乎看不出来）：摘要组与隐私组各比自己的开关退一级；
-    // 准入组是摘要组的下属，再退一级。
+    // 从属关系用缩排表示，每级 32px（16px 在真机上几乎看不出来）：摘要组与隐私组各比自己的开关退一级。
     expect((groupOf(container, '摘要模型').parentElement as HTMLElement).style.marginLeft).toBe('32px')
     expect((groupOf(container, '隐私闸门模型').parentElement as HTMLElement).style.marginLeft).toBe('32px')
-    expect((groupOf(container, '摘要准入判断模型').parentElement as HTMLElement).style.marginLeft).toBe('64px')
     // 诊断组没有上级开关，顶格。
     expect((groupOf(container, '诊断').parentElement as HTMLElement).style.marginLeft).toBe('')
   })
@@ -477,17 +473,16 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     ]])
   })
 
-  it('三个角色的下拉都能把取值清空：第一项就是清空，选中并保存后字段变空串', async () => {
+  it('两个角色的下拉都能把取值清空：第一项就是清空，选中并保存后字段变空串', async () => {
     const { fixture, container } = await renderPage({ ruleSummary: true, admissionJudge: true, routeProvider: 'local', routeModel: 'qwen3' })
     /** 某个下拉第一项（置空项）的文案与取值。 */
     const blankOf = (id: string): { text: string; value: string } => {
       const option = container.querySelector(`#${id}`)!.querySelector('option')! as HTMLOptionElement
       return { text: option.textContent ?? '', value: option.value }
     }
-    // 摘要组清空后是「没配」；准入与隐私组清空后是「跟随摘要模型」。
+    // 摘要组清空后是「没配」；隐私组清空后是「跟随摘要模型」。
     expect(blankOf('plugin-config-result-clipper-route-provider')).toEqual({ text: fixture.t('routeUnset'), value: '' })
     expect(blankOf('plugin-config-result-clipper-route-model')).toEqual({ text: fixture.t('routeUnset'), value: '' })
-    expect(blankOf('plugin-config-result-clipper-admission-provider')).toEqual({ text: fixture.t('followSummaryRoute'), value: '' })
     expect(blankOf('plugin-config-result-clipper-privacy-provider')).toEqual({ text: fixture.t('followSummaryRoute'), value: '' })
     // 文案里点明这是清空动作，不是又一种选项。
     expect(fixture.t('routeUnset')).toContain('清空')
@@ -534,20 +529,17 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(custom.className).toBe(entries)
   })
 
-  it('三个模型组的标注只用用户指定的原文（只讲带来什么），阈值单位写明 token', async () => {
+  it('两个模型组的标注只用用户指定的原文（只讲带来什么），阈值单位写明 token', async () => {
     const { fixture, container } = await renderPage()
-    // 这一轮用户把三条说明逐字定死，并明确「只留」这些字：多的一个「好处：/怎么设：」层级都会被这里拦下。
+    // 这一轮用户把两条说明逐字定死，并明确「只留」这些字：多的一个「好处：/怎么设：」层级都会被这里拦下。
     expect(fixture.t('summaryGroupHint')).toBe(
       '主模型不用反复读长正文——节省缓存计费，上下文也更干净，可以提升模型效果。清空等于请求不发，结果原样透传。',
-    )
-    expect(fixture.t('admissionGroupHint')).toBe(
-      '不值得摘要的结果不会再产生摘要请求，省下这部分 token 费用，强烈建议跟随摘要模型。不启用会直接走摘要模型。',
     )
     expect(fixture.t('privacyGroupHint')).toBe(
       '每条工具结果先判一次，判定敏感就在进主模型之前拦下，敏感内容不会发往外部网络，应该设成本地模型。',
     )
     // 卡片上的说明都不出现「角色」这类内部说法（用户在反馈里点名的就是这个口吻）。
-    for (const hint of ['modelSourceHint', 'summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
+    for (const hint of ['modelSourceHint', 'summaryGroupHint', 'privacyGroupHint'] as const) {
       expect(fixture.t(hint)).not.toContain('角色')
     }
     // 两个阈值都注明单位是 token。
@@ -568,9 +560,6 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(en.summaryGroupHint).toContain('cache billing')
     expect(en.summaryGroupHint).toContain('improve model output')
     expect(en.summaryGroupHint).toContain('passed through unchanged')
-    expect(en.admissionGroupHint).toContain('strongly recommended')
-    expect(en.admissionGroupHint).toContain('follow')
-    expect(en.admissionGroupHint).toContain('straight to summarization')
     expect(en.privacyGroupHint).toContain('local model')
     expect(en.privacyGroupHint).toContain('never leaves for an external network')
     expect(en.privacyGroupHint).toContain('blocked before it reaches the main model')
@@ -578,7 +567,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(en.summaryModeOff).toContain('auto-summarize')
     expect(en.summaryModeDirect).toContain('directly')
     expect(en.summaryModeGated).toContain('first')
-    for (const hint of ['modelSourceHint', 'summaryGroupHint', 'admissionGroupHint', 'privacyGroupHint'] as const) {
+    for (const hint of ['modelSourceHint', 'summaryGroupHint', 'privacyGroupHint'] as const) {
       expect(en[hint]).not.toContain('role')
     }
     expect(en.minInlineTokens).toContain('tokens')
@@ -603,9 +592,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       return [...control.querySelectorAll('option')].map(option => (option as HTMLOptionElement).value)
     }
 
-    // 空串那一档有自己的说法：摘要组是「未配置」，另外两组是「跟随摘要 route」。
+    // 空串那一档有自己的说法：摘要组是「未配置」，隐私组是「跟随摘要 route」。
     expect(optionsOf('plugin-config-result-clipper-route-provider')).toEqual(['', 'local', 'remote'])
-    expect(optionsOf('plugin-config-result-clipper-admission-provider')).toEqual(['', 'local', 'remote'])
     expect(optionsOf('plugin-config-result-clipper-privacy-provider')).toEqual(['', 'local', 'remote'])
     // 摘要组还没选 provider：model 没有候选，控件退回手填（不是「只显示当前选择」——选了 provider 就有全量候选）。
     expect(container.querySelector('#plugin-config-result-clipper-route-model')!.tagName).toBe('INPUT')
@@ -705,7 +693,6 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   })
 
   it('编辑只改草稿：不点该组的「保存」，一个字段都不落盘', async () => {
-    // 准入组只在三态为「先判断再摘要」时展开，它是否可保存的那条断言要先把组展开。
     const { fixture, container } = await renderPage({ ruleSummary: true, admissionJudge: true })
     const edit = async (selector: string, value: string): Promise<void> => {
       await fireEvent.change(container.querySelector(selector)!, { target: { value } })
@@ -723,7 +710,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(groupButton(container, '摘要模型', fixture.t('saveGroup')).disabled).toBe(false)
     expect(groupButton(container, '诊断', fixture.t('saveGroup')).disabled).toBe(false)
     // 没改过的组仍没有可保存的东西。
-    expect(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')).disabled).toBe(true)
+    expect(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')).disabled).toBe(true)
   })
 
   it('点某组「保存」把该组全部改动作为一次原子写入提交，其它组一个字段都不写', async () => {
@@ -826,9 +813,9 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
     expect(box().value).toBe(DEFAULT_ADMISSION_RULE)
     await fireEvent.change(box(), { target: { value: '只判断正文是否与目标相关' } })
-    // 编辑只改草稿；准入组自己的「保存」没有可写的东西（规则正文不在那一组的字段表里）。
+    // 编辑只改草稿：不点摘要组的「保存」，一个字段都不落盘。
     expect(fixture.form.mutations).toEqual([])
-    expect(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')).disabled).toBe(true)
+    expect(groupButton(container, '摘要模型', fixture.t('saveGroup')).disabled).toBe(false)
 
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
@@ -867,7 +854,6 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       expect((container.querySelector(`#${id}`) as HTMLTextAreaElement).value).toBe(rule)
     }
     expect(groupButton(container, '摘要模型', fixture.t('saveGroup')).disabled).toBe(true)
-    expect(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')).disabled).toBe(true)
     expect(groupButton(container, '隐私闸门模型', fixture.t('saveGroup')).disabled).toBe(true)
   })
 
@@ -888,16 +874,15 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ privacyConfirmedLocal: true, failurePolicy: 'block' })
   })
 
-  it('摘要总开关默认关着：摘要组（含三态与保存 / 恢复默认）整组不出现；打开后组回来，准入组随三态选到「先判断再摘要」展开', async () => {
+  it('摘要总开关默认关着：摘要组（含三态与保存 / 恢复默认）整组不出现；打开后组回来，准入规则正文随三态选到「先判断再摘要」出现', async () => {
     const off = await renderPage({ summarize: false })
     expect((off.container.querySelector('#plugin-config-result-clipper-summarize input') as HTMLInputElement).checked).toBe(false)
     expect(off.container.querySelector('#plugin-config-result-clipper-route-provider')).toBeNull()
     expect(off.container.querySelector('#plugin-config-result-clipper-summary-prompt')).toBeNull()
     expect(off.container.querySelector('#plugin-config-result-clipper-summary-mode')).toBeNull()
-    // 「摘要模型」「摘要准入判断模型」两个标题与它们底部的保存按钮都不在页面上。
+    // 「摘要模型」组与它底部的保存按钮都不在页面上。
     const titles = [...off.container.querySelectorAll('h4')].map(node => node.textContent)
     expect(titles).not.toContain(off.fixture.t('summaryGroup'))
-    expect(titles).not.toContain(off.fixture.t('admissionGroup'))
     expect(off.container.textContent).toContain(off.fixture.t('summarizeOffHint'))
     // 隐私组与诊断组不受总开关影响。
     expect(off.container.querySelector('#plugin-config-result-clipper-privacy-confirmed')).not.toBeNull()
@@ -906,15 +891,14 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     await fireEvent.click(off.container.querySelector('#plugin-config-result-clipper-summarize input')!)
     await settle()
     expect(groupOf(off.container, '摘要模型')).toBeDefined()
-    // 三态默认停在「不自动摘要」，准入组不展开；选「先判断再摘要」当场展开，保存只写回三态的两个字段。
+    // 三态默认停在「不自动摘要」，准入规则正文不出现；选「先判断再摘要」当场出现。
     expect(off.container.querySelector('#plugin-config-result-clipper-summary-mode-off')!.getAttribute('aria-selected')).toBe('true')
-    expect([...off.container.querySelectorAll('h4')].map(node => node.textContent))
-      .not.toContain(off.fixture.t('admissionGroup'))
+    expect(off.container.querySelector('#plugin-config-result-clipper-admission-prompt')).toBeNull()
     await fireEvent.click(off.container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
-    expect(groupOf(off.container, '摘要准入判断模型')).toBeDefined()
+    expect(off.container.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
     await fireEvent.click(groupButton(off.container, '摘要模型', off.fixture.t('saveGroup')))
     await settle()
-    expect(groupOf(off.container, '摘要准入判断模型')).toBeDefined()
+    expect(off.container.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
   })
 
   it('摘要总开关保存即生效（不走分组草稿）：点一下当场写回，不需要按任何「保存」', async () => {
@@ -957,7 +941,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     const { fixture, container } = await renderPage({ ruleSummary: false, admissionJudge: true })
     expect(container.querySelector('#plugin-config-result-clipper-summary-mode-off')!.getAttribute('aria-selected')).toBe('true')
     expect([...container.querySelectorAll('h4')].map(node => node.textContent))
-      .not.toContain(fixture.t('admissionGroup'))
+      .not.toContain('摘要准入判断模型')
 
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-direct')!)
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
@@ -1051,7 +1035,6 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
   ]
 
   const SUMMARY_EFFORT = 'plugin-config-result-clipper-summary-effort'
-  const ADMISSION_EFFORT = 'plugin-config-result-clipper-admission-effort'
   const PRIVACY_EFFORT = 'plugin-config-result-clipper-privacy-effort'
 
   /** 某个档位下拉的选项（值 + 显示文本）。 */
@@ -1127,20 +1110,17 @@ describe('推理档位：候选来自 route 声明的档位表（目录里那条
     expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('low')
   })
 
-  it('三个 role 各按各自 route 的档位表算（留空时跟随摘要 route）', async () => {
+  it('两个 role 各按各自 route 的档位表算（隐私留空时跟随摘要 route）', async () => {
     const { container } = await renderPage(
       {
         ruleSummary: true, admissionJudge: true, privacyGate: true,
         routeProvider: 'local', routeModel: 'gateway',
-        admissionProvider: 'local', admissionModel: 'deepseek',
         privacyProvider: 'local', privacyModel: 'plain',
       },
       catalog,
     )
 
     expect((container.querySelector(`#${SUMMARY_EFFORT}`) as HTMLSelectElement).value).toBe('none')
-    expect(options(container, ADMISSION_EFFORT).map(option => option.value)).toEqual(['off', 'low', 'high'])
-    expect((container.querySelector(`#${ADMISSION_EFFORT}`) as HTMLSelectElement).value).toBe('off')
     expect((container.querySelector(`#${PRIVACY_EFFORT}`) as HTMLSelectElement).disabled).toBe(true)
   })
 })
@@ -1273,7 +1253,7 @@ describe('票 19：设置页上的两个精简开关与整页文案', () => {
   it('页面按字段表逐一对照：读数键与控件 id 就是这一批，差一个即红', async () => {
     const { container, face } = await renderCard({ ruleSummary: true, admissionJudge: true })
     expect(Object.keys(face.hooks).sort()).toEqual([
-      'admissionJudge', 'admissionModel', 'admissionPrompt', 'admissionProvider', 'admissionReasoningEffort',
+      'admissionJudge', 'admissionPrompt',
       'condense', 'condenseByCommand',
       'debug', 'debugPath', 'dryRun',
       'failurePolicy', 'maxSummarizeTokens', 'minInlineTokens', 'modelCatalog',
@@ -1299,9 +1279,6 @@ describe('票 19：设置页上的两个精简开关与整页文案', () => {
       'plugin-config-result-clipper-min-inline',
       'plugin-config-result-clipper-max-summarize',
       'plugin-config-result-clipper-summary-prompt',
-      'plugin-config-result-clipper-admission-provider',
-      'plugin-config-result-clipper-admission-model',
-      'plugin-config-result-clipper-admission-effort',
       'plugin-config-result-clipper-admission-prompt',
       'plugin-config-result-clipper-privacy-enabled',
       'plugin-config-result-clipper-privacy-provider',

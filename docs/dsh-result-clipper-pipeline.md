@@ -118,7 +118,7 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | 3c | 目标要求逐字正文 | `exact-text` | 0 |
 | 4 | 没声明 `extract`（漏填或空串）**且** 规则摘要开关关着 | `rule-summary-off` | 0（附一条 `extract-missing` 会话提醒） |
 | 5 | 没声明 `extract` 且 memo 命中 | `summarized` / `not-shorter` / `failed` | 0（复用旧摘要） |
-| 6 | 摘要 route 没配出来 / 没有 `llm` 服务 | `failed` | 0～1（准入可能已发过） |
+| 6 | 摘要 route 没配出来 / 没有 `llm` 服务 | `failed` | 0（准入与摘要共用这条 route，准入也发不出去） |
 | 7 | 准入（开着且没声明 `extract`）判 `no` | `admission-no` | 1 |
 | 8 | 摘要模型返回 `keep` | `kept` | 1 |
 | 9 | 摘要请求失败 / 非法输出 | `failed` | 1 |
@@ -166,7 +166,7 @@ debug 记录里的「结果取值」就是本文每个出口给出的那个值�
 | 摘要提示词路 + 摘要总开关关 | `summary-off` | 0 |
 | 摘要提示词路 + 声明了哨兵 `WHOLE_RESULT` / 逐字正文目标 | `whole-result` / `exact-text` | 0 |
 | 摘要提示词路 + 没声明 `extract` + 规则摘要关 | `rule-summary-off` | 0（附一条 `extract-missing` 提醒） |
-| 摘要提示词路 + route 没配出来（准入关闭时） | `failed` | 0 |
+| 摘要提示词路 + route 没配出来 | `failed` | 0（准入与摘要共用这条 route） |
 | 摘要提示词路 + 没进候选（非目标工具 / 含图片 / 低于下限 / 达上限） | `not-candidate` | 0 |
 | 摘要提示词路 + `read` 按入口读回 | `read-back` | 0 |
 | 摘要提示词路 + memo 命中 | `summarized`（复用旧摘要） | 0 |

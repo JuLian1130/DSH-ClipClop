@@ -530,16 +530,18 @@ async function process(
   // 全是调用形态，模型只有在前缀里才看得见它们。前缀在这里拼一次，准入与摘要两次请求逐字共用。
   const prefix = composeRequestPrefix(describeCall(exec.name, exec.arguments), verdict.estimated)
   // 声明了目标的调用不再问准入模型：目标本身就是最强的那份局部意图，规则正文也用目标改写。
+  // 准入判断与摘要请求走同一条 route（没有单独的准入模型选择），但固定不推理：它只回 yes/no，
+  // 不该跟着摘要的推理档位思考。
   let admission: AdmissionVerdict = 'not-applicable'
   if (config.admissionJudge.get() && goal === undefined) {
-    const provider = config.admissionProvider.get() || config.routeProvider.get()
-    const model = config.admissionModel.get() || config.routeModel.get()
+    const provider = config.routeProvider.get()
+    const model = config.routeModel.get()
     if (llm === undefined || provider === '' || model === '') {
       admission = 'failed'
     } else {
       const called = await requestAdmission(
         llm, provider, model,
-        await efforts.choose(provider, model, config.admissionReasoningEffort.get()),
+        await efforts.choose(provider, model, ''),
         composeAdmissionPrompt(config.admissionPrompt.get(), prefix),
       )
       observation.judgeInputTokens = noteUsage(observation, called.usage)

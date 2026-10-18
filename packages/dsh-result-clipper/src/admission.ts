@@ -64,8 +64,8 @@ export interface AdmissionOutcome {
 /**
  * 发一次准入请求并解析结论。请求只带共用前缀、规则正文与固定外壳——不含工具正文。
  * @param llm - 模型运行时；`ctx.get('llm')` 的结果。
- * @param provider - 准入 route 的 provider。
- * @param model - 准入 route 的 model id。
+ * @param provider - 请求发往的 provider（与摘要请求同一条 route）。
+ * @param model - 请求发往的 model id（与摘要请求相同）。
  * @param effort - 这次请求的推理档位；`undefined` 表示不带该字段（不推理、或该 route 的档位表判定不可用）。
  * @param prompt - {@link composeAdmissionPrompt} 的产物。
  * @returns `yes` 为 `true`、`no` 为 `false`；任何失败都是空结论。

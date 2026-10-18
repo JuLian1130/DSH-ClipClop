@@ -8,7 +8,7 @@
  * 每条「不发请求 / 原文透传」的断言都配阳性对照：同一份夹具换一段脚本或换一个开关，证明那条路径本来会发
  * 请求、本来会替换。
  *
- * 「保存即生效」用真 profile（真 settings + 真 Loader）——开关与准入 route 都是 volatile 引用，改写后同一份
+ * 「保存即生效」用真 profile（真 settings + 真 Loader）——开关是 volatile 引用，改写后同一份
  * 插件实例的下一条结果就该按新值走，不需要重挂载。
  *
  * @module
@@ -28,7 +28,7 @@ import { mount, exec, textOf, textTool } from './support/host.ts'
 import type { HostFixture } from './support/host.ts'
 import { bootProfile, cleanupProfiles, PREFERENCE_NAMESPACE } from './support/profile.ts'
 import type { LiveFixture } from './support/profile.ts'
-import { FakeRoute, UNSUPPORTED_EFFORT_REPLY, requestText } from './support/route.ts'
+import { FakeRoute, requestText } from './support/route.ts'
 import type { FakeReply } from './support/route.ts'
 import { FakeSpill } from './support/spill.ts'
 
@@ -239,8 +239,8 @@ describe('调用形态的口径（照 `docs/dsh-reasoning-effort-research.md` �
   })
 })
 
-describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关闭推理', () => {
-  it('准入 route 留空时跟随摘要 route', async () => {
+describe('票 06 第 1 条：准入开关与准入请求的固定不推理（与摘要同 route）', () => {
+  it('准入请求与摘要请求走同一条 route（没有单独的准入模型）', async () => {
     const { fixture, route } = await mounted()
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
@@ -249,43 +249,44 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
     expect(route.requests[0]?.provider).toBe('mock')
     expect(route.requests[0]?.model).toBe('mock')
     expect(route.requests[1]?.provider).toBe('mock')
+    expect(route.requests[1]?.model).toBe('mock')
   })
 
-  it('配了准入 route 时准入请求发往它，摘要请求仍发往摘要 route', async () => {
-    const { fixture, route } = await mounted({ admissionProvider: 'local', admissionModel: 'small' })
+  it('旧 profile 里残留的准入 route 字段不再被读取：准入请求仍发往摘要 route', async () => {
+    // 取消独立准入模型之前可能写进 profile 的两个字段；schema 已不再声明它们，装载后应被忽略，而不是报错或改道。
+    const fixture = await booted({
+      summarize: true, ruleSummary: true, admissionJudge: true,
+      routeProvider: 'mock', routeModel: 'mock',
+      admissionProvider: 'local', admissionModel: 'small',
+    })
+    const route = new FakeRoute([YES, { text: SUMMARY_REPLY }])
+    fixture.ctx.provide('llm', route as never)
+    fixture.ctx.provide('spillStore', new FakeSpill() as never)
     fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await fixture.ctx.tools.execute(exec('bash'))
 
     expect(route.requests).toHaveLength(2)
-    expect(route.requests[0]?.provider).toBe('local')
-    expect(route.requests[0]?.model).toBe('small')
-    expect(route.requests[1]?.provider).toBe('mock')
-    expect(route.requests[1]?.model).toBe('mock')
+    expect(route.requests[0]?.provider).toBe('mock')
+    expect(route.requests[0]?.model).toBe('mock')
   })
 
-  it('档位字段留空时按该 route 的档位表落成「不推理」；显式选的档位原样下发', async () => {
-    // cline-pass 那种词表：有 `none`、没有 `off`。
-    const cline = await mounted()
+  it('准入请求固定按「不推理」解析，不跟随摘要的推理档位', async () => {
+    // 摘要明确选了 medium；准入请求仍按空值落成最低档 none（阳性对照：摘要那一段确实带 medium）。
+    const cline = await mounted({ summaryReasoningEffort: 'medium' })
     cline.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'low' }, { id: 'medium' }])
     cline.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await cline.fixture.ctx.tools.execute(exec('bash'))
     expect(cline.route.requests).toHaveLength(2)
     expect(cline.route.requests[0]?.reasoningEffort).toBe('none')
+    expect(cline.route.requests[1]?.reasoningEffort).toBe('medium')
 
-    // 阳性对照：换成 deepseek 那种词表（有 `off`、没有 `none`）时落成 `off`，证明这一臂读的是表而不是写死的值。
+    // 换成 deepseek 那种词表（有 `off`、没有 `none`）时准入落成 `off`：这一臂读的是表，不是写死的值。
     const deepseek = await mounted()
     deepseek.route.reasonings.set('mock/mock', [{ id: 'off' }, { id: 'low' }, { id: 'high' }])
     deepseek.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
     await deepseek.fixture.ctx.tools.execute(exec('bash'))
+    expect(deepseek.route.requests).toHaveLength(2)
     expect(deepseek.route.requests[0]?.reasoningEffort).toBe('off')
-
-    const chosen = await mounted({ admissionReasoningEffort: 'medium' })
-    chosen.route.reasonings.set('mock/mock', [{ id: 'none' }, { id: 'medium' }])
-    chosen.fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    await chosen.fixture.ctx.tools.execute(exec('bash'))
-    // 先坐实这一臂真的发过准入请求：没有它，「请求带所选档位」在「压根不发请求」下也为真。
-    expect(chosen.route.requests).toHaveLength(2)
-    expect(chosen.route.requests[0]?.reasoningEffort).toBe('medium')
   })
 
   it('准入开关默认关闭：同一份夹具只发摘要请求', async () => {
@@ -298,9 +299,9 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
     expect(textOf(result.content)).toContain(SHORT_SUMMARY)
   })
 
-  it('保存即生效：同一份真 profile 里写入准入开关与准入 route 后，下一条结果立刻按新值走', async () => {
+  it('保存即生效：同一份真 profile 里打开准入开关后，下一条结果立刻先问一次准入', async () => {
     const fixture = await booted({ summarize: true, ruleSummary: true, routeProvider: 'mock', routeModel: 'mock' })
-    const route = new FakeRoute([{ text: SUMMARY_REPLY }, YES, { text: SUMMARY_REPLY }, YES, { text: SUMMARY_REPLY }])
+    const route = new FakeRoute([{ text: SUMMARY_REPLY }, YES, { text: SUMMARY_REPLY }])
     fixture.ctx.provide('llm', route as never)
     fixture.ctx.provide('spillStore', new FakeSpill() as never)
     let body = `${LONG_BODY}A`
@@ -312,27 +313,19 @@ describe('票 06 第 1 条：准入开关、准入 route 与准入请求的关�
     expect(route.requests).toHaveLength(1)
     expect(requestText(route.requests[0]!)).toContain(body)
 
-    // 写入开关（不重挂载）：下一条结果先发一次不带正文的准入请求。
+    // 写入开关（不重挂载）：下一条结果先发一次不带正文的准入请求，两段请求走同一条摘要 route。
     await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [{ op: 'set', path: ['admissionJudge'], value: true }])
     expect(fixture.config.admissionJudge.get()).toBe(true)
+    // 换一份正文，避开 memo（同工具同正文会直接复用上一次的摘要、不经准入）。
     body = `${LONG_BODY}B`
     await fixture.ctx.tools.execute(exec('bash'))
     expect(route.requests).toHaveLength(3)
     expect(requestText(route.requests[1]!)).not.toContain(body)
     expect(requestText(route.requests[2]!)).toContain(body)
-
-    // 写入准入 route：下一条结果的准入请求发往它，摘要请求仍发往摘要 route。
-    await fixture.ctx.settings.mutate(PREFERENCE_NAMESPACE, [
-      { op: 'set', path: ['admissionProvider'], value: 'local' },
-      { op: 'set', path: ['admissionModel'], value: 'small' },
-    ])
-    expect(fixture.config.admissionProvider.get()).toBe('local')
-    body = `${LONG_BODY}C`
-    await fixture.ctx.tools.execute(exec('bash'))
-    expect(route.requests).toHaveLength(5)
-    expect(route.requests[3]?.provider).toBe('local')
-    expect(route.requests[3]?.model).toBe('small')
-    expect(route.requests[4]?.provider).toBe('mock')
+    for (const request of [route.requests[1], route.requests[2]]) {
+      expect(request?.provider).toBe('mock')
+      expect(request?.model).toBe('mock')
+    }
   })
 })
 
@@ -501,29 +494,5 @@ describe('票 06 第 9 条：准入提示词可编辑，安全外壳与输出格
     expect(editedText).not.toContain(DEFAULT_ADMISSION_RULE)
     // 外壳与输出格式由程序写死：可编辑段之外的部分两种情况下逐字相同。
     expect(editedText.split('只看体积与工具名')[1]).toBe(builtinText.split(DEFAULT_ADMISSION_RULE)[1])
-  })
-})
-
-describe('票 09：准入请求的「关闭推理」在无 off 档的 route 上重试一次', () => {
-  it('档位表读不到时显式档位原样下发、被拒后去掉字段重发，摘要照常替换', async () => {
-    // 这是唯一还会走错误码兜底的情形：表读不到就没法在发送前判定，显式值只能先发出去（档位字段留空时不发）。
-    const { fixture, route, path } = await mounted(
-      { admissionReasoningEffort: 'off', summaryReasoningEffort: 'off' },
-      [UNSUPPORTED_EFFORT_REPLY, YES, { text: SUMMARY_REPLY }],
-    )
-    route.resolveFailures.add('mock/mock')
-    fixture.ctx.tools.register(textTool('bash', LONG_BODY))
-    const result = await fixture.ctx.tools.execute(exec('bash'))
-
-    expect(route.requests).toHaveLength(3)
-    expect(route.requests[0]?.reasoningEffort).toBe('off')
-    // 重发的是同一次准入请求：仍然不带工具正文。
-    expect(route.requests[1]?.reasoningEffort).toBeUndefined()
-    expect(requestText(route.requests[1]!)).not.toContain(LONG_BODY)
-    // 摘要请求不受影响，照常带正文。
-    expect(route.requests[2]?.reasoningEffort).toBe('off')
-    expect(requestText(route.requests[2]!)).toContain(LONG_BODY)
-    expect(textOf(result.content)).toContain(SHORT_SUMMARY)
-    expect(records(path).at(-1)).toEqual(expect.objectContaining({ action: 'summarized', admission: 'yes' }))
   })
 })
