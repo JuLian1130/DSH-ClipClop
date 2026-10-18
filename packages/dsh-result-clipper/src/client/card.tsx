@@ -658,7 +658,7 @@ function PromptRow(props: {
   </section>
 }
 
-/** 摘要组的字段：总开关、三态摘要模式、route、推理档位、两个阈值与提示词。 */
+/** 摘要组的字段：总开关、三态摘要模式、route、推理档位、两个阈值与两份提示词。 */
 const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summarize', kind: 'boolean' },
   // 老版本存过的 section 里没有这个键：缺席时按默认「不勾」算，草稿播种与「已改动」判定都拿它当基准。
@@ -671,6 +671,9 @@ const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'minInlineTokens', kind: 'number', fallback: 512 },
   { field: 'maxSummarizeTokens', kind: 'number', fallback: 12500 },
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
+  // 准入判断的规则正文：只在三态为「先判断再摘要」时有意义，但它是该模式的规则、跟三态属于同一次保存，
+  // 所以不放在准入组里，而是随本组一次写回。
+  { field: 'admissionPrompt', kind: 'prompt', fallback: DEFAULT_ADMISSION_RULE },
 ]
 
 /** 摘要组的三态：不自动摘要 / 直接摘要 / 先判断再摘要。 */
@@ -697,16 +700,15 @@ function summaryModeFields(mode: SummaryMode): { readonly ruleSummary: boolean; 
 }
 
 /**
- * 准入组的字段：route、推理档位与提示词。
+ * 准入组的字段：route 与推理档位。
  *
- * **启用位不在这里**：它是摘要组三态控件的一半（`admissionJudge`），随摘要组一次保存；本组只在三态为
- * 「先判断再摘要」时展开，组内字段仍按本组自己的「保存」写回。
+ * **启用位不在这里**：它是摘要组三态控件的一半（`admissionJudge`）；**规则正文也不在这里**：它同样属于三态，
+ * 随摘要组一次保存。本组只在三态（草稿）为「先判断再摘要」时展开，组内这两个字段仍按本组自己的「保存」写回。
  */
 const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'admissionProvider', kind: 'text' },
   { field: 'admissionModel', kind: 'text' },
   { field: 'admissionReasoningEffort', kind: 'text', fallback: '' },
-  { field: 'admissionPrompt', kind: 'prompt', fallback: DEFAULT_ADMISSION_RULE },
 ]
 
 /** 隐私组的字段：web_fetch 是否也判、route、推理档位、确认位、失败策略与提示词。 */
@@ -810,6 +812,7 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     maxSummarizeTokens,
     // 提示词的已存值是**生效正文**：草稿与它相同就没有改动，等于内置正文时保存走 `unset`。
     summaryPrompt: summaryPrompt === '' ? DEFAULT_SUMMARY_RULE : summaryPrompt,
+    admissionPrompt: admissionPrompt === '' ? DEFAULT_ADMISSION_RULE : admissionPrompt,
   }, props.saveFields)
   // 三态读数与写入都落在摘要组草稿里：选中哪一项就同时改 `ruleSummary` 与 `admissionJudge`，保存时一次原子写回。
   const summaryMode = summaryModeOf(
@@ -823,7 +826,6 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   }
   const admission = useGroupDraft(ADMISSION_FIELDS, {
     admissionProvider, admissionModel, admissionReasoningEffort,
-    admissionPrompt: admissionPrompt === '' ? DEFAULT_ADMISSION_RULE : admissionPrompt,
   }, props.saveFields)
   const privacy = useGroupDraft(PRIVACY_FIELDS, {
     webFetchPrivacyGate, privacyProvider, privacyModel, privacyReasoningEffort, privacyConfirmedLocal,
@@ -989,14 +991,21 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
         disabled={summary.value('ruleSummary') === false}
         onChange={next => { summary.change('summaryPrompt', next) }} />
       {summary.value('ruleSummary') === false && <div style={HINT_STYLE}>{props.t('summaryPromptInactive')}</div>}
+      {/* 准入判断的规则正文只在这一模式下有用，但它是该模式的规则：放在本组草稿里，跟三态一起「保存 / 恢复默认」。
+          选到「先判断再摘要」就出现（不必先保存三态）；选回其它两项时收起，草稿里的正文仍随本组保存，
+          它只在「先判断再摘要」下被用到，收起不丢用户输入。 */}
+      {summaryMode === 'gated' && <PromptRow id="plugin-config-result-clipper-admission-prompt"
+        label={props.t('admissionPrompt')} hint={props.t('promptHint')}
+        value={summary.value('admissionPrompt') as string}
+        onChange={next => { summary.change('admissionPrompt', next) }} />}
     </Group>
     </div>
 
     <hr style={DIVIDER_STYLE} />
 
-    {/* 准入组只在三态为「先判断再摘要」（两个字段都已保存）时展开；它的 route、档位与提示词仍按本组自己的
-        「保存」写回。从属关系用缩排表示（准入比摘要模型再退一级）。 */}
-    {ruleSummary && admissionJudge && <div style={NEST_TWO}>
+    {/* 准入组在三态（草稿）为「先判断再摘要」时展开；它的 route 与档位仍按本组自己的「保存」写回，
+        规则正文与启用位在摘要组。从属关系用缩排表示（准入比摘要模型再退一级）。 */}
+    {summaryMode === 'gated' && <div style={NEST_TWO}>
     <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
       <RouteLine
         provider={{
@@ -1022,9 +1031,6 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
           'plugin-config-result-clipper-admission-effort',
           next => { admission.change('admissionReasoningEffort', next) },
         )} />
-      <PromptRow id="plugin-config-result-clipper-admission-prompt" label={props.t('admissionPrompt')}
-        hint={props.t('promptHint')} value={admission.value('admissionPrompt') as string}
-        onChange={next => { admission.change('admissionPrompt', next) }} />
     </Group>
     </div>}
     </>}

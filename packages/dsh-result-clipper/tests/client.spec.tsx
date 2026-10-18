@@ -261,7 +261,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
   const renderPage = renderCard
 
   it('page 视图显示数据流向与端点归属提示，控件读 schema 的默认值', async () => {
-    // 准入组默认是收起的，要看到它的控件得先启用（默认折叠的用例在下面单列）。
+    // 准入组只在三态为「先判断再摘要」时展开；这个用例用已保存的「先判断再摘要」来看它的控件。
     const { container, fixture } = await renderPage({ ruleSummary: true, admissionJudge: true })
     expect(container.textContent).toContain('摘要与隐私会分别把工具正文发送给它们各自所选的模型')
     // 端点与凭据不在本插件：顶部提示把用户指到「设置 → 模型」，三个 provider 行同样各指一次。
@@ -287,14 +287,19 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       expect(group.querySelector(`#plugin-config-result-clipper-${prefix}-provider`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${prefix}-model`)).not.toBeNull()
       expect(group.querySelector(`#plugin-config-result-clipper-${role}-effort`)).not.toBeNull()
-      expect(group.querySelector(`#plugin-config-result-clipper-${role}-prompt`)).not.toBeNull()
     }
+    // 两份提示词都在摘要组：摘要正文，以及准入判断的规则正文（它属于三态，跟三态同一次保存）。
+    const summary = groupOf(container, '摘要模型')
+    expect(summary.querySelector('#plugin-config-result-clipper-summary-prompt')).not.toBeNull()
+    expect(summary.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
+    // 准入组只剩 route 与档位；它的规则正文不在这一组里。
+    expect(groupOf(container, '摘要准入判断模型')
+      .querySelector('#plugin-config-result-clipper-admission-prompt')).toBeNull()
     // 两个能力开关都在各自那一组之上（不在任何组里）；摘要组还带两个阈值；隐私组带确认位与失败策略；
     // 诊断组放 debug 与干跑两个开关加它们的日志路径。
     for (const id of ['summarize', 'privacy-enabled']) {
       expect(container.querySelector(`#plugin-config-result-clipper-${id}`)).not.toBeNull()
     }
-    const summary = groupOf(container, '摘要模型')
     expect(summary.querySelector('#plugin-config-result-clipper-min-inline')).not.toBeNull()
     expect(summary.querySelector('#plugin-config-result-clipper-max-summarize')).not.toBeNull()
     const privacy = groupOf(container, '隐私闸门模型')
@@ -376,20 +381,21 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(select.style.backgroundSize).toBe('12px 12px')
   })
 
-  it('三态默认「不自动摘要」：准入组不出现；选「先判断再摘要」要按摘要组的「保存」才写回两个字段并展开准入组', async () => {
+  it('三态默认「不自动摘要」：准入组与准入规则正文都不出现；选「先判断再摘要」当场展开，保存时两个字段一次写回', async () => {
     const { fixture, container } = await renderPage()
-    // 默认停在第一项；准入组（标题、route、档位、提示词与它的保存 / 恢复默认）都不在 DOM 上。
+    // 默认停在第一项；准入组（标题、route、档位）与摘要组里的准入规则正文都不在 DOM 上。
     expect(container.querySelector('#plugin-config-result-clipper-summary-mode-off')!.getAttribute('aria-selected')).toBe('true')
     expect([...container.querySelectorAll('h4')].map(node => node.textContent))
       .not.toContain(fixture.t('admissionGroup'))
+    expect(container.querySelector('#plugin-config-result-clipper-admission-prompt')).toBeNull()
 
-    // 选「先判断再摘要」只改草稿：两个字段都不落盘，准入组也还不展开。
+    // 选「先判断再摘要」只改草稿：不落盘，但准入组与规则正文当场出现（不必先保存三态）。
     await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
     expect(fixture.form.mutations).toEqual([])
-    expect([...container.querySelectorAll('h4')].map(node => node.textContent))
-      .not.toContain(fixture.t('admissionGroup'))
+    expect(groupOf(container, '摘要准入判断模型')).toBeDefined()
+    expect(container.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
 
-    // 保存摘要组：一次原子写回两个字段；准入组随已保存值展开。
+    // 保存摘要组：一次原子写回两个字段。准入 route 与规则正文都没改，所以不在这次写入里。
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()
     expect(fixture.form.mutations).toEqual([[
@@ -397,14 +403,15 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
       { op: 'set', path: ['admissionJudge'], value: true },
     ]])
     expect(fixture.form.value).toMatchObject({ ruleSummary: true, admissionJudge: true })
-    expect(groupOf(container, '摘要准入判断模型')).toBeDefined()
   })
 
   it('已保存的「先判断再摘要」展开准入组，缩排比摘要组再退一级', async () => {
     const { container } = await renderPage({ ruleSummary: true, admissionJudge: true })
     expect(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!.getAttribute('aria-selected')).toBe('true')
     expect(container.querySelector('#plugin-config-result-clipper-admission-provider')).not.toBeNull()
-    expect(container.querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
+    // 规则正文在摘要组（跟三态同一次保存），不在准入组里。
+    expect(groupOf(container, '摘要模型').querySelector('#plugin-config-result-clipper-admission-prompt')).not.toBeNull()
+    expect(groupOf(container, '摘要准入判断模型').querySelector('#plugin-config-result-clipper-admission-prompt')).toBeNull()
 
     // 从属关系用缩排表示，每级 32px（16px 在真机上几乎看不出来）：摘要组与隐私组各比自己的开关退一级；
     // 准入组是摘要组的下属，再退一级。
@@ -809,6 +816,47 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(box().value).toBe(DEFAULT_SUMMARY_RULE)
   })
 
+  it('准入规则正文跟三态同属摘要组：选「先判断再摘要」后可改，随摘要组一次写回；改回内置正文走 unset', async () => {
+    const { fixture, container } = await renderPage()
+    const id = 'plugin-config-result-clipper-admission-prompt'
+    const box = (): HTMLTextAreaElement => container.querySelector(`#${id}`) as HTMLTextAreaElement
+    // 三态为「不自动摘要」时没有这个框：它只会被「先判断再摘要」用到。
+    expect(container.querySelector(`#${id}`)).toBeNull()
+
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
+    expect(box().value).toBe(DEFAULT_ADMISSION_RULE)
+    await fireEvent.change(box(), { target: { value: '只判断正文是否与目标相关' } })
+    // 编辑只改草稿；准入组自己的「保存」没有可写的东西（规则正文不在那一组的字段表里）。
+    expect(fixture.form.mutations).toEqual([])
+    expect(groupButton(container, '摘要准入判断模型', fixture.t('saveGroup')).disabled).toBe(true)
+
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+    // 三态两个字段与规则正文一次原子写回；没改动过的其它字段不在这次写入里。
+    expect(fixture.form.mutations).toEqual([[
+      { op: 'set', path: ['ruleSummary'], value: true },
+      { op: 'set', path: ['admissionJudge'], value: true },
+      { op: 'set', path: ['admissionPrompt'], value: '只判断正文是否与目标相关' },
+    ]])
+    expect(fixture.form.value.admissionPrompt).toBe('只判断正文是否与目标相关')
+
+    // 改回内置正文再保存：与摘要提示词同一条规则，走 unset 清掉覆盖。
+    await fireEvent.change(box(), { target: { value: DEFAULT_ADMISSION_RULE } })
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
+    await settle()
+    expect(fixture.form.mutations[fixture.form.mutations.length - 1]).toEqual([
+      { op: 'unset', path: ['admissionPrompt'] },
+    ])
+    expect(fixture.form.value.admissionPrompt).toBe('')
+
+    // 「恢复默认」也管它：三态回「不自动摘要」，再选回来时规则正文已回到内置默认。
+    await fireEvent.change(box(), { target: { value: '临时口径' } })
+    await fireEvent.click(groupButton(container, '摘要模型', fixture.t('resetGroup')))
+    expect(container.querySelector(`#${id}`)).toBeNull()
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
+    expect(box().value).toBe(DEFAULT_ADMISSION_RULE)
+  })
+
   it('提示词没有覆盖时框里显示内置正文，且没改动就没有可保存的东西', async () => {
     const { fixture, container } = await renderPage({ ruleSummary: true, admissionJudge: true })
     for (const [id, rule] of [
@@ -840,7 +888,7 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.form.value).toMatchObject({ privacyConfirmedLocal: true, failurePolicy: 'block' })
   })
 
-  it('摘要总开关默认关着：摘要组（含三态与保存 / 恢复默认）整组不出现；打开后组回来，准入组仍要选「先判断再摘要」并保存才出现', async () => {
+  it('摘要总开关默认关着：摘要组（含三态与保存 / 恢复默认）整组不出现；打开后组回来，准入组随三态选到「先判断再摘要」展开', async () => {
     const off = await renderPage({ summarize: false })
     expect((off.container.querySelector('#plugin-config-result-clipper-summarize input') as HTMLInputElement).checked).toBe(false)
     expect(off.container.querySelector('#plugin-config-result-clipper-route-provider')).toBeNull()
@@ -858,11 +906,12 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     await fireEvent.click(off.container.querySelector('#plugin-config-result-clipper-summarize input')!)
     await settle()
     expect(groupOf(off.container, '摘要模型')).toBeDefined()
-    // 三态默认停在「不自动摘要」，准入组不展开；选「先判断再摘要」并保存摘要组后它才回来。
+    // 三态默认停在「不自动摘要」，准入组不展开；选「先判断再摘要」当场展开，保存只写回三态的两个字段。
     expect(off.container.querySelector('#plugin-config-result-clipper-summary-mode-off')!.getAttribute('aria-selected')).toBe('true')
     expect([...off.container.querySelectorAll('h4')].map(node => node.textContent))
       .not.toContain(off.fixture.t('admissionGroup'))
     await fireEvent.click(off.container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
+    expect(groupOf(off.container, '摘要准入判断模型')).toBeDefined()
     await fireEvent.click(groupButton(off.container, '摘要模型', off.fixture.t('saveGroup')))
     await settle()
     expect(groupOf(off.container, '摘要准入判断模型')).toBeDefined()
