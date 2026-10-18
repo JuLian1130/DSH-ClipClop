@@ -106,7 +106,7 @@ async function eachRow(file: string, onRow: (row: CorpusRow) => void): Promise<v
 
 describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判定计数', () => {
   it(
-    '四条规则与整链逐调用幂等，并导出「会被替换」的调用清单',
+    '五条规则与整链逐调用幂等，并导出「会被替换」的调用清单',
     async () => {
       const root = corpusRoot as string
       const sessionsDir = join(root, 'sessions')
@@ -119,7 +119,7 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
         targetCalls: 0,
         targetWithText: 0,
         belowFloor: 0,
-        changed: { 'strip-ansi': 0, 'strip-cr': 0, 'dedup-adjacent': 0, 'tail-cap': 0 },
+        changed: { 'strip-ansi': 0, 'strip-cr': 0, 'dedup-adjacent': 0, 'tail-cap': 0, 'group-paths': 0 },
         abstainedPerRule: {},
         chainChanged: 0,
         chainAbstained: 0,
