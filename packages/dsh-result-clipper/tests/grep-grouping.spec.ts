@@ -29,7 +29,7 @@ const expand = (text: string): string => {
   for (const line of text.split('\n')) {
     const row = /^(\d+)([:-])(.*)$/.exec(line)
     if (row !== null && path !== null) {
-      out.push(`${path}:${row[1]}${row[2]}${row[3]}`)
+      out.push(`${path}${row[2] === '-' ? '-' : ':'}${row[1]}${row[2]}${row[3]}`)
       continue
     }
     path = line
@@ -97,15 +97,57 @@ describe('票 25 · 路径前缀分组', () => {
     ].join('\n'))
   })
 
-  it('上下文行的 `-` 分隔符保留', () => {
-    const text = rows(Array.from({ length: 12 }, (_, i) => [A, i + 1] as const))
-      .replace(`${A}:2:${CONTENT}`, `${A}:2-${CONTENT}`)
+  it('真实的 `grep -A/-B` 上下文行（`path-行号-正文`）并入同一组、保留 `-`', () => {
+    const text = [
+      `${A}:1:${CONTENT}`,
+      `${A}-2-${CONTENT}`,
+      `${A}-3-${CONTENT}`,
+      `${A}:4:${CONTENT}`,
+      `${A}-5-${CONTENT}`,
+      `${A}-6-${CONTENT}`,
+      ...Array.from({ length: 8 }, (_, i) => `${A}:${10 + i}:${CONTENT}`),
+      `${A}-20-${CONTENT}`,
+      `${A}-21-${CONTENT}`,
+    ].join('\n')
     const verdict = condenseText('bash', text, at())
     expect(verdict.kind).toBe('condensed')
     if (verdict.kind !== 'condensed') return
-    const lines = verdict.text.split('\n')
-    expect(lines).toContain(`2-${CONTENT}`)
-    expect(lines).not.toContain(`2:${CONTENT}`)
+    expect(verdict.text).toBe([
+      A,
+      `1:${CONTENT}`,
+      `2-${CONTENT}`,
+      `3-${CONTENT}`,
+      `4:${CONTENT}`,
+      `5-${CONTENT}`,
+      `6-${CONTENT}`,
+      ...Array.from({ length: 8 }, (_, i) => `${10 + i}:${CONTENT}`),
+      `20-${CONTENT}`,
+      `21-${CONTENT}`,
+    ].join('\n'))
+    expect(expand(verdict.text)).toBe(text)
+  })
+
+  it('正文里孤立的「数字:」行不会让整条规则放弃', () => {
+    const text = [
+      ...Array.from({ length: 20 }, (_, i) => `${A}:${i + 1}:${CONTENT}`),
+      'header',
+      '2024: revenue',
+    ].join('\n')
+    const verdict = condenseText('bash', text, at())
+    expect(verdict.kind).toBe('condensed')
+    if (verdict.kind !== 'condensed') return
+    expect(verdict.rules).toContain('group-paths')
+    expect(verdict.text.startsWith(`${A}\n1:${CONTENT}\n`)).toBe(true)
+    expect(verdict.text.endsWith('header\n2024: revenue')).toBe(true)
+  })
+
+  it('末尾换行计入行数上限：超限时不分组，第二遍不动', () => {
+    const text = [
+      ...Array.from({ length: 150 }, (_, i) => `${A}:${i + 1}:${CONTENT}`),
+      ...Array.from({ length: 147 }, (_, i) => `${B}:${i + 1}:${CONTENT}`),
+    ].join('\n') + '\n'
+    const first = condenseText('bash', text, at())
+    expect(first).toEqual({ kind: 'unchanged' })
   })
 
   it('省得太少时过不了净收益闸门，原样交回', () => {

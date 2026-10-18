@@ -294,21 +294,27 @@ function dedupAdjacent(text: string): string {
   return changed ? out.join('\n') : text
 }
 
-/** 一行 grep 命中/上下文：`path:行号:正文`，或 `-A/-B` 上下文行的 `path-行号-正文`。 */
+/** 一行 grep 命中：`path:行号:正文`（多文件）。 */
 const GREP_ROW = /^(.*?):(\d+)([:-])(.*)$/
 
-/** 已经分组过的行：以 `行号:` 或 `行号-` 开头（组头不会是这种形状）。 */
+/** `-A/-B` 的上下文行：整行是 `path-行号-正文`，去掉 `${path}-` 前缀后按这个形状解析。 */
+const CONTEXT_ROW = /^(\d+)([:-])(.*)$/
+
+/** 已经分组过的组员：以 `行号:` 或 `行号-` 开头（组头不会是这种形状）。 */
 const GROUPED_ROW = /^\d+[:-]/
 
 /**
- * 路径前缀分组（票 25）：相邻的同一文件命中只写一次路径，行内保留 `行号:正文`。
+ * 路径前缀分组（票 25）：相邻的同一文件命中只写一次路径，组员行内保留 `行号:正文`。
  *
- * 只重排、不删内容（无入口、不计有损）。单文件输出（`12:正文`，没有路径）不匹配，原样保留；分组后的行以
- * `行号:` 开头且组头不是 `path:行号:正文`，前置检查据此直接交回，第二遍是 no-op。
+ * 只重排、不删内容（无入口、不计有损）。单文件输出（`12:正文`，没有路径）不匹配，原样保留。多文件
+ * `grep -A/-B` 的上下文行是 `path-行号-正文`（两处分隔符都是 `-`），按组头路径识别后并入同一组、保留 `-`。
+ *
+ * 幂等靠两条：组员以 `行号:`/`行号-` 开头、组头不是 `path:行号:正文`，所以「组头 + 至少两行组员」是分组
+ * 输出的最小形状；出现这个形状就视为已分组、直接交回。按位置逐行判断会被正文里含 `:数字:` 的行误伤。
  *
  * 必须排在 `tail-cap` **之后**：封顶会把组头裁进省略区，先分组就会让保留下来的行失去归属。但每组固定多一行
- * 组头与一行空行，分组可能把正文推过行数上限，第二遍的封顶就会触发、整链不再幂等；所以结果超过 `maxLines`
- * 时干脆不分组（复审发现：299 行输入分组后 302 行，第二遍裁掉 52 行）。
+ * 组头与一行空行，分组可能把正文推过行数上限，第二遍的封顶就会触发、整链不再幂等；所以结果按封顶的口径
+ * （`split('\n').length`，含补回的末尾换行）超过 `maxLines` 时干脆不分组。
  * @param text - 正文。
  * @param maxLines - 封顶的行数上限；分组结果超过它就不分组。
  * @returns 重排后的正文；没有可合并的相邻行、或结果会超出行数上限时原样交回（`unchanged`，不是守卫放弃）。
@@ -316,8 +322,10 @@ const GROUPED_ROW = /^\d+[:-]/
 function groupPaths(text: string, maxLines: number): string {
   const trailing = text.endsWith('\n')
   const lines = (trailing ? text.slice(0, -1) : text).split('\n')
-  // 已经分组过的正文直接交回：正文里含 `:数字:` 的行可能被二次解析成「路径」，这条前置检查让本规则幂等。
-  if (lines.some((line, k) => k > 0 && GROUPED_ROW.test(line) && GREP_ROW.exec(lines[k - 1] as string) === null)) return text
+  // 已经分组过的正文直接交回：组头 + 至少两行组员才算分组输出；单个「数字:」行不算。
+  if (lines.some((line, k) => k > 0 && k + 1 < lines.length
+    && GROUPED_ROW.test(line) && GROUPED_ROW.test(lines[k + 1] as string)
+    && GREP_ROW.exec(lines[k - 1] as string) === null)) return text
   const out: string[] = []
   let changed = false
   let i = 0
@@ -329,27 +337,36 @@ function groupPaths(text: string, maxLines: number): string {
       continue
     }
     const path = head[1] as string
+    const rows: Array<readonly [string, string, string]> = [[head[2] as string, head[3] as string, head[4] as string]]
     let j = i + 1
     while (j < lines.length) {
-      const next = GREP_ROW.exec(lines[j] as string)
-      if (next === null || next[1] !== path) break
+      const line = lines[j] as string
+      const next = GREP_ROW.exec(line)
+      if (next !== null) {
+        if (next[1] !== path) break
+        rows.push([next[2] as string, next[3] as string, next[4] as string])
+        j++
+        continue
+      }
+      const ctx = line.startsWith(`${path}-`) ? CONTEXT_ROW.exec(line.slice(path.length + 1)) : null
+      if (ctx === null) break
+      rows.push([ctx[1] as string, ctx[2] as string, ctx[3] as string])
       j++
     }
-    if (j - i === 1) {
+    if (rows.length === 1) {
       out.push(lines[i] as string)
       i++
       continue
     }
     changed = true
     out.push(path)
-    for (let k = i; k < j; k++) {
-      const row = GREP_ROW.exec(lines[k] as string) as RegExpExecArray
-      out.push(`${row[2]}${row[3]}${row[4]}`)
-    }
+    for (const [num, sep, content] of rows) out.push(`${num}${sep}${content}`)
     if (j < lines.length && (lines[j] as string) !== '') out.push('')
     i = j
   }
-  if (!changed || out.length > maxLines) return text
+  if (!changed) return text
+  // 与 tail-cap 同一把尺子：它按 `split('\n').length` 计数，补回来的末尾换行也算一行。
+  if (out.length + (trailing ? 1 : 0) > maxLines) return text
   return out.join('\n') + (trailing ? '\n' : '')
 }
 
