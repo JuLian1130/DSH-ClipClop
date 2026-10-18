@@ -290,6 +290,8 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 没有单独的准入模型组：准入判断与摘要请求走同一条 route。
     expect([...container.querySelectorAll('h4')].map(node => node.textContent))
       .not.toContain('摘要准入判断模型')
+    // 两个模型分组之间用一条横线隔开：摘要组那一段之后就是分隔线。
+    expect((groupOf(container, '摘要模型').parentElement as HTMLElement).nextElementSibling?.tagName).toBe('HR')
     // 两份提示词都在摘要组：摘要正文，以及准入判断的规则正文（它属于三态，跟三态同一次保存）。
     const summary = groupOf(container, '摘要模型')
     expect(summary.querySelector('#plugin-config-result-clipper-summary-prompt')).not.toBeNull()
@@ -816,6 +818,12 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     // 编辑只改草稿：不点摘要组的「保存」，一个字段都不落盘。
     expect(fixture.form.mutations).toEqual([])
     expect(groupButton(container, '摘要模型', fixture.t('saveGroup')).disabled).toBe(false)
+
+    // 收起再展开：草稿里的正文还在（收起只隐藏，不丢输入）。
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-direct')!)
+    expect(container.querySelector(`#${id}`)).toBeNull()
+    await fireEvent.click(container.querySelector('#plugin-config-result-clipper-summary-mode-gated')!)
+    expect(box().value).toBe('只判断正文是否与目标相关')
 
     await fireEvent.click(groupButton(container, '摘要模型', fixture.t('saveGroup')))
     await settle()

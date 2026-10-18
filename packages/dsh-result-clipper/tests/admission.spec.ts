@@ -253,11 +253,11 @@ describe('票 06 第 1 条：准入开关与准入请求的固定不推理（与
   })
 
   it('旧 profile 里残留的准入 route 字段不再被读取：准入请求仍发往摘要 route', async () => {
-    // 取消独立准入模型之前可能写进 profile 的两个字段；schema 已不再声明它们，装载后应被忽略，而不是报错或改道。
+    // 取消独立准入模型之前可能写进 profile 的三个字段；schema 已不再声明它们，装载后应被忽略，而不是报错或改道。
     const fixture = await booted({
       summarize: true, ruleSummary: true, admissionJudge: true,
       routeProvider: 'mock', routeModel: 'mock',
-      admissionProvider: 'local', admissionModel: 'small',
+      admissionProvider: 'local', admissionModel: 'small', admissionReasoningEffort: 'minimal',
     })
     const route = new FakeRoute([YES, { text: SUMMARY_REPLY }])
     fixture.ctx.provide('llm', route as never)
