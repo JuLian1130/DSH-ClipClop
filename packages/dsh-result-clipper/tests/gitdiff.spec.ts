@@ -576,25 +576,25 @@ describe('compactDiff · 封顶（判据 8.2）', () => {
       ' section 1 line A',
       ' section 1 line B',
       '-section 1 line C',
-      '  ... (1 addition truncated)',
+      '  ... (1 addition truncated: 原文第 9 行；先读这段，不够再 grep)',
       '@@ -98,7 +98,7 @@ section 20 line B',
       ' section 20 line C',
       ' section 20 line D',
       ' section 20 line E',
       '-section 21 line A',
-      '  ... (1 addition truncated)',
+      '  ... (1 addition truncated: 原文第 18 行；先读这段，不够再 grep)',
       '@@ -298,7 +298,7 @@ section 60 line B',
       ' section 60 line C',
       ' section 60 line D',
       ' section 60 line E',
       '-section 61 line A',
-      '  ... (1 addition truncated)',
+      '  ... (1 addition truncated: 原文第 27 行；先读这段，不够再 grep)',
       '@@ -398,7 +398,7 @@ section 80 line B',
       ' section 80 line C',
       ' section 80 line D',
       ' section 80 line E',
       '-section 81 line A',
-      '  ... (1 addition truncated)',
+      '  ... (1 addition truncated: 原文第 36 行；先读这段，不够再 grep)',
       '  +4 -4',
     ].join('\n'))
   })
@@ -629,7 +629,7 @@ describe('compactDiff · 封顶（判据 8.2）', () => {
       '-L28',
       '+L28 CHANGED',
       '',
-      '... (more changes truncated)',
+      '... (more changes truncated: 原文第 26–27 行；先读这段，不够再 grep)',
       '  +2 -2',
     ].join('\n'))
   })
@@ -783,7 +783,7 @@ describe('compactDiff · 计数覆盖整份输入（判据 8.1 的「计数不�
       '@@ -2,7 +2,7 @@ L01',
       '-L05',
       '',
-      '... (more changes truncated)',
+      '... (more changes truncated: 原文第 10–25 行；先读这段，不够再 grep)',
       '  +1 -1',
       '',
       'multi.txt',
@@ -797,7 +797,7 @@ describe('compactDiff · 计数覆盖整份输入（判据 8.1 的「计数不�
     const lines = out!.split('\n')
     // 手算：这个 hunk 是 60 删 + 60 增；明细封顶 100 行，所以显示 60 删 + 40 增，剩下 20 增只出现在注记里。
     expect(lines[lines.length - 1]).toBe('  +60 -60')
-    expect(out).toContain('... (20 additions truncated)')
+    expect(out).toContain('... (20 additions truncated: 原文第 109–128 行；先读这段，不够再 grep)')
     expect(lines.filter((line) => line.startsWith('-')).length).toBe(60)
     expect(lines.filter((line) => line.startsWith('+')).length).toBe(40)
   })

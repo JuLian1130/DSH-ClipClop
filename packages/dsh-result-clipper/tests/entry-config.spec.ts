@@ -178,9 +178,10 @@ describe('配置契约', () => {
     // 「按命令语义精简」默认开：与总开关一致，有损替换有回退入口、模型要整份/逐字时整层让路。
     expect(fiber.config?.condenseByCommand.get()).toBe(true)
     // 四个非 volatile 字段装载后是**普通值**（没有 `.get()`）——设置页只保留 volatile 字段，所以它们不回页面；
-    // 默认值取票 14 实测的那一档（明细 100 / 整体 200 / 前导 3），换一档门槛读数就不可比。
+    // `condenseGitDiff` 默认关（省幅来自明细截断、被截明细的恢复量更大），三个封顶参数仍取票 14 实测的那一档
+    // （明细 100 / 整体 200 / 前导 3）。
     const config = fiber.config as unknown as Record<string, unknown>
-    expect(config.condenseGitDiff).toBe(true)
+    expect(config.condenseGitDiff).toBe(false)
     expect(config.condenseGitDiffMaxHunkLines).toBe(100)
     expect(config.condenseGitDiffMaxLines).toBe(200)
     expect(config.condenseGitDiffLeadingContext).toBe(3)

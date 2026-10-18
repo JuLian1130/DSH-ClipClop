@@ -7,8 +7,8 @@
  * `web_fetch` 不过隐私闸门、摘要准入判断关闭、摘要 route 与准入 route 未配置、
  * 隐私 route 未配置、阈值 512/12500、三类请求各自「不推理」（档位字段留空，按该 route 的档位表拼出对应 id）、
  * 提示词留空（用内置规则正文）、摘要提示词摘要**默认关闭**（`ruleSummary`）、debug 关闭且不
- * 自动改用临时路径、干跑关闭、**工具结果精简开启**、**按命令语义精简开启**、`git diff` / `sed` 大窗口 /
- * 原始转储三族开启。
+ * 自动改用临时路径、干跑关闭、**工具结果精简开启**、**按命令语义精简开启**、`sed` 大窗口 /
+ * 原始转储两族开启、`git diff` 族**默认关闭**。
  *
  * **精简参数是 6 个非 volatile 字段**（票 15）：尺寸下限与净收益阈值以**估算单位**计（与摘要的两个阈值同一把
  * 尺子），封顶参数按**行数**计。非 volatile 的含义是「只影响配置文件的 A/B，不进设置页」：settings 的写回路径
@@ -17,13 +17,13 @@
  *
  * **票 16 再加五项**：`condenseByCommand`（「按命令语义精简」，volatile，默认开——它是命令族那一步的总闸，
  * 有损替换必须可回退，模型要整份/逐字时整层让路）与
- * 四个**非 volatile** 字段——族开关 `condenseGitDiff`（默认**开**：关掉它只用于逐个 A/B 对照，总开关打开就该
- * 有族接手）与它的三个封顶参数。族参数一律按 `condense<族名><参数名>` 平铺，默认值引 `gitdiff.ts` 的
+ * 四个**非 volatile** 字段——族开关 `condenseGitDiff`（默认**关**：省幅来自明细截断、而被截明细的恢复量更大，
+ * 见字段注释）与它的三个封顶参数。族参数一律按 `condense<族名><参数名>` 平铺，默认值引 `gitdiff.ts` 的
  * `GIT_DIFF_DEFAULTS`（票 14 实测的那一档，换一档门槛读数就不可比）。
  *
  * **票 17 再加九项**：`sedWindow`（`sed` 大窗口）与 `rawDump`（原始转储）两族各自的**非 volatile** 开关与参数
- * ——开关默认**开**（理由与 `condenseGitDiff` 相同），参数引 `glance.ts` 的 `SED_WINDOW_DEFAULTS` /
- * `RAW_DUMP_DEFAULTS`（同样是票 14 实测的那一档）。
+ * ——开关默认**开**（与 diff 族相反：这两族省幅大，被省略的中段用 grep 取回只要几十到几百字符），参数引
+ * `glance.ts` 的 `SED_WINDOW_DEFAULTS` / `RAW_DUMP_DEFAULTS`（同样是票 14 实测的那一档）。
  *
  * 提示词留空表示「没有用户覆盖」，内置规则正文在 `summary.ts` 与 `admission.ts`；「恢复默认」就是把该字段
  * 清回空串。三个角色（摘要、摘要准入判断、隐私闸门）各有自己的 route：`routeProvider` / `routeModel` 是摘要
@@ -144,10 +144,12 @@ export interface Config {
   /** 单行字符上限：超过它的单行被截断并带标记。 */
   condenseMaxLineChars?: number
   /**
-   * `git diff` 族（`compactDiff`）的开关，**默认开启**。非 volatile：只影响配置文件里的逐个对照，不进设置页。
+   * `git diff` 族（`compactDiff`）的开关，**默认关闭**（2026-10-18 按测量改）。非 volatile：只影响配置文件里的
+   * 逐个对照，不进设置页。
    *
-   * 默认开是必须的：判据 1 要的是「打开『按命令语义精简』后同一份改动视图就被收窄」——族开关若默认关，总开关
-   * 打开却什么都不发生。它的用途是 A/B 时**逐个关掉**某一族，看那一族单独贡献了多少。
+   * 这一族的省幅来自明细截断（语料 62.9% 的命中行会截断明细，省幅中位 16.3%，不截断只剩 4.5%），而被截掉的
+   * 明细中位占正文 27.6%：模型需要被截内容时先省后读是净亏（同一份 9k 的 diff 实测恢复 3.2k–8.4k 字符）。
+   * 所以默认关；打开后注记照旧带被截明细的原文行号与「先读这段」的取回顺序（票 23）。
    */
   condenseGitDiff?: boolean
   /** 这一族**每 hunk** 保留的明细行数上限（删增行都算）。 */
@@ -162,7 +164,8 @@ export interface Config {
    */
   condenseGitDiffLeadingContext?: number
   /**
-   * `sed` 大窗口族（`sedWindow`）的开关，**默认开启**；非 volatile，理由与 `condenseGitDiff` 相同。
+   * `sed` 大窗口族（`sedWindow`）的开关，**默认开启**；非 volatile。与 `git diff` 族相反：这一族省的是整段
+   * 中段，模型按行号 grep 取回只要几十到几百字符。
    *
    * 它管的是「请求窗口 ≥101 行的 `sed`」那一类调用；命中门槛与这一族的尺寸下限是两个量（后者见
    * `condenseSedWindowMinLines`）。
@@ -176,7 +179,7 @@ export interface Config {
   condenseSedWindowMinLines?: number
   /**
    * 原始转储族（`rawDump`：`cat` / `ls` / `head` / `tail` / `nl`）的开关，**默认开启**；非 volatile，理由与
-   * `condenseGitDiff` 相同。
+   * `condenseGitDiff` 相同（默认开，理由见 `sedWindow`）。
    */
   condenseRawDump?: boolean
   /** 这一族保留的头行数。 */
@@ -237,7 +240,7 @@ export const Config = z.object({
   condenseMaxLineChars: z.number().default(CONDENSE_DEFAULTS.maxLineChars),
   // 票 16 的 `git diff` 族：开关与三个封顶参数同样**不带 `.volatile()`**。默认值取票 14 实测的那一档——
   // 换一档，`docs/dsh-condense-measure/` 里记的门槛读数就不可比（默认值引 `GIT_DIFF_DEFAULTS`，不抄数字）。
-  condenseGitDiff: z.boolean().default(true),
+  condenseGitDiff: z.boolean().default(false),
   condenseGitDiffMaxHunkLines: z.number().default(GIT_DIFF_DEFAULTS.maxHunkLines),
   condenseGitDiffMaxLines: z.number().default(GIT_DIFF_DEFAULTS.maxLines),
   condenseGitDiffLeadingContext: z.number().default(GIT_DIFF_DEFAULTS.leadingContext),

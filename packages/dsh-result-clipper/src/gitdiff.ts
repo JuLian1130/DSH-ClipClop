@@ -240,13 +240,24 @@ function diffHeaderPath(line: string): string {
   return resolveHeaderTarget(rest) ?? line
 }
 
-/** 被明细封顶丢掉的行按侧汇总成一句注记；两侧都没丢就不是注记。 */
-function truncationNote(deletions: number, additions: number): string | undefined {
+/**
+ * 被明细封顶丢掉的行按侧汇总成一句注记；两侧都没丢就不是注记。
+ *
+ * 注记带上被丢掉那一整段在**原文**里的行号（票 23）：拿入口路径 + 这组行号就能只读被省掉的明细，不必把整份
+ * diff 读回来。`from` / `to` 是 1 基原文行号；`from` 为 0 表示没有行号可报。
+ */
+function truncationNote(deletions: number, additions: number, from: number, to: number): string | undefined {
   const count = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' : 's'}`
   if (deletions === 0 && additions === 0) return undefined
-  if (deletions === 0) return `  ... (${count(additions, 'addition')} truncated)`
-  if (additions === 0) return `  ... (${count(deletions, 'deletion')} truncated)`
-  return `  ... (${count(deletions, 'deletion')}, ${count(additions, 'addition')} truncated)`
+  const range = from > 0 && to >= from ? `: 原文第 ${lineRange(from, to)} 行；先读这段，不够再 grep` : ''
+  if (deletions === 0) return `  ... (${count(additions, 'addition')} truncated${range})`
+  if (additions === 0) return `  ... (${count(deletions, 'deletion')} truncated${range})`
+  return `  ... (${count(deletions, 'deletion')}, ${count(additions, 'addition')} truncated${range})`
+}
+
+/** 原文行号：单行只写一个行号，多行写 `起–止`。 */
+function lineRange(from: number, to: number): string {
+  return from === to ? `${from}` : `${from}–${to}`
 }
 
 export function compactDiff(text: string, params: GitDiffParams): string | undefined {
@@ -281,6 +292,9 @@ function compact(text: string, params: GitDiffParams): string {
   // 「验证状态」），文件数中位 2 / p90 6 / p99 12 / **最多 15**，所以越界上限约 30 行（15%）；换来的是**没有
   // 任何文件静默丢掉自己的数字**——而只给断点那个文件收尾会让其余文件在正文里只剩一个文件名、看不出改了多少。
   let cut = false
+  // 注记要报的原文行号（1 基）：本段第一个 / 最后一个被明细封顶丢掉的行；`skippedFrom === 0` 表示还没丢。
+  let skippedFrom = 0
+  let skippedTo = 0
   // 全 diff 的前导上下文按整体行数上限的十分之一封顶；它不进 `maxLines` 的计数，否则前导上下文会跨 hunk
   // 无界增长（票 16 备注的推导）。
   const leadingCap = Math.floor(params.maxLines / 10)
@@ -308,14 +322,17 @@ function compact(text: string, params: GitDiffParams): string {
   // 明细封顶的注记只在还有明细的时候有意义；截断之后由 `... (more changes truncated)` 兜底。
   const flushNote = (): void => {
     if (cut) return
-    const note = truncationNote(skippedDel, skippedAdd)
+    const note = truncationNote(skippedDel, skippedAdd, skippedFrom, skippedTo)
     if (note === undefined) return
     result.push(note)
     skippedDel = 0
     skippedAdd = 0
+    skippedFrom = 0
+    skippedTo = 0
   }
 
-  linesLoop: for (const rawLine of lines) {
+  linesLoop: for (let index = 0; index < lines.length; index++) {
+    const rawLine = lines[index] as string
     // diff 正文里的 `\r` 是行内覆盖痕迹，不是内容的一部分。
     const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
 
@@ -364,8 +381,12 @@ function compact(text: string, params: GitDiffParams): string {
                 flushLeading()
                 result.push(line)
                 hunkShown += 1
-              } else if (isDel) skippedDel += 1
-              else skippedAdd += 1
+              } else {
+                if (isDel) skippedDel += 1
+                else skippedAdd += 1
+                if (skippedFrom === 0) skippedFrom = index + 1
+                skippedTo = index + 1
+              }
               leading.length = 0
             }
           } else if (!cut && hunkShown > 0) {
@@ -401,7 +422,11 @@ function compact(text: string, params: GitDiffParams): string {
     if (!cut && result.length - leadingTotal >= params.maxLines) {
       // 断点之前已按明细封顶丢过的行，先把注记写出来再收尾；之后的行只计数、不再产生明细。
       flushNote()
-      result.push('\n... (more changes truncated)')
+      // 断点之后只剩文件名与聚合量，明细全都省了：把省掉的原文行号写进注记（票 23），
+      // 模型据此只读那一段。断在最后一行时没有省掉任何明细，那就只留原来那句话。
+      const from = index + 2
+      const range = from <= lines.length ? `: 原文第 ${lineRange(from, lines.length)} 行；先读这段，不够再 grep` : ''
+      result.push(`\n... (more changes truncated${range})`)
       cut = true
     }
   }

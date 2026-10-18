@@ -186,7 +186,7 @@ function commandTool(
   })
 }
 
-describe('票 21：命令族默认开，显式关着时那一步不发生', () => {
+describe('票 21：命令族默认开（`git diff` 族默认关），显式关着时那一步不发生', () => {
   it('显式关掉后同一份 diff 只走通用链：没有族 id，正文是尾部封顶的形态', async () => {
     const { fixture, path } = await mounted({ condenseByCommand: false })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
@@ -198,15 +198,24 @@ describe('票 21：命令族默认开，显式关着时那一步不发生', () =
     expect(observation(path)).toMatchObject({ rules: ['tail-cap'] })
   })
 
-  it('默认部署下同一份输入被命令族收窄（阳性对照），且比通用链更短', async () => {
-    const { fixture, path } = await mounted()
-    fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
-    const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
+  it('`git diff` 族默认关：默认部署下同一份输入只走通用链，显式打开后才被 `compactDiff` 收窄', async () => {
+    // 2026-10-18 起 `condenseGitDiff` 默认关：这一族的省幅来自明细截断，而被截明细的恢复量比省幅还大
+    // （见 `config.ts` 的字段注释与 `exp12/RANGE-AB.md`）。
+    const off = await mounted()
+    off.fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
+    const offText = textOf((await off.fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
+    expect(offText).toContain('…[省略')
+    expect(offText).not.toMatch(AGGREGATE_LINE)
+    expect(observation(off.path)).not.toHaveProperty('family')
+    expect(observation(off.path)).toMatchObject({ rules: ['tail-cap'] })
 
-    expect(text).toMatch(AGGREGATE_LINE)
-    expect(text).not.toContain('…[省略')
-    expect(observation(path)).toMatchObject({ family: 'compactDiff', rules: ['compactDiff'] })
-    expect(text.length).toBeLessThan(GIT_DIFF_BODY.length)
+    const on = await mounted({ condenseGitDiff: true })
+    on.fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
+    const onText = textOf((await on.fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
+    expect(onText).toMatch(AGGREGATE_LINE)
+    expect(onText).not.toContain('…[省略')
+    expect(observation(on.path)).toMatchObject({ family: 'compactDiff', rules: ['compactDiff'] })
+    expect(onText.length).toBeLessThan(offText.length)
   })
 
   it('族没命中的调用，开关两态下的通用链取舍一字不差', async () => {
@@ -246,7 +255,7 @@ describe('票 16 判据 9：族开关与三个封顶参数', () => {
   it('配置文件里改掉整体行数上限即按其取值生效', async () => {
     const lengths: number[] = []
     for (const maxLines of [200, 60]) {
-      const { fixture } = await mounted({ condenseByCommand: true, condenseGitDiffMaxLines: maxLines })
+      const { fixture } = await mounted({ condenseByCommand: true, condenseGitDiff: true, condenseGitDiffMaxLines: maxLines })
       fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
       lengths.push(textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content).length)
     }
@@ -256,7 +265,7 @@ describe('票 16 判据 9：族开关与三个封顶参数', () => {
 
 describe('票 16 判据 5：脚手架链按首个实质命令命中', () => {
   it('cd + echo 标题 + 真命令 + 管道 也被这一族接手', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
     const args = { command: 'cd /repo && echo "=== 标题 ===" && git diff HEAD~1 | head -40' }
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, args))).content)
@@ -266,7 +275,7 @@ describe('票 16 判据 5：脚手架链按首个实质命令命中', () => {
   })
 
   it('纯变量赋值段也被跳过：`PAGER=less; git diff …` 照样被这一族接手', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
     const args = { command: 'PAGER=less; git diff HEAD~1' }
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, args))).content)
@@ -280,7 +289,7 @@ describe('票 16 判据 13：命令族只在 bash 结果上求值', () => {
   it('同一份内容与同一条 unix 命令串，只换工具名：bash 命中、pwsh 不命中', async () => {
     const seen: Array<Record<string, unknown>> = []
     for (const name of ['bash', 'pwsh'] as const) {
-      const { fixture, path } = await mounted({ condenseByCommand: true })
+      const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
       fixture.ctx.tools.register(commandTool(name, GIT_DIFF_BODY))
       const result = await fixture.ctx.tools.execute(exec(name, undefined, GIT_DIFF_ARGS))
       seen.push({ text: textOf(result.content), condense: observation(path) })
@@ -295,7 +304,7 @@ describe('票 16 判据 13：命令族只在 bash 结果上求值', () => {
 
 describe('票 20 · 非零退出码不再整族挡下', () => {
   it('成功时被这一族接手', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { exitCode: 0 }))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -304,7 +313,7 @@ describe('票 20 · 非零退出码不再整族挡下', () => {
   })
 
   it('非零退出码时同样被这一族接手', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { exitCode: 1 }))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -313,7 +322,7 @@ describe('票 20 · 非零退出码不再整族挡下', () => {
   })
 
   it('缺失退出码事实时不由它挡下（缺失不是「失败」）', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(textTool('bash', GIT_DIFF_BODY))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -324,7 +333,7 @@ describe('票 20 · 非零退出码不再整族挡下', () => {
 
 describe('票 16 判据 7：输入已被工具自身截断时不输出跨文件聚合量', () => {
   it('截断为真时不接族、正文里没有任何聚合量，通用链照常收窄', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { truncated: true }))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -334,7 +343,7 @@ describe('票 16 判据 7：输入已被工具自身截断时不输出跨文件�
   })
 
   it('阳性对照：同一份完整输入照常输出增减量', async () => {
-    const { fixture } = await mounted({ condenseByCommand: true })
+    const { fixture } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { truncated: false }))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -344,7 +353,7 @@ describe('票 16 判据 7：输入已被工具自身截断时不输出跨文件�
 
 describe('票 16 判据 10：四个去向逐个从外部观察', () => {
   it('过不了净收益闸门时交回下游正文，取值记 condense-not-shorter', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', TINY_SAVING_DIFF))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
 
@@ -357,7 +366,7 @@ describe('票 16 判据 10：四个去向逐个从外部观察', () => {
   })
 
   it('有损但回退入口写不成时交回原文，取值记 condense-abstained，且不留下入口', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true }, null)
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true }, null)
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
     const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))).content)
 
@@ -371,7 +380,7 @@ describe('票 16 判据 10：四个去向逐个从外部观察', () => {
   })
 
   it('干跑只预报不替换：正文仍是下游正文，但取值记「本应替换」', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true, dryRun: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true, dryRun: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
 
@@ -383,7 +392,7 @@ describe('票 16 判据 10：四个去向逐个从外部观察', () => {
   })
 
   it('族守卫放弃后落通用链：记录里 family 在场、rules 记的是通用链的 id，这次不是失败', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', NOT_A_DIFF_BODY))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
     const record = readRecords(path)[0]!
@@ -397,7 +406,7 @@ describe('票 16 判据 10：四个去向逐个从外部观察', () => {
   })
 
   it('族守卫放弃后落通用链：上游入口保留，不再追加本层入口（票 20）', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', NOT_A_DIFF_WITH_NOTICE))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
     const text = textOf(result.content)
@@ -535,7 +544,7 @@ describe('票 17 判据 3：原始转储按 glance 形态收窄；族名只作�
     const grepped = await run({ condenseByCommand: true }, RAW_DUMP_BODY, 'grep cat f')
     expect(grepped.condense).not.toHaveProperty('family')
 
-    const git = await run({ condenseByCommand: true }, RAW_DUMP_BODY, 'git diff -- cat')
+    const git = await run({ condenseByCommand: true, condenseGitDiff: true }, RAW_DUMP_BODY, 'git diff -- cat')
     expect(git.condense.family).toBe('compactDiff')
     expect(git.text).not.toContain('…[中段省略 ')
     expect(git.text).toContain('…[省略 ')
@@ -551,7 +560,7 @@ describe('票 17 判据 3：原始转储按 glance 形态收窄；族名只作�
 describe('票 17 判据 5：两族的替换都先把完整正文写进回退入口', () => {
   it('两族各跑一次：spill 后端收到替换前的完整正文，模型可见正文带着入口说明', async () => {
     for (const one of GLANCE_CASES) {
-      const { fixture } = await mounted({ condenseByCommand: true })
+      const { fixture } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
       fixture.ctx.tools.register(commandTool('bash', one.body))
       const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, { command: one.command }))).content)
 
@@ -566,7 +575,7 @@ describe('票 17 判据 5：两族的替换都先把完整正文写进回退入�
 
   it('入口写不成（没有 spill 后端）时两族都交回原文、不留入口', async () => {
     for (const one of GLANCE_CASES) {
-      const { fixture, path } = await mounted({ condenseByCommand: true }, null)
+      const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true }, null)
       fixture.ctx.tools.register(commandTool('bash', one.body))
       const text = textOf((await fixture.ctx.tools.execute(exec('bash', undefined, { command: one.command }))).content)
 
@@ -593,7 +602,7 @@ describe('票 20 · 非零退出码不再整族挡下，内容守卫照常判断
 
     // `git diff --exit-code` 的形态：合法 diff + 尾部退出标记；标记不能阻止解析，也不能被吞掉。
     const diff = await run(
-      { condenseByCommand: true },
+      { condenseByCommand: true, condenseGitDiff: true },
       `${GIT_DIFF_BODY}\n[exit code: 1]`,
       GIT_DIFF_ARGS.command,
       { exitCode: 1 },
@@ -605,7 +614,7 @@ describe('票 20 · 非零退出码不再整族挡下，内容守卫照常判断
 
   it('失败的正文不是 diff 时由 handler 放弃、落通用链；错误正文不被退出码整族跳过', async () => {
     const failed = await run(
-      { condenseByCommand: true },
+      { condenseByCommand: true, condenseGitDiff: true },
       `${NOT_A_DIFF_BODY}\n[exit code: 1]`,
       GIT_DIFF_ARGS.command,
       { exitCode: 1 },
@@ -644,7 +653,7 @@ describe('票 20 · 上游入口与截断按族', () => {
   })
 
   it('命令族也不再追加第二条入口：rawDump 命中带上游说明的正文', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', `${RAW_DUMP_BODY}${notice}`))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, RAW_DUMP_ARGS))
     const text = textOf(result.content)
@@ -660,7 +669,7 @@ describe('票 20 · 上游入口与截断按族', () => {
   })
 
   it('sedWindow 命中带上游说明的正文时也只留上游入口', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', `${SED_WINDOW_BODY}${notice}`))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, SED_WINDOW_ARGS))
     const text = textOf(result.content)
@@ -676,7 +685,7 @@ describe('票 20 · 上游入口与截断按族', () => {
   })
 
   it('compactDiff 命中带上游说明的正文时也只留上游入口', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', `${GIT_DIFF_BODY}${notice}`))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
     const text = textOf(result.content)
@@ -693,7 +702,7 @@ describe('票 20 · 上游入口与截断按族', () => {
 
   it('截断只挡 compactDiff；rawDump 照常接手，带路径的截断说明当上游入口', async () => {
     const marker = '\n[output truncated; full output: /tmp/full.txt]'
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', `${RAW_DUMP_BODY}${marker}`, { truncated: true }))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, RAW_DUMP_ARGS))
     const text = textOf(result.content)
@@ -707,7 +716,7 @@ describe('票 20 · 上游入口与截断按族', () => {
 
   it('截断的 sedWindow 同样接手，带路径的截断说明当上游入口', async () => {
     const marker = '\n[output truncated; full output: /tmp/full.txt]'
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', `${SED_WINDOW_BODY}${marker}`, { truncated: true }))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, SED_WINDOW_ARGS))
     const text = textOf(result.content)
@@ -721,7 +730,7 @@ describe('票 20 · 上游入口与截断按族', () => {
 
   it('截断说明的路径是 `(unavailable)` 时不算上游入口：照常写本层入口', async () => {
     const marker = '\n[output truncated; full output: (unavailable)]'
-    const { fixture } = await mounted({ condenseByCommand: true })
+    const { fixture } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', `${RAW_DUMP_BODY}${marker}`, { truncated: true }))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, RAW_DUMP_ARGS))
     const text = textOf(result.content)
@@ -733,7 +742,7 @@ describe('票 20 · 上游入口与截断按族', () => {
   })
 
   it('截断的 diff 不让 compactDiff 接族，落通用链', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { truncated: true }))
     const result = await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
 
@@ -755,7 +764,7 @@ describe('票 17 判据 7：两族在诊断记录里各自的族 id 可分辨', 
 
 describe('票 16 判据 11：诊断里记下命中的族与两条事实', () => {
   it('记录里 family 是族 id，facts 是扁平 map（含 command / exitCode / truncated / format / bytes / lines / estimated）', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(commandTool('bash', GIT_DIFF_BODY, { exitCode: 0, truncated: false }))
     await fixture.ctx.tools.execute(exec('bash', undefined, GIT_DIFF_ARGS))
 
@@ -774,7 +783,7 @@ describe('票 16 判据 11：诊断里记下命中的族与两条事实', () => 
   })
 
   it('族没接手时 facts 照写（观察面不只在命中时才有）', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(textTool('bash', GIT_DIFF_BODY))
     await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'node build.js' }))
 

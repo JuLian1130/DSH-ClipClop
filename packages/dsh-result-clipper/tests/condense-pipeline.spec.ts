@@ -340,7 +340,7 @@ describe('票 15 判据 8：按内容判定、平台中立', () => {
   })
 
   it('打开「按命令语义精简」后，同一条 unix 命令串只在 bash 上被命令族接手（票 16 判据 13）', async () => {
-    const { fixture, path } = await mounted({ condenseByCommand: true })
+    const { fixture, path } = await mounted({ condenseByCommand: true, condenseGitDiff: true })
     fixture.ctx.tools.register(textTool('bash', GIT_DIFF_BODY))
     fixture.ctx.tools.register(textTool('pwsh', GIT_DIFF_BODY))
 
@@ -569,7 +569,7 @@ describe('票 19 判据 2：19 个非 volatile 字段改值即改变行为（写
     { field: 'condenseMaxLines', value: 50, body: PLAIN_296 },
     { field: 'condenseMaxLineChars', value: 5000, body: 'x'.repeat(3000) },
     // 票 16 的 `git diff` 族。
-    { field: 'condenseGitDiff', value: false, body: GIT_DIFF_BODY, args: GIT_DIFF_ARGS, byCommand: true },
+    { field: 'condenseGitDiff', value: true, body: GIT_DIFF_BODY, args: GIT_DIFF_ARGS, byCommand: true },
     { field: 'condenseGitDiffMaxHunkLines', value: 1, body: GIT_DIFF_BODY, args: GIT_DIFF_ARGS, byCommand: true },
     { field: 'condenseGitDiffMaxLines', value: 20, body: GIT_DIFF_BODY, args: GIT_DIFF_ARGS, byCommand: true },
     { field: 'condenseGitDiffLeadingContext', value: 0, body: CONTEXT_DIFF, args: GIT_DIFF_ARGS, byCommand: true },
@@ -606,7 +606,14 @@ describe('票 19 判据 2：19 个非 volatile 字段改值即改变行为（写
     expect(schemaFields).toHaveLength(19)
 
     for (const testCase of CASES) {
-      const base = testCase.byCommand === true ? { condenseByCommand: true } : {}
+      // `git diff` 族默认关（`condenseGitDiff`）：它的三个参数要先打开这一族才看得见；
+      // 族开关那一档自己就是被对照的字段，所以不进 base。
+      const base = {
+        ...testCase.byCommand === true ? { condenseByCommand: true } : {},
+        ...testCase.field.startsWith('condenseGitDiff') && testCase.field !== 'condenseGitDiff'
+          ? { condenseGitDiff: true }
+          : {},
+      }
       const baseline = await outputOf(base, testCase)
       const overridden = await outputOf({ ...base, [testCase.field]: testCase.value }, testCase)
       expect(overridden, `${testCase.field} 改值后同一条结果的正文应随之改变`).not.toBe(baseline)
