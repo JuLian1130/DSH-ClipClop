@@ -549,8 +549,10 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(fixture.t('maxSummarizeTokens')).toContain('token')
     // 隐私确认位是对具体 route 的声明：文案要说清「换了 route 就作废」。
     expect(fixture.t('privacyConfirmedLocalHint')).toContain('作废')
-    // 自动摘要三态：说明它管的是"主模型没主动请求摘要"的那些结果，默认停在「不自动摘要」。
+    // 自动摘要三态：说明它管的是"主模型没主动请求摘要"的那些结果，默认停在「不自动摘要」；「先判断再摘要」的代价也写清。
+    expect(fixture.t('ruleSummary')).toBe('主模型没主动请求时')
     expect(fixture.t('ruleSummaryHint')).toContain('非主模型主动请求')
+    expect(fixture.t('ruleSummaryHint')).toContain('不值得的不发摘要请求')
     expect(fixture.t('ruleSummaryHint')).toContain('默认选「不自动摘要」')
     expect(fixture.t('summaryModeOff')).toBe('不自动摘要')
     expect(fixture.t('summaryModeDirect')).toBe('直接摘要')
@@ -575,7 +577,9 @@ describe('票 02 第 2 条 / 票 03 第 8 条 / 票 06 / 票 07 / 票 12：配�
     expect(en.minInlineTokens).toContain('tokens')
     expect(en.maxSummarizeTokens).toContain('tokens')
     expect(en.privacyConfirmedLocalHint).toContain('invalidates the confirmation')
+    expect(en.ruleSummary).toBe('When the main model did not ask')
     expect(en.ruleSummaryHint).toContain('did not ask to summarize')
+    expect(en.ruleSummaryHint).toContain('cost no summary request')
     expect(en.ruleSummaryHint).toContain('Don’t auto-summarize')
 
     // 页面上渲染的就是这些文案（简介与阈值标题都进了 DOM）。
