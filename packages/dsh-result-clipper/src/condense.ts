@@ -2,9 +2,10 @@
  * 工具结果精简的确定性核心：通用形状变换的链、尺寸下限与净收益闸门。
  *
  * 这一层不调用模型、不读磁盘、不改变内容的语义，只按确定性规则压掉机械形状与超长正文的固定形态。五条规则按计划
- * §4.3 的 13–16 与票 25 的顺序施加（链式，**无损在前、有损在后**，各自幂等）：剥 ANSI 转义序列 → 去 `\r` 覆盖行 →
- * 相邻游程去重 → 尾部偏置封顶 → 路径前缀分组（分组排在封顶之后，见 `groupPaths`）。计划 §4.2 的「首个命中者胜」
- * 管的是命令族 handler 的单选，**不是**这一组，所以这里五条全部依序施加：剥了格式控制序列之后照样做相邻重复行折叠。
+ * §4.3 的 13–16 与票 25 的顺序施加（链式，各自幂等）：剥 ANSI 转义序列 → 去 `\r` 覆盖行 → 相邻游程去重 →
+ * 尾部偏置封顶 → 路径前缀分组。无损规则在前、`tail-cap` 在后是常规，**路径分组是唯一的例外**：它无损却排在封顶
+ * 之后，理由见 `groupPaths`。计划 §4.2 的「首个命中者胜」管的是命令族 handler 的单选，**不是**这一组，所以这里
+ * 五条全部依序施加：剥了格式控制序列之后照样做相邻重复行折叠。
  *
  * 一次判定的取值就是计划 §7.3 的四个去向：`condensed`（替换）、`unchanged`（一处都没改动，含不适用工具、
  * 低于尺寸下限）、`abstained`（**忠实性守卫**放弃，计划 §4.1 #8）、`not-shorter`（过了变换但过不了闸门，
@@ -296,23 +297,27 @@ function dedupAdjacent(text: string): string {
 /** 一行 grep 命中/上下文：`path:行号:正文`，或 `-A/-B` 上下文行的 `path-行号-正文`。 */
 const GREP_ROW = /^(.*?):(\d+)([:-])(.*)$/
 
+/** 已经分组过的行：以 `行号:` 或 `行号-` 开头（组头不会是这种形状）。 */
+const GROUPED_ROW = /^\d+[:-]/
+
 /**
  * 路径前缀分组（票 25）：相邻的同一文件命中只写一次路径，行内保留 `行号:正文`。
  *
  * 只重排、不删内容（无入口、不计有损）。单文件输出（`12:正文`，没有路径）不匹配，原样保留；分组后的行以
- * `行号:` 开头、不再匹配本规则，所以第二遍是 no-op（幂等）。
+ * `行号:` 开头且组头不是 `path:行号:正文`，前置检查据此直接交回，第二遍是 no-op。
  *
- * 必须排在 `tail-cap` **之后**：封顶会把组头裁进省略区，先分组就会让保留下来的行失去归属。
+ * 必须排在 `tail-cap` **之后**：封顶会把组头裁进省略区，先分组就会让保留下来的行失去归属。但每组固定多一行
+ * 组头与一行空行，分组可能把正文推过行数上限，第二遍的封顶就会触发、整链不再幂等；所以结果超过 `maxLines`
+ * 时干脆不分组（复审发现：299 行输入分组后 302 行，第二遍裁掉 52 行）。
  * @param text - 正文。
- * @returns 重排后的正文；没有可合并的相邻行时原样交回（`unchanged`，不是守卫放弃）。
+ * @param maxLines - 封顶的行数上限；分组结果超过它就不分组。
+ * @returns 重排后的正文；没有可合并的相邻行、或结果会超出行数上限时原样交回（`unchanged`，不是守卫放弃）。
  */
-function groupPaths(text: string): string | undefined {
-  if (!text.includes(':')) return text
+function groupPaths(text: string, maxLines: number): string {
   const trailing = text.endsWith('\n')
   const lines = (trailing ? text.slice(0, -1) : text).split('\n')
-  // 已经分组过的正文直接交回：分组行以「行号:」开头，而它前面的组头不会是 `path:行号:正文`。正文里含
-  // `:数字:` 的行可能被二次解析成「路径」，这条前置检查让本规则幂等。
-  if (lines.some((line, k) => k > 0 && /^\d+[:-]/.test(line) && GREP_ROW.exec(lines[k - 1] as string) === null)) return text
+  // 已经分组过的正文直接交回：正文里含 `:数字:` 的行可能被二次解析成「路径」，这条前置检查让本规则幂等。
+  if (lines.some((line, k) => k > 0 && GROUPED_ROW.test(line) && GREP_ROW.exec(lines[k - 1] as string) === null)) return text
   const out: string[] = []
   let changed = false
   let i = 0
@@ -344,7 +349,7 @@ function groupPaths(text: string): string | undefined {
     if (j < lines.length && (lines[j] as string) !== '') out.push('')
     i = j
   }
-  if (!changed) return text
+  if (!changed || out.length > maxLines) return text
   return out.join('\n') + (trailing ? '\n' : '')
 }
 
@@ -389,10 +394,11 @@ function tailCap(text: string, params: CondenseParams): string {
 }
 
 /**
- * 通用形状变换的链（计划 §4.3 的 13–16 + 票 25）：无损在前、有损在后，各自幂等。
+ * 通用形状变换的链（计划 §4.3 的 13–16 + 票 25）：无损在前、`tail-cap` 在后是常规，各自幂等。
  *
- * 路径分组是唯一的例外：它排在封顶**之后**。封顶会把组头裁进省略区，先分组会让保留下来的行失去文件归属；
- * 反过来「先封顶、再对存活行分组」不会产生没有组头的行。
+ * 路径分组是唯一的例外：它无损，却排在封顶**之后**。封顶会把组头裁进省略区，先分组会让保留下来的行失去文件
+ * 归属；反过来「先封顶、再对存活行分组」不会产生没有组头的行。分组会让行数小幅上涨，所以结果超过行数上限时
+ * 直接不分组（见 `groupPaths`），否则第二遍的封顶会触发、整链就不再幂等。
  * @param params - 精简参数；封顶那条规则按它取值。
  * @returns 依施加顺序排列的规则表。
  */
@@ -402,7 +408,7 @@ export function generalRules(params: CondenseParams): readonly GeneralRule[] {
     { id: 'strip-cr', lossy: false, apply: stripCr },
     { id: 'dedup-adjacent', lossy: false, apply: dedupAdjacent },
     { id: 'tail-cap', lossy: true, apply: (text: string) => tailCap(text, params) },
-    { id: 'group-paths', lossy: false, apply: groupPaths },
+    { id: 'group-paths', lossy: false, apply: (text: string) => groupPaths(text, params.maxLines) },
   ]
 }
 

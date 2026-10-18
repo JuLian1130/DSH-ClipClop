@@ -152,9 +152,31 @@ describe('票 25 · 路径前缀分组', () => {
       headers++
     }
     expect(headers).toBe(2)
+    expect(verdict.text.split('\n').length).toBeLessThanOrEqual(CONDENSE_DEFAULTS.maxLines)
+    expect(condenseText('bash', verdict.text, at())).toEqual({ kind: 'unchanged' })
   })
 
-  it('规则表按「无损在前、有损在后」排列，分组在封顶之后且无入口', () => {
+  it('分组会把行数推过上限时不分组，整链保持幂等', () => {
+    const text = [
+      ...Array.from({ length: 150 }, (_, i) => `${A}:${i + 1}:${CONTENT}`),
+      ...Array.from({ length: 149 }, (_, i) => `${B}:${i + 1}:${CONTENT}`),
+    ].join('\n')
+    expect(condenseText('bash', text, at())).toEqual({ kind: 'unchanged' })
+  })
+
+  it('分组结果在上限内时，第二遍不动', () => {
+    const text = [
+      ...Array.from({ length: 100 }, (_, i) => `${A}:${i + 1}:${CONTENT}`),
+      ...Array.from({ length: 100 }, (_, i) => `${B}:${i + 1}:${CONTENT}`),
+    ].join('\n')
+    const first = condenseText('bash', text, at())
+    expect(first.kind).toBe('condensed')
+    if (first.kind !== 'condensed') return
+    expect(first.text.split('\n').length).toBeLessThanOrEqual(CONDENSE_DEFAULTS.maxLines)
+    expect(condenseText('bash', first.text, at())).toEqual({ kind: 'unchanged' })
+  })
+
+  it('规则表顺序：封顶在前、分组在后；分组无损、无入口', () => {
     const rules = generalRules(at())
     expect(rules.map(rule => rule.id)).toEqual([
       'strip-ansi',

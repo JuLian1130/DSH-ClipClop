@@ -561,7 +561,7 @@ describe('票 19 判据 2：19 个非 volatile 字段改值即改变行为（写
   }
 
   const CASES: readonly FieldCase[] = [
-    // 票 15 的六个通用参数：四条通用形状变换各自可拧的那一档。
+    // 票 15 的六个通用参数：五条通用形状变换各自可拧的那一档。
     { field: 'condenseMinUnits', value: 1e9, body: LONG_LINES_BODY },
     { field: 'condenseMinNetGainUnits', value: 0, body: NOT_SHORTER_BODY },
     { field: 'condenseHeadLines', value: 10, body: LONG_LINES_BODY },
