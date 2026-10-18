@@ -75,7 +75,7 @@ export type ResultClipperLocaleKey =
 /** 中文文案。 */
 export const zh: Record<ResultClipperLocaleKey, string> = {
   tab: '工具结果裁剪',
-  tabPointer: '本插件的设置都在侧边栏「插件」页里这个插件的详情页：工具结果精简的两个开关，摘要、摘要准入判断与隐私闸门各自的模型、推理档位与提示词，摘要阈值，以及 debug 记录与干跑。',
+  tabPointer: '本插件的设置都在侧边栏「插件」页里这个插件的详情页：工具结果精简的两个开关，摘要与隐私闸门各自的模型、推理档位与提示词（选「先判断再摘要」时判断也用摘要这套），摘要阈值，以及 debug 记录与干跑。',
   condense: '工具结果精简',
   condenseHint: '推荐保持勾选：长命令输出只留判断要用的那部分，省上下文，也不额外发模型请求。不勾时工具结果按原样交给模型。',
   condenseByCommand: '按命令语义精简',
@@ -96,7 +96,7 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   dryRunHint: '勾选后完整走一遍处理、但只写诊断记录：不替换正文、不改会话，也不留下别的东西。需要同时开启 debug 记录并填好日志路径。',
   dryRunInactiveHint: '干跑未生效：debug 记录关闭或日志路径为空，工具结果仍会被照常替换。',
   flowWarning: '摘要与隐私会分别把工具正文发送给它们各自所选的模型。',
-  modelSourceHint: '模型地址与 API key 不在本卡片：先在「设置 → 模型 → 自定义提供方」建好一条（那里填地址与 API key，本地服务填它的地址），再在下面为摘要与隐私闸门各选 provider 与 model；准入判断跟随摘要模型，两处可以选同一条。',
+  modelSourceHint: '模型地址与 API key 不在本卡片：先在「设置 → 模型 → 自定义提供方」建好一条（那里填地址与 API key，本地服务填它的地址），再在下面为摘要与隐私闸门各选 provider 与 model（两处可以选同一条）；选「先判断再摘要」时判断用摘要这套模型，不单独选。',
   summaryGroup: '摘要模型',
   summaryGroupHint: '主模型不用反复读长正文——节省缓存计费，上下文也更干净，可以提升模型效果。清空等于请求不发，结果原样透传。',
   privacyGroup: '隐私闸门模型',
@@ -148,7 +148,7 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
 /** 英文文案。 */
 export const en: Record<ResultClipperLocaleKey, string> = {
   tab: 'Result clipper',
-  tabPointer: 'This plugin\'s settings are on its detail page in the Plugins page of the sidebar: the two trim switches, the model, reasoning effort and prompt for summarization, the admission judge and the privacy gate, the summary thresholds, and the debug records and dry run.',
+  tabPointer: 'This plugin\'s settings are on its detail page in the Plugins page of the sidebar: the two trim switches, the model, reasoning effort and prompt for summarization and for the privacy gate (“Judge first” reuses the summary settings), the summary thresholds, and the debug records and dry run.',
   condense: 'Trim tool results',
   condenseHint: 'Keeping this ticked is recommended: long command output keeps only what is needed to keep working, which saves context without any model request. Unticked, tool results reach the model unchanged.',
   condenseByCommand: 'Trim by command semantics',
@@ -169,7 +169,7 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   dryRunHint: 'Runs the whole handling but only writes diagnostics: the body is not replaced, the session is not changed, and nothing else is left behind. Needs debug records on and a log path filled in.',
   dryRunInactiveHint: 'Dry run is not in effect: debug records are off or the log path is empty, so tool results are still replaced.',
   flowWarning: 'Summarization and the privacy gate each send the tool body to the model they have selected.',
-  modelSourceHint: 'Model endpoints and API keys are not in this card: create the provider first in Settings → Models → custom provider (that is where the address and API key go, and where a local server address is entered), then pick provider and model below for the summary and for the privacy gate; the admission judge follows the summary model, and both may name the same one.',
+  modelSourceHint: 'Model endpoints and API keys are not in this card: create the provider first in Settings → Models → custom provider (that is where the address and API key go, and where a local server address is entered), then pick provider and model below for the summary and for the privacy gate (both may name the same one); “Judge first” reuses the summary model and is not picked separately.',
   summaryGroup: 'Summary model',
   summaryGroupHint: 'The main model never has to re-read a long body — that saves cache billing, keeps the context cleaner, and can improve model output. Clearing the route means no request is sent and the tool result is passed through unchanged.',
   privacyGroup: 'Privacy gate model',
