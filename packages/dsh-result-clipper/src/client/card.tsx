@@ -4,25 +4,26 @@
  * 阈值；接着是诊断组——debug 与干跑两个开关加它们的日志路径；最后是**工具结果精简**的两个开关（总开关与它下面
  * 的「按命令语义精简」）。组之间用一条横线隔开。
  *
- * **三项能力的开关都紧挨各自那一组、且一律保存即生效**（`applySwitch`）：摘要开关在摘要组之上、准入启用位在
- * 准入组之上、隐私闸门开关在隐私组之上；三者关掉时，它们下面那一整组（含该组的保存 / 恢复默认）都不显示。
- * 走即时写入而不是分组草稿是必须的——它们折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次
- * 存不下去的改动。**工具结果精简的两个开关同样保存即生效**（它们不折叠任何承载「保存」的组，这一层也没有别的
- * 参数需要草稿）；其余开关（自动摘要大内容、web_fetch 也过隐私闸门、隐私确认位、debug 与干跑）留在所属组的
- * 草稿里，由该组的「保存」一次写回。
+ * **两个能力开关紧挨各自那一组、且一律保存即生效**（`applySwitch`）：摘要开关在摘要组之上、隐私闸门开关在
+ * 隐私组之上；两者关掉时，它们下面那一整组（含该组的保存 / 恢复默认）都不显示。走即时写入而不是分组草稿是
+ * 必须的——它们折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次存不下去的改动。**工具结果
+ * 精简的两个开关同样保存即生效**（它们不折叠任何承载「保存」的组，这一层也没有别的参数需要草稿）；其余开关
+ * （**自动摘要大内容的三态**、web_fetch 也过隐私闸门、隐私确认位、debug 与干跑）留在所属组的草稿里，由该组的
+ * 「保存」一次写回。三态里的「先判断再摘要」同时写 `ruleSummary` 与 `admissionJudge` 两个字段：准入判断只是
+ * 自动摘要的闸门，所以它不再是一个独立能力开关。
  *
  * **每组是「草稿 + 保存」**：控件只改本地草稿，不点该组的「保存」什么都不落盘；「保存」把该组所有改动作为
  * **一次原子写入**提交（`configForms.mutate` 的多个 op 共用一个 revision 栅栏与一次 Host 校验），任一条被
- * 拒绝就整组不生效并显示 `role="alert"`。「恢复默认」按字段分两种语义：推理档位、两个阈值与三份提示词规则
- * 正文回到**内置默认**（提示词回到内置正文，保存时以 `unset` 清掉覆盖、不写一条逐字相同的覆盖）；provider、
- * model、隐私确认位、失败策略与 debug 路径回到**上一次保存的值**（即丢掉未保存的改动）。草稿在 Host 侧取值
- * 变化时（保存被接受，或别处写入）整体重新播种。
+ * 拒绝就整组不生效并显示 `role="alert"`。「恢复默认」按字段分两种语义：推理档位、两个阈值、三份提示词规则
+ * 正文与三态回到**内置默认**（提示词回到内置正文，保存时以 `unset` 清掉覆盖、不写一条逐字相同的覆盖；三态回到
+ * 「不自动摘要」）；provider、model、隐私确认位、失败策略与 debug 路径回到**上一次保存的值**（即丢掉未保存的
+ * 改动）。草稿在 Host 侧取值变化时（保存被接受，或别处写入）整体重新播种。
  *
  * 座位约定见设计文档「配置面与设置座位」——**只有一个座位**：本页。插件自己的开关就是「设置某项能力」本身，
  * 所以它们不做成入口页上的一排开关，而是与它们要用的 route、提示词与阈值放在一起。
  *
  * 从属关系用缩排表示（{@link NEST_ONE} / {@link NEST_TWO}，每级 32px）：摘要组比摘要开关退一级；隐私组比隐私
- * 开关退一级；准入启用位与摘要组同层，它下面那一组再退一级。
+ * 开关退一级；准入组只在三态为「先判断再摘要」时出现，比摘要组再退一级。
  *
  * **端点与凭据不在这里**：DSH 的请求形状只带 `provider` 与 `model`，endpoint、协议与 API key 归 LLM 适配器
  * 按 route 持有（`GenerateOptions` 没有 baseURL / apiKey 字段）。所以卡片顶部与三个 provider 行都把用户指到
@@ -192,8 +193,8 @@ const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '12px 0 0' } as const
 /**
  * 缩排的两级：用缩进表示从属关系（不是嵌套的子页面，只是视觉层级）。
  *
- * 一级＝「摘要模型」组（以及「隐私闸门模型」组）从属于它上面那个能力开关；二级＝「启用摘要准入判断」与它下面
- * 的准入组从属于摘要模型组。每级 32px：**缩一格（16px）在真机上几乎看不出来**，两格才读得出层级。
+ * 一级＝「摘要模型」组（以及「隐私闸门模型」组）从属于它上面那个能力开关；二级＝准入组从属于摘要模型组。
+ * 每级 32px：**缩一格（16px）在真机上几乎看不出来**，两格才读得出层级。
  */
 const NEST_ONE = { marginLeft: 32 } as const
 const NEST_TWO = { marginLeft: 64 } as const
@@ -657,11 +658,13 @@ function PromptRow(props: {
   </section>
 }
 
-/** 摘要组的字段：总开关、规则摘要开关、route、推理档位、两个阈值与提示词。 */
+/** 摘要组的字段：总开关、三态摘要模式、route、推理档位、两个阈值与提示词。 */
 const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summarize', kind: 'boolean' },
   // 老版本存过的 section 里没有这个键：缺席时按默认「不勾」算，草稿播种与「已改动」判定都拿它当基准。
   { field: 'ruleSummary', kind: 'boolean', fallback: false },
+  // 三态控件的另一半：`ruleSummary` 与它一起决定「不自动摘要 / 直接摘要 / 先判断再摘要」，随本组一次保存。
+  { field: 'admissionJudge', kind: 'boolean', fallback: false },
   { field: 'routeProvider', kind: 'text' },
   { field: 'routeModel', kind: 'text' },
   { field: 'summaryReasoningEffort', kind: 'text', fallback: '' },
@@ -670,11 +673,34 @@ const SUMMARY_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'summaryPrompt', kind: 'prompt', fallback: DEFAULT_SUMMARY_RULE },
 ]
 
+/** 摘要组的三态：不自动摘要 / 直接摘要 / 先判断再摘要。 */
+type SummaryMode = 'off' | 'direct' | 'gated'
+
+/**
+ * 三态与两个持久化字段的映射：`ruleSummary` 决定「要不要自动摘要」，`admissionJudge` 决定「自动摘要前要不要先问一次」。
+ * @param ruleSummary - 是否对漏填提取目标的候选自动摘要。
+ * @param admissionJudge - 自动摘要前是否先发一次不含正文的准入判断。
+ * @returns 三态取值；`admissionJudge` 为真但 `ruleSummary` 为假（旧存值）时按「不自动摘要」算，因为那正是它的实际行为。
+ */
+function summaryModeOf(ruleSummary: boolean, admissionJudge: boolean): SummaryMode {
+  if (!ruleSummary) return 'off'
+  return admissionJudge ? 'gated' : 'direct'
+}
+
+/**
+ * 三态写进草稿的两个字段值。
+ * @param mode - 选中的三态。
+ * @returns 两个字段的目标值；`off` 也显式写 `false`，旧存值 `(false, true)` 因此在下一次保存时被归一。
+ */
+function summaryModeFields(mode: SummaryMode): { readonly ruleSummary: boolean; readonly admissionJudge: boolean } {
+  return { ruleSummary: mode !== 'off', admissionJudge: mode === 'gated' }
+}
+
 /**
  * 准入组的字段：route、推理档位与提示词。
  *
- * **启用位不在这里**：它在组之外、之上，**保存即生效**（`applyAdmissionJudge`）。若它仍在草稿里，取消勾选会把
- * 承载「保存」按钮的那一组一起收起，改动就再也存不下去。
+ * **启用位不在这里**：它是摘要组三态控件的一半（`admissionJudge`），随摘要组一次保存；本组只在三态为
+ * 「先判断再摘要」时展开，组内字段仍按本组自己的「保存」写回。
  */
 const ADMISSION_FIELDS: readonly GroupFieldSpec[] = [
   { field: 'admissionProvider', kind: 'text' },
@@ -697,7 +723,7 @@ const PRIVACY_FIELDS: readonly GroupFieldSpec[] = [
 /**
  * 诊断组的字段：debug 与干跑两个开关，加它们的日志路径。
  *
- * 这两个开关留在草稿里（不像三个能力开关那样即时写入）：它们不折叠任何东西，改动与该组的路径一样点「保存」
+ * 这两个开关留在草稿里（不像两个能力开关那样即时写入）：它们不折叠任何东西，改动与该组的路径一样点「保存」
  * 一次写回。判断干跑生不生效的那句提示读的是**已保存**的取值——它说的是"现在有没有在干跑"，不是草稿。
  */
 const DIAGNOSTIC_FIELDS: readonly GroupFieldSpec[] = [
@@ -754,20 +780,20 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const condenseByCommand = props.useCondenseByCommand(value => value)
   // 能力开关写入失败时记下是哪一个，提示就出现在那一行下面。
   const [failedSwitch, setFailedSwitch] = useState<
-    'summarize' | 'admissionJudge' | 'privacyGate' | 'condense' | 'condenseByCommand'
+    'summarize' | 'privacyGate' | 'condense' | 'condenseByCommand'
   >()
   const catalog = props.useModelCatalog(value => value)
   // 卡片挂载时重读一次目录：用户往往是先去「设置 → 模型」建 route、再回来选它。
   useEffect(() => { props.refreshModelCatalog() }, [])
 
   /**
-   * 写回一个能力开关（摘要 / 准入启用位 / 隐私闸门 / 工具结果精简的两个开关）。它们都是**保存即生效**的一行，
-   * 不走分组草稿——前三个折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次存不下去的改动。
+   * 写回一个能力开关（摘要 / 隐私闸门 / 工具结果精简的两个开关）。它们都是**保存即生效**的一行，
+   * 不走分组草稿——前两个折叠的正是承载「保存」按钮的那一组，走草稿会把「取消勾选」变成一次存不下去的改动。
    * @param field - 要写的开关字段。
    * @param next - 新的开关取值。
    */
   const applySwitch = (
-    field: 'summarize' | 'admissionJudge' | 'privacyGate' | 'condense' | 'condenseByCommand',
+    field: 'summarize' | 'privacyGate' | 'condense' | 'condenseByCommand',
     next: boolean,
   ): void => {
     setFailedSwitch(undefined)
@@ -780,11 +806,21 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
   const dryRunInactive = dryRun && (!debug || debugPath === '')
 
   const summary = useGroupDraft(SUMMARY_FIELDS, {
-    summarize, ruleSummary, routeProvider, routeModel, summaryReasoningEffort, minInlineTokens,
+    summarize, ruleSummary, admissionJudge, routeProvider, routeModel, summaryReasoningEffort, minInlineTokens,
     maxSummarizeTokens,
     // 提示词的已存值是**生效正文**：草稿与它相同就没有改动，等于内置正文时保存走 `unset`。
     summaryPrompt: summaryPrompt === '' ? DEFAULT_SUMMARY_RULE : summaryPrompt,
   }, props.saveFields)
+  // 三态读数与写入都落在摘要组草稿里：选中哪一项就同时改 `ruleSummary` 与 `admissionJudge`，保存时一次原子写回。
+  const summaryMode = summaryModeOf(
+    summary.value('ruleSummary') as boolean,
+    summary.value('admissionJudge') as boolean,
+  )
+  const changeSummaryMode = (next: SummaryMode): void => {
+    const fields = summaryModeFields(next)
+    summary.change('ruleSummary', fields.ruleSummary)
+    summary.change('admissionJudge', fields.admissionJudge)
+  }
   const admission = useGroupDraft(ADMISSION_FIELDS, {
     admissionProvider, admissionModel, admissionReasoningEffort,
     admissionPrompt: admissionPrompt === '' ? DEFAULT_ADMISSION_RULE : admissionPrompt,
@@ -895,8 +931,8 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     {privacyGate && !privacyConfirmedLocal
       && <div role="alert" style={WARNING_STYLE}>{props.t('routeUnconfirmedWarning')}</div>}
 
-    {/* 能力开关在各自那一组之上、保存即生效（不走分组草稿）；它关掉时下面「摘要模型」与「摘要准入判断模型」
-        两组连同各自的保存 / 恢复默认一起收起——准入判断只在摘要开着时才有意义。 */}
+    {/* 能力开关在各自那一组之上、保存即生效（不走分组草稿）；它关掉时下面「摘要模型」与（三态为「先判断再
+        摘要」时的）「摘要准入判断模型」两组连同各自的保存 / 恢复默认一起收起。 */}
     <CheckRow id="plugin-config-result-clipper-summarize" label={props.t('summarize')}
       hint={props.t('summarizeHint')}
       checked={summarize}
@@ -909,10 +945,14 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
     {summarize === true && <>
     <div style={NEST_ONE}>
     <Group title={props.t('summaryGroup')} description={props.t('summaryGroupHint')} {...actions(summary)}>
-      <CheckRow id="plugin-config-result-clipper-rule-summary" label={props.t('ruleSummary')}
-        hint={props.t('ruleSummaryHint')}
-        checked={summary.value('ruleSummary') as boolean}
-        onChange={next => { summary.change('ruleSummary', next) }} />
+      <ChoiceRow id="plugin-config-result-clipper-summary-mode" label={props.t('ruleSummary')}
+        hint={props.t('ruleSummaryHint')} value={summaryMode}
+        options={[
+          { value: 'off', label: props.t('summaryModeOff') },
+          { value: 'direct', label: props.t('summaryModeDirect') },
+          { value: 'gated', label: props.t('summaryModeGated') },
+        ]}
+        onChange={changeSummaryMode} />
       <RouteLine
         provider={{
           ...routeText, id: 'plugin-config-result-clipper-route-provider',
@@ -954,16 +994,9 @@ export function ResultClipperCard(props: ResultClipperCardProps) {
 
     <hr style={DIVIDER_STYLE} />
 
-    {/* 启用位在组之外、之上，且**保存即生效**：它自己折叠下面那一组；若它还在草稿里，取消勾选会把承载「保存」
-        按钮的那一组一起收起，改动就再也存不下去。从属关系用缩排表示（准入比摘要模型再退一级）。 */}
-    <div style={NEST_ONE}>
-      <CheckRow id="plugin-config-result-clipper-admission-enabled" label={props.t('admissionJudge')}
-        hint={props.t('admissionJudgeHint')}
-        checked={admissionJudge}
-        onChange={next => { applySwitch('admissionJudge', next) }} />
-      {failedSwitch === 'admissionJudge' && <div role="alert" style={HINT_STYLE}>{props.t('failedHint')}</div>}
-    </div>
-    {admissionJudge === true && <div style={NEST_TWO}>
+    {/* 准入组只在三态为「先判断再摘要」（两个字段都已保存）时展开；它的 route、档位与提示词仍按本组自己的
+        「保存」写回。从属关系用缩排表示（准入比摘要模型再退一级）。 */}
+    {ruleSummary && admissionJudge && <div style={NEST_TWO}>
     <Group title={props.t('admissionGroup')} description={props.t('admissionGroupHint')} {...actions(admission)}>
       <RouteLine
         provider={{

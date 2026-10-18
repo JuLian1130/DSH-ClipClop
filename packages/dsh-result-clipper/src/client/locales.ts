@@ -12,8 +12,9 @@ export type ResultClipperLocaleKey =
   | 'summarizeHint'
   | 'ruleSummary'
   | 'ruleSummaryHint'
-  | 'admissionJudge'
-  | 'admissionJudgeHint'
+  | 'summaryModeOff'
+  | 'summaryModeDirect'
+  | 'summaryModeGated'
   | 'privacyGate'
   | 'privacyGateHint'
   | 'debug'
@@ -87,9 +88,10 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   summarizeHint: '允许主模型自主请求摘要（摘要 token 消耗计入摘要模型）。改动对之后新建的会话生效。',
   summarizeOffHint: '摘要关着：主模型不会看到「请求摘要」这项能力。隐私闸门若开着，仍会逐条判断并用它给出的摘要替换正文。',
   ruleSummary: '自动摘要大内容',
-  ruleSummaryHint: '勾选会在非主模型主动请求时也尝试摘要大内容。默认不勾：只摘要主模型主动请求的那些结果。',
-  admissionJudge: '启用摘要准入判断',
-  admissionJudgeHint: '不勾选（默认）就跳过这一步：结果直接去摘要。勾起来才先问一次「值不值得摘要」，不值得的就不再产生摘要请求、省下这部分费用；用哪条模型、哪份规则正文在下面设置，改完要点那一组的「保存」。勾选与否当场生效。',
+  ruleSummaryHint: '选择「直接摘要」或「先判断再摘要」后，会在非主模型主动请求时也尝试摘要大内容。默认选「不自动摘要」：只摘要主模型主动请求的那些结果。',
+  summaryModeOff: '不自动摘要',
+  summaryModeDirect: '直接摘要',
+  summaryModeGated: '先判断再摘要',
   privacyGate: '隐私闸门',
   privacyGateHint: '勾选后工具结果先交给所选模型判断是否含隐私或机密；网页抓取默认不过这一关，需要时在下面单独勾；默认不勾。',
   debug: 'debug 记录',
@@ -140,7 +142,7 @@ export const zh: Record<ResultClipperLocaleKey, string> = {
   failurePolicyPassthrough: '放行原文',
   failurePolicyBlock: '拦截',
   summaryPrompt: '摘要提示词规则正文',
-  summaryPromptInactive: '没勾上面的「自动摘要大内容」时用不到这份规则正文，所以现在不能编辑；勾上它才能改。',
+  summaryPromptInactive: '选了「不自动摘要」时用不到这份规则正文，所以现在不能编辑；选「直接摘要」或「先判断再摘要」才能改。',
   admissionPrompt: '准入提示词规则正文',
   privacyPrompt: '隐私提示词规则正文',
   promptHint: '框里是当前生效的规则正文，未改时就是内置默认；改完要点「保存」才写回，没保存就离开不会留下改动；只有规则正文能改，其余部分由插件固定。',
@@ -163,9 +165,10 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   summarizeHint: 'Lets the main model ask for a summary by itself (the summary tokens are billed to the summary model). The change applies to sessions created afterwards.',
   summarizeOffHint: 'Summarization is off: the main model does not get the option to ask for a summary. A privacy gate that is on still judges every result and replaces a safe one with its summary.',
   ruleSummary: 'Summarize large results automatically',
-  ruleSummaryHint: 'Tick to also try summarizing large results the main model did not ask to summarize. Off by default: only what the main model asks for is summarized.',
-  admissionJudge: 'Enable the admission judge',
-  admissionJudgeHint: 'Unchecked (the default) skips this step: results go straight to summarization. Tick it to ask “is this worth summarizing?” first, so results that are not never cost a summary call; the model and rule text for that question are set below and need that group\'s Save. Ticking itself takes effect at once.',
+  ruleSummaryHint: 'Pick “Summarize directly” or “Judge first” to also try summarizing large results the main model did not ask to summarize. The default, “Don’t auto-summarize”, summarizes only what the main model asks for.',
+  summaryModeOff: 'Don’t auto-summarize',
+  summaryModeDirect: 'Summarize directly',
+  summaryModeGated: 'Judge first',
   privacyGate: 'Privacy gate',
   privacyGateHint: 'When ticked, tool results are judged by the selected model for privacy or secrets; web fetch results skip this check by default — tick the separate option below if you need them judged; off by default.',
   debug: 'Debug records',
@@ -216,7 +219,7 @@ export const en: Record<ResultClipperLocaleKey, string> = {
   failurePolicyPassthrough: 'Pass through',
   failurePolicyBlock: 'Block',
   summaryPrompt: 'Summary prompt rule text',
-  summaryPromptInactive: 'Without “Summarize large results automatically” ticked this rule text is not used, so it cannot be edited yet; tick that box to change it.',
+  summaryPromptInactive: 'With “Don’t auto-summarize” selected this rule text is not used, so it cannot be edited yet; pick “Summarize directly” or “Judge first” to change it.',
   admissionPrompt: 'Admission prompt rule text',
   privacyPrompt: 'Privacy prompt rule text',
   promptHint: 'The box holds the rule text in effect (the built-in default until you change it); press Save to write an edit back, leaving without saving keeps it out of the configuration; only the rule text is editable, the rest is fixed by the plugin.',
