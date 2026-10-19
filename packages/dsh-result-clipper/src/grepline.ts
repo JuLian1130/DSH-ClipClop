@@ -375,6 +375,10 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
   // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
   // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
   if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return { list: [], openEnded: false }
+  // 方括号表达式以 `]` 开头时 POSIX 与 JS 的语义不同：POSIX 把紧跟 `[` / `[^` 的 `]` 当字面成员（`[]a]` 是
+  // 「`]` 或 `a`」），JS 读成空字符类 / 任意字符，后面的表达式随之改义、真实命中定位不到（联合复审实测
+  // `grep -nE '[]a]|MATCH'` 把真实命中 `]` 裁掉）。方言不猜，整次调用不表态；`-F` 下整串是字面量，照常编译。
+  if (!flags.has('F') && explicit.some(hasLeadingBracketClose)) return { list: [], openEnded: false }
   const extended = flags.has('E')
   // 反向引用（`\1`…`\9`）按捕获组编号解析：顶层分支独立编译会重排组号，`\2` 在分支里可能变成别的含义甚至
   // 八进制转义（`grep -E '(foo)|(Bz+E)\2'` 的第二段真实命中会因此定位不到）。组号跨分支改写不可还原，整次
@@ -570,6 +574,27 @@ function splitAlternatives(source: string, extended: boolean): string[] | undefi
   }
   branches.push(current)
   return branches.length > 1 ? branches : undefined
+}
+
+/**
+ * 模式里有没有**以 `]` 开头的方括号表达式**：POSIX 把紧跟 `[` / `[^` 的 `]` 当字面成员（`[]a]` 是「`]` 或
+ * `a`」），JS 却把 `[]` 读成空字符类、`[^]` 读成任意字符，后面的表达式随之改义、匹配集与 grep 不同。这类
+ * 跨方言语义分歧不猜，整次调用不表态（见 `patternsOf`）。
+ * @param source - pattern 原文。
+ * @returns 有这种方括号表达式时为 `true`。
+ */
+function hasLeadingBracketClose(source: string): boolean {
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (char === '\\' && index + 1 < source.length) {
+      index++
+      continue
+    }
+    if (char !== '[') continue
+    const after = source[index + 1]
+    if (after === ']' || (after === '^' && source[index + 2] === ']')) return true
+  }
+  return false
 }
 
 /**

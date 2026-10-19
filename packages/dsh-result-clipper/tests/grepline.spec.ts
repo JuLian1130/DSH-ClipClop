@@ -253,7 +253,8 @@ describe('票 26 · 第二轮复审落修', () => {
     expect(grepPatterns("grep --fixed-strings 'a.b' f")[0]?.test('axb')).toBe(false)
     expect(grepPatterns("grep --fixed-strings 'a.b' f")[0]?.test('a.b')).toBe(true)
     expect(grepPatterns("grep --perl-regexp 'a\\d' f")).toEqual([])
-    expect(grepPatterns("grep --word-regexp 'x' f")[0]?.source).toContain('(?<!\\w)')
+    expect(grepPatterns("grep --word-regexp 'x' f")[0]?.test('a x b')).toBe(true)
+    expect(grepPatterns("grep --word-regexp 'x' f")[0]?.test('axb')).toBe(false)
   })
 
   it('--file=… 与 -f / --file 同样不表态，不把文件名当 pattern', () => {
@@ -529,5 +530,42 @@ describe('票 26/27 · 联合复审落修（2026-10-19）', () => {
     const trimmed = trimGrepLongLines(`f.ts:1:${content}`, "grep -nwE 'TODO:|@' f")
     expect(trimmed).toContain('TODO:')
     expect(trimmed).not.toContain('x@y')
+  })
+})
+
+describe('票 26/27 · 复审落修 · 方括号首成员 ]（2026-10-19）', () => {
+  it('方括号表达式以 ] 开头：POSIX 与 JS 语义不同，整次调用不表态', () => {
+    // `[]a]` 在 POSIX 里是「] 或 a」；JS 读成空字符类 + 字面 `a]`，永不命中。
+    expect(grepPatterns("grep -nE '[]a]|MATCH' f")).toEqual([])
+    expect(grepPatterns(String.raw`grep -n '[]a]\|MATCH' f`)).toEqual([])
+    // `[^]` 在 JS 里是「任意字符」，同样改义。
+    expect(grepPatterns("grep -nE '[^]a]|MATCH' f")).toEqual([])
+    // `-F` 下整串是字面量，方括号没有表达式语义，照常编译。
+    expect(grepPatterns("grep -nF '[]a]' f")).toHaveLength(1)
+    expect(grepPatterns("grep -nF '[]a]' f")[0]?.test('[]a]')).toBe(true)
+    // 普通方括号表达式不在此列，照常拆分与裁剪。
+    expect(grepPatterns("grep -nE '[ab]|MATCH' f")).toHaveLength(2)
+  })
+
+  it('转义的 \\[ 不算方括号表达式', () => {
+    expect(grepPatterns(String.raw`grep -nE '\[a]|MATCH' f`)).toHaveLength(2)
+  })
+
+  it('不表态时正文原样返回（真实命中不删）', () => {
+    const content = `${'x'.repeat(900)}MATCH${'y'.repeat(900)}]${'z'.repeat(900)}`
+    const text = `f.ts:1:${content}`
+    expect(trimGrepLongLines(text, "grep -nE '[]a]|MATCH' f")).toBe(text)
+  })
+
+  it.skipIf(!grepAvailable)('真实 grep 对拍：] 是真实命中，裁后会话整次不表态、命中完整保留', () => {
+    const content = `${'x'.repeat(900)}MATCH${'y'.repeat(900)}]${'z'.repeat(900)}`
+    const matches = realGrepMatches(['-o', '-E', '[]a]|MATCH'], content)
+    expect(matches).toContain(']')
+    expect(matches).toContain('MATCH')
+    const text = `f.ts:1:${content}`
+    // 不管走哪条路，真实命中都必须完整出现；本实现选择整次不表态。
+    const trimmed = trimGrepLongLines(text, "grep -nE '[]a]|MATCH' f")
+    expect(trimmed).toBe(text)
+    for (const match of matches) expect(trimmed).toContain(match)
   })
 })
