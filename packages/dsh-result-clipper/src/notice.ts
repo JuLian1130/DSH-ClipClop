@@ -28,6 +28,14 @@ export const TRUNCATED_NOTICE = /\[output truncated; full output: ([^\]]*)\]/g
 export const UNAVAILABLE_PATH = '(unavailable)'
 
 /**
+ * 单行截断的标记前缀（`tail-cap` 产出 `…[单行截断 +N]`）。
+ *
+ * 已经带它的行不再参与别的裁剪（票 26）：`grep-long-line` 在封顶**之前**跑，封顶留下的残行若还能被裁，
+ * 整链第二遍就会再变一次、幂等断掉。共用这个前缀而不是各写一份，免得两处标记漂。
+ */
+export const SINGLE_LINE_TRUNCATION = '…[单行截断 '
+
+/**
  * 这行是不是指向完整输出的上游元数据（位置说明或截断说明）。
  *
  * 它不参与单行截断：按字符上限截掉路径等于把唯一可回退的入口弄坏（票 20 复审）。不能假设它一定在最后一行——

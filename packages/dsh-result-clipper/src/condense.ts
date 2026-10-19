@@ -1,11 +1,12 @@
 /**
  * 工具结果精简的确定性核心：通用形状变换的链、尺寸下限与净收益闸门。
  *
- * 这一层不调用模型、不读磁盘、不改变内容的语义，只按确定性规则压掉机械形状与超长正文的固定形态。五条规则按计划
- * §4.3 的 13–16 与票 25 的顺序施加（链式，各自幂等）：剥 ANSI 转义序列 → 去 `\r` 覆盖行 → 相邻游程去重 →
- * 尾部偏置封顶 → 路径前缀分组。无损规则在前、`tail-cap` 在后是常规，**路径分组是唯一的例外**：它无损却排在封顶
- * 之后，理由见 `groupPaths`。计划 §4.2 的「首个命中者胜」管的是命令族 handler 的单选，**不是**这一组，所以这里
- * 五条全部依序施加：剥了格式控制序列之后照样做相邻重复行折叠。
+ * 这一层不调用模型、不读磁盘、不改变内容的语义，只按确定性规则压掉机械形状与超长正文的固定形态。六条规则按计划
+ * §4.3 的 13–16 与票 25/26 的顺序施加（链式，各自幂等）：剥 ANSI 转义序列 → 去 `\r` 覆盖行 → 相邻游程去重 →
+ * 命中长行裁剪 → 尾部偏置封顶 → 路径前缀分组。无损规则在前、`tail-cap` 在后是常规；**两处例外**：命中长行裁剪
+ * 有损却排在封顶之前（封顶只留头部，命中在后半截会丢，理由见 `grep-long-line`），路径分组无损却排在封顶之后
+ * （理由见 `groupPaths`）。计划 §4.2 的「首个命中者胜」管的是命令族 handler 的单选，**不是**这一组，所以这里
+ * 六条全部依序施加：剥了格式控制序列之后照样做相邻重复行折叠。
  *
  * 一次判定的取值就是计划 §7.3 的四个去向：`condensed`（替换）、`unchanged`（一处都没改动，含不适用工具、
  * 低于尺寸下限）、`abstained`（**忠实性守卫**放弃，计划 §4.1 #8）、`not-shorter`（过了变换但过不了闸门，
@@ -34,8 +35,10 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { estimateContent } from '@deepseek-ai/dsh-token-meter/estimate'
 import type { CommandFamilyId } from './dispatch.ts'
 import { ENTRY_RESERVE } from './entry.ts'
+import { trimGrepLongLines } from './grepline.ts'
 import {
   isUpstreamNoticeLine,
+  SINGLE_LINE_TRUNCATION,
   TRUNCATED_NOTICE,
   UNAVAILABLE_PATH,
 } from './notice.ts'
@@ -62,7 +65,13 @@ export function isCondenseTool(toolName: string): toolName is CondenseTool {
 }
 
 /** 一条**通用形状变换**的名字。 */
-export type GeneralRuleId = 'strip-ansi' | 'strip-cr' | 'dedup-adjacent' | 'tail-cap' | 'group-paths'
+export type GeneralRuleId =
+  | 'strip-ansi'
+  | 'strip-cr'
+  | 'dedup-adjacent'
+  | 'grep-long-line'
+  | 'tail-cap'
+  | 'group-paths'
 
 /**
  * 一条精简规则的 id：通用形状变换，或**命令族**（票 16 起后者也会出现在观测里）。
@@ -83,7 +92,23 @@ export interface CondenseRule {
   readonly id: CondenseRuleId
   /** 这条规则会不会丢掉内容；会丢的必须写出回退入口（计划 §4.1 #3）。 */
   readonly lossy: boolean
-  apply(text: string): string | undefined
+  apply(text: string, context?: CondenseContext): string | undefined
+}
+
+/**
+ * 通用链里**需要看命令**的规则拿到的上下文（目前只有 `grep-long-line`）。
+ *
+ * 只有这一条规则需要它：它按命令里的 grep pattern 找命中位置，其余五条纯看正文。上下文由调用方（`index.ts`）
+ * 现拼——命令串来自这次工具调用的参数，不落盘、不进缓存。
+ */
+export interface CondenseContext {
+  /** bash 命令全文；非 shell 工具没有这一项。 */
+  readonly command?: string | undefined
+  /**
+   * 「按命令语义精简」开关的当前值。关着时命令感知的通用规则不跑，与命令族不接手同一条产品语义：
+   * 那层会丢内容的收窄由同一个勾选控制。
+   */
+  readonly grepLongLine?: boolean | undefined
 }
 
 /** 通用形状变换的一条规则：id 收窄到 {@link GeneralRuleId}，于是调用方不必为族 id 留分支。 */
@@ -128,7 +153,7 @@ export const CONDENSE_DEFAULTS = {
 
 /** 一次精简的判定。 */
 export type CondenseVerdict =
-  /** 一处都没改动（不适用工具、空正文、低于尺寸下限、五条规则都没改动任何一处）。 */
+  /** 一处都没改动（不适用工具、空正文、低于尺寸下限、通用链一条都没改动任何一处）。 */
   | { readonly kind: 'unchanged' }
   /** 忠实性守卫放弃：原样交回下游正文。 */
   | { readonly kind: 'abstained' }
@@ -401,7 +426,7 @@ function tailCap(text: string, params: CondenseParams): string {
   if (overLongLine) {
     capped = capped.map((line) => {
       if (line.length <= params.maxLineChars || isUpstreamNoticeLine(line)) return line
-      const mark = `…[单行截断 +${line.length - params.maxLineChars}]`
+      const mark = `${SINGLE_LINE_TRUNCATION}+${line.length - params.maxLineChars}]`
       truncated++
       return line.slice(0, params.maxLineChars - mark.length) + mark
     })
@@ -431,6 +456,14 @@ export function generalRules(params: CondenseParams): readonly GeneralRule[] {
     { id: 'strip-ansi', lossy: false, apply: stripAnsi },
     { id: 'strip-cr', lossy: false, apply: stripCr },
     { id: 'dedup-adjacent', lossy: false, apply: dedupAdjacent },
+    // 排在 `tail-cap` 之前：封顶会把超长单行按「留头部 2000 字」截断，命中若在后半截就丢了；先按命中裁，命中
+    // 一定活下来（票 26）。封顶随后只处理没有命中的超长行。
+    {
+      id: 'grep-long-line',
+      lossy: true,
+      apply: (text: string, context?: CondenseContext) =>
+        context?.grepLongLine === true ? trimGrepLongLines(text, context.command) : text,
+    },
     { id: 'tail-cap', lossy: true, apply: (text: string) => tailCap(text, params) },
     { id: 'group-paths', lossy: false, apply: (text: string) => groupPaths(text, params.maxLines) },
   ]
@@ -458,6 +491,7 @@ export function condenseText(
   body: string,
   params: CondenseParams,
   rules: readonly CondenseRule[] = generalRules(params),
+  context?: CondenseContext,
 ): CondenseVerdict {
   if (!isCondenseTool(toolName)) return { kind: 'unchanged' }
   if (body === '') return { kind: 'unchanged' }
@@ -475,7 +509,7 @@ export function condenseText(
   for (const rule of rules) {
     let next: string | undefined
     try {
-      next = rule.apply(text)
+      next = rule.apply(text, context)
     } catch {
       // 异常归「放弃」不归「失败」（计划 §4.1 #8）：这一层抛出去会把整个工具调用变成错误结果。
       return { kind: 'abstained' }

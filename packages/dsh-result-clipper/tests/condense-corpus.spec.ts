@@ -9,7 +9,7 @@
  *
  * 一次流式扫描同时做三件事：
  *
- * 1. **常驻断言**：五条规则各自 `f(f(x)) == f(x)`、整链 `chain(chain(x)) == chain(x)`，违反数必须为 0，
+ * 1. **常驻断言**：六条规则各自 `f(f(x)) == f(x)`、整链 `chain(chain(x)) == chain(x)`，违反数必须为 0，
  *    违反时打 `callId`（判据 6；票 14 已在 177,546 次调用上手工测过，本文件把它变成可一键重跑的断言）。
  * 2. **计数**：调用数 / 有正文数 / 低于尺寸下限数 / 每条规则改动过的调用数 / `condenseText` 四个判定
  *    （`condensed` / `unchanged` / `abstained` / `not-shorter`）的计数。
@@ -64,6 +64,7 @@ interface CorpusRow {
   readonly callId?: unknown
   readonly name?: unknown
   readonly text?: unknown
+  readonly command?: unknown
 }
 
 /** 估算单位：`ceil(字符数/4) + 4`（token-meter 的一张文本块密度，独立算出来，不用实现内部的换算）。 */
@@ -86,6 +87,12 @@ interface ScanTally {
   violations: string[]
 }
 
+/**
+ * 扫描时是否打开「按命令语义精简」那一层（票 26 的 `grep-long-line` 依赖它）。默认打开——生产默认就是开；
+ * `DSH_CONDENSE_GREP_LONG_LINE=0` 只给测省量用（同一语料跑两遍、比对两份导出）。
+ */
+const grepLongLine = process.env.DSH_CONDENSE_GREP_LONG_LINE !== '0'
+
 /** 判定取值的全表，用于初始化计数（新增取值时这里会因类型不完整而编译失败，不会静默漏计）。 */
 const VERDICT_KINDS: readonly CondenseVerdict['kind'][] = ['condensed', 'unchanged', 'abstained', 'not-shorter']
 
@@ -106,7 +113,7 @@ async function eachRow(file: string, onRow: (row: CorpusRow) => void): Promise<v
 
 describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判定计数', () => {
   it(
-    '五条规则与整链逐调用幂等，并导出「会被替换」的调用清单',
+    '六条规则与整链逐调用幂等，并导出「会被替换」的调用清单',
     async () => {
       const root = corpusRoot as string
       const sessionsDir = join(root, 'sessions')
@@ -119,7 +126,10 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
         targetCalls: 0,
         targetWithText: 0,
         belowFloor: 0,
-        changed: { 'strip-ansi': 0, 'strip-cr': 0, 'dedup-adjacent': 0, 'tail-cap': 0, 'group-paths': 0 },
+        changed: {
+          'strip-ansi': 0, 'strip-cr': 0, 'dedup-adjacent': 0, 'grep-long-line': 0,
+          'tail-cap': 0, 'group-paths': 0,
+        },
         abstainedPerRule: {},
         chainChanged: 0,
         chainAbstained: 0,
@@ -144,16 +154,18 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
           if (text === '') return
           tally.targetWithText++
           const callId = typeof row.callId === 'string' ? row.callId : '(无 callId)'
+          const command = typeof row.command === 'string' ? row.command : undefined
+          const context = grepLongLine ? { command, grepLongLine: true } : undefined
 
           // 判据 6：单条规则 f(f(x)) == f(x)。守卫放弃（undefined）不算违反，单独计数。
           for (const rule of rules) {
-            const once = rule.apply(text)
+            const once = rule.apply(text, context)
             if (once === undefined) {
               tally.abstainedPerRule[rule.id] = (tally.abstainedPerRule[rule.id] ?? 0) + 1
               continue
             }
             if (once !== text) tally.changed[rule.id]++
-            const twice = rule.apply(once)
+            const twice = rule.apply(once, context)
             if (twice !== once) {
               tally.violations.push(`${rule.id} @ ${callId} @ ${file}`)
             }
@@ -162,7 +174,7 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
           // 判据 6：整链 chain(chain(x)) == chain(x)。链上任一步放弃即整层放弃，不再复核。
           let chained: string | undefined = text
           for (const rule of rules) {
-            const next = rule.apply(chained)
+            const next = rule.apply(chained, context)
             if (next === undefined) {
               chained = undefined
               break
@@ -175,7 +187,7 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
             if (chained !== text) tally.chainChanged++
             let again: string | undefined = chained
             for (const rule of rules) {
-              const next = rule.apply(again)
+              const next = rule.apply(again, context)
               if (next === undefined) {
                 again = undefined
                 break
@@ -190,7 +202,7 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
           const bodyUnits = units(text)
           if (bodyUnits < CONDENSE_DEFAULTS.minUnits) tally.belowFloor++
 
-          const verdict = condenseText(name, text, CONDENSE_DEFAULTS)
+          const verdict = condenseText(name, text, CONDENSE_DEFAULTS, undefined, context)
           tally.verdicts[verdict.kind]++
           if (verdict.kind !== 'condensed') return
           const after = verdict.lossy && verdict.entry !== 'upstream'
@@ -216,7 +228,7 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
 
       const lines: string[] = [
         '',
-        `=== 语料扫描（${root}）===`,
+        `=== 语料扫描（${root}）=== grep-long-line=${grepLongLine ? 'on' : 'off'}`,
         `JSONL 文件=${files.length}  调用=${tally.calls}  有正文=${tally.withText}`,
         `目标工具（${CONDENSE_TOOLS.join(' / ')}）调用=${tally.targetCalls}  其中有正文=${tally.targetWithText}`
           + `  低于尺寸下限（${CONDENSE_DEFAULTS.minUnits} 估算单位）=${tally.belowFloor}`,

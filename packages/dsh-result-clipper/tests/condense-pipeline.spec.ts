@@ -620,3 +620,54 @@ describe('票 19 判据 2：19 个非 volatile 字段改值即改变行为（写
     }
   })
 })
+
+describe('票 26：命中长行裁剪（grep-long-line）', () => {
+  /**
+   * 一条 grep 输出：两行都是 900 字前缀 + 命中 + 900 字后缀。行长远超 300 字的裁剪门槛、又都短于
+   * 单行封顶的 2000 字——所以它只可能被「命中 ±200」这条规则改动。
+   */
+  const LONG_MATCH_BODY = [
+    `big.txt:1:${'x'.repeat(900)}MATCH${'y'.repeat(900)}`,
+    `big.txt:2:${'z'.repeat(900)}MATCH${'w'.repeat(900)}`,
+  ].join('\n')
+
+  it('「按命令语义精简」开着：按命中附近缩、写回退入口，记录 grep-long-line', async () => {
+    const spill = new FakeSpill()
+    const { fixture, path } = await mounted({ condenseByCommand: true }, undefined, spill)
+    fixture.ctx.tools.register(textTool('bash', LONG_MATCH_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'grep -n MATCH big.txt' }))
+
+    const text = textOf(result.content)
+    expect(result.isError).toBe(false)
+    expect(text).toContain('MATCH')
+    expect(text).toContain('…[省略 ')
+    expect(text).toContain('精简版')
+    expect(text).toContain(spill.refs[0]!.locator)
+    // 回退入口里放的是完整原文，不是裁剪后的正文。
+    expect(spill.saves[0]?.content).toBe(LONG_MATCH_BODY)
+    const [record] = readRecords(path)
+    expect(record).toEqual(expect.objectContaining({
+      toolName: 'bash',
+      action: 'condensed',
+      condense: expect.objectContaining({ rules: expect.arrayContaining(['grep-long-line']) }),
+    }))
+  })
+
+  it('「按命令语义精简」关着：正文逐字交回，不写入口', async () => {
+    const spill = new FakeSpill()
+    const { fixture, path } = await mounted({ condenseByCommand: false }, undefined, spill)
+    fixture.ctx.tools.register(textTool('bash', LONG_MATCH_BODY))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { command: 'grep -n MATCH big.txt' }))
+
+    const text = textOf(result.content)
+    // 不受这条规则影响：两行正文原样保留（路径分组是无损规则，照常生效）。
+    expect(text).toContain('x'.repeat(900))
+    expect(text).toContain('MATCH')
+    expect(text).not.toContain('…[省略 ')
+    expect(spill.saves).toHaveLength(0)
+    const [record] = readRecords(path)
+    expect(record).toEqual(expect.objectContaining({
+      condense: expect.objectContaining({ rules: ['group-paths'] }),
+    }))
+  })
+})

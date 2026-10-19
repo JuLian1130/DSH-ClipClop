@@ -253,12 +253,13 @@ describe('票 25 · 路径前缀分组', () => {
     expect(condenseText('bash', first.text, at())).toEqual({ kind: 'unchanged' })
   })
 
-  it('规则表顺序：封顶在前、分组在后；分组无损、无入口', () => {
+  it('规则表顺序：命中长行裁剪在封顶之前，封顶在前、分组在后；分组无损、无入口', () => {
     const rules = generalRules(at())
     expect(rules.map(rule => rule.id)).toEqual([
       'strip-ansi',
       'strip-cr',
       'dedup-adjacent',
+      'grep-long-line',
       'tail-cap',
       'group-paths',
     ])

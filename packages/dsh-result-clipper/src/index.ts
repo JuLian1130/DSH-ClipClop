@@ -92,7 +92,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { composeAdmissionPrompt, requestAdmission } from './admission.ts'
 import { candidateOf } from './candidate.ts'
 import { condenseText, estimateUnits, isCondenseTool } from './condense.ts'
-import type { CondenseRule, CondenseVerdict } from './condense.ts'
+import type { CondenseContext, CondenseRule, CondenseVerdict } from './condense.ts'
 import {
   builtinRules,
   compileRules,
@@ -388,6 +388,12 @@ async function process(
           maxLineChars: config.condenseMaxLineChars,
           entryReserveChars: ENTRY_RESERVE,
         }
+        // 票 26：通用链里的「命中长行裁剪」要看命令。上下文只在本次调用里拼，不落盘；「按命令语义精简」关着时
+        // 命令感知的那条通用规则也不跑——与命令族不接手是同一层产品语义。
+        const condenseContext: CondenseContext = {
+          command: commandOf(exec),
+          grepLongLine: config.condenseByCommand.get(),
+        }
         // 票 16：先分派、再决定跑哪一套。事实按**下游正文**现算（计划 §4.2 末尾）；「不接族」的判据都在
         // `selectFamily` 里（平台面只认 bash；需要完整输入的族用 `facts` 自守），只放弃命令族那一步——
         // 票 20 起非零退出码不再拦族。
@@ -401,7 +407,7 @@ async function process(
         // **命中某一族时只跑那一族**，不再叠一遍通用链；族 handler 的忠实性守卫放弃时落回通用链（票 16 的
         // 层序条）。命中之后再叠一遍链会把 `+`/`-` 行整段丢掉，那是这一族的忠实性要求不允许的。
         const verdict: CondenseVerdict = familyVerdict === undefined || familyVerdict.kind === 'abstained'
-          ? condenseText(exec.name, body, params)
+          ? condenseText(exec.name, body, params, undefined, condenseContext)
           : familyVerdict
         // 观测字段在**本层考虑过这条结果**时就写（判据 10）：这样「输入已被工具截断的频率」的分母是「本层看到
         // 的所有精简工具结果」，而不是「被改动过的那些」。`unchanged` 只是不表态、取值交给既有词表。
@@ -804,18 +810,25 @@ function familyEnabled(config: Required<Config>, family: CommandFamilyId): boole
  * @param truncated - 输入是否已被工具自身截断。
  * @returns 事实 map。
  */
+/**
+ * 这次调用的 shell 命令全文；不是 shell 形状（没有 `command` 参数）时 `undefined`。
+ * @param exec - 这次工具调用。
+ */
+function commandOf(exec: ToolExecution): string | undefined {
+  const args = exec.arguments
+  if (typeof args !== 'object' || args === null) return undefined
+  const command = (args as { readonly command?: unknown }).command
+  return typeof command === 'string' ? command : undefined
+}
+
 function factsOf(
   exec: ToolExecution,
   result: Readonly<ToolExecutionResult>,
   body: string,
   truncated: boolean,
 ): Facts {
-  const args = exec.arguments
-  const command = typeof args === 'object' && args !== null
-    ? (args as { readonly command?: unknown }).command
-    : undefined
   return dispatchFacts({
-    command: typeof command === 'string' ? command : undefined,
+    command: commandOf(exec),
     exitCode: exitCodeOf(result),
     truncated,
     body,
