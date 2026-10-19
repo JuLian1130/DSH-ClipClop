@@ -680,4 +680,16 @@ describe('票 26：命中长行裁剪（grep-long-line）', () => {
       condense: expect.objectContaining({ rules: ['group-paths'] }),
     }))
   })
+
+  it('带管道前缀的多文件输出照常分组（缩进不是路径的一部分）', async () => {
+    const { fixture } = await mounted({ condenseByCommand: true })
+    const body = Array.from({ length: 10 }, (_, index) => `  src/a.ts:${index + 1}:${'line '.repeat(12)}${index}`).join('\n')
+    fixture.ctx.tools.register(textTool('bash', body))
+    const result = await fixture.ctx.tools.execute(exec('bash', undefined, { command: "grep -n abc src/a.ts | sed 's/^/  /'" }))
+
+    const text = textOf(result.content)
+    // 组头保留前缀，组员写行号：票 25 的相邻同文件合并不因缩进而失效。
+    expect(text.startsWith('  src/a.ts\n1:')).toBe(true)
+    expect(text.split('\n').filter((line) => line.startsWith('  src/a.ts'))).toHaveLength(1)
+  })
 })

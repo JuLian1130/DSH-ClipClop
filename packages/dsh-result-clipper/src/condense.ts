@@ -367,8 +367,10 @@ function groupPaths(text: string, maxLines: number): string {
     }
     const path = head[1] as string
     // 与 `grepline.ts` 的 `parseRow` 同一条排除：路径候选含空白或过长时不当路径行，原样保留。两边认法不
-    // 一致会出「第一遍没裁、分组后第二遍才裁」的幂等违反（票 26 复审）。
-    if (/\s/.test(path) || path.length > 300) {
+    // 一致会出「第一遍没裁、分组后第二遍才裁」的幂等违反（票 26 复审）。行首缩进是管道前缀（`sed 's/^/  /'`），
+    // 两边都要先剥掉再判空白——不剥的话所有带前缀的多文件输出都被当成「路径含空白」而永远不分组（第二轮复审）。
+    const candidate = path.replace(/^\s+/, '')
+    if (/\s/.test(candidate) || candidate.length > 300) {
       out.push(lines[i] as string)
       i++
       continue
@@ -456,7 +458,7 @@ function tailCap(text: string, params: CondenseParams): string {
 /**
  * 通用形状变换的链（计划 §4.3 的 13–16 + 票 25）：无损在前、`tail-cap` 在后是常规，各自幂等。
  *
- * 路径分组是唯一的例外：它无损，却排在封顶**之后**。封顶会把组头裁进省略区，先分组会让保留下来的行失去文件
+ * 路径分组是唯一排在封顶**之后**的规则：它无损，却要等封顶裁完再分。封顶会把组头裁进省略区，先分组会让保留下来的行失去文件
  * 归属；反过来「先封顶、再对存活行分组」不会产生没有组头的行。分组会让行数小幅上涨，所以结果超过行数上限时
  * 直接不分组（见 `groupPaths`），否则第二遍的封顶会触发、整链就不再幂等。
  * @param params - 精简参数；封顶那条规则按它取值。

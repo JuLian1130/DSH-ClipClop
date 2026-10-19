@@ -215,3 +215,46 @@ describe('票 26 复审落修', () => {
       .toEqual({ kind: 'unchanged' })
   })
 })
+
+describe('票 26 · 第二轮复审落修', () => {
+  it('-w 按 grep 的邻接语义匹配：标点 pattern 不把 a@b 当命中', () => {
+    expect(grepPatterns("grep -nw '@'")[0]?.test(' @ ')).toBe(true)
+    expect(grepPatterns("grep -nw '@'")[0]?.test('a@b')).toBe(false)
+  })
+
+  it('-w 认以非词字符收尾的 pattern（TODO: 是整词）', () => {
+    expect(grepPatterns("grep -nw 'TODO:'")[0]?.test('see TODO: fix')).toBe(true)
+  })
+
+  it('长写选项与短写同义：--fixed-strings / --perl-regexp / --word-regexp', () => {
+    expect(grepPatterns("grep --fixed-strings 'a.b' f")[0]?.test('axb')).toBe(false)
+    expect(grepPatterns("grep --fixed-strings 'a.b' f")[0]?.test('a.b')).toBe(true)
+    expect(grepPatterns("grep --perl-regexp 'a\\d' f")).toEqual([])
+    expect(grepPatterns("grep --word-regexp 'x' f")[0]?.source).toContain('(?<!\\w)')
+  })
+
+  it('--file=… 与 -f / --file 同样不表态，不把文件名当 pattern', () => {
+    expect(grepPatterns('grep --file=pats.txt long.txt')).toEqual([])
+    expect(grepPatterns('grep --file pats.txt long.txt')).toEqual([])
+  })
+
+  it('引号外的反斜杠按 shell 解掉：grep -n a\\+b 搜的是字面量 a+b', () => {
+    expect(grepPatterns('grep -n a\\+b f')[0]?.test('a+b')).toBe(true)
+    expect(grepPatterns('grep -n a\\+b f')[0]?.test('aaab')).toBe(false)
+  })
+
+  it('命令位从段首解析：包装词当参数不算，包装带选项仍算', () => {
+    expect(grepPatterns("printf '%s\\n' env grep -n MATCH")).toEqual([])
+    expect(grepPatterns('find . | xargs -0 grep -n foo f')).toHaveLength(1)
+    expect(grepPatterns('sudo -u root grep -n foo f')).toHaveLength(1)
+    expect(grepPatterns('env FOO=1 grep -n foo f')).toHaveLength(1)
+    expect(grepPatterns('time -p grep -n foo f')).toHaveLength(1)
+  })
+
+  it('非词字符 pattern 的裁剪围绕真实命中，不围绕假命中', () => {
+    const text = `1:${'x'.repeat(900)} a@b ${'y'.repeat(900)} @ ${'z'.repeat(900)}`
+    const trimmed = trimGrepLongLines(text, "grep -nw '@'")
+    expect(trimmed).toContain(' @ ')
+    expect(trimmed).not.toContain('a@b')
+  })
+})

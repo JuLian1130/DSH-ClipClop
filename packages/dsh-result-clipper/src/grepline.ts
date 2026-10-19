@@ -9,9 +9,11 @@
  *
  * 三条边界：
  *
- * 1. **只认 grep 自己的输出形状**：`path:行号:正文` 或 `行号:正文`（`-` 分隔的 `-A/-B` 上下文行同样处理）。
- * 2. **只认命令位的 grep**：分段的第一个 token 才是命令（允许 `xargs` / `env` / `sudo` 之类前缀）；引号里的
- *    `grep`、`printf` 的参数、`git log --grep` 都不算。
+ * 1. **只认 grep 自己的输出形状**：`path:行号:正文` 或 `行号:正文`（分隔符是 `-` 的单文件上下文行也认；
+ *    多文件 `-A/-B` 的 `path-行号-正文` 是上下文行、不是命中行，不裁）。
+ * 2. **只认命令位的 grep**：分段的首个命令才是命令位；`xargs` / `env` / `sudo` / `time` / `nice` / `nohup` /
+ *    `command` 这些包装连同它们自己的选项与取值可以出现在前面（`xargs -0 grep`、`sudo -u root grep`）。引号
+ *    里的 `grep`、`printf` 的参数、`git log --grep` 都不算。
  * 3. **幂等**：已经带省略标记、或已被 `tail-cap` 单行截断的行跳过——整链第二遍施加时这条规则不改变任何行。
  *    规则是**有损**的，靠调用方的回退入口兜底。
  *
@@ -41,9 +43,9 @@ const BARE_ROW = /^(\s*)(\d+)([:-])(.*)$/
 /**
  * `path:行号:正文`（`-` 为上下文行）；路径取到**第一个**「冒号 + 数字 + 分隔符」为止。
  *
- * 开头的空白要留住：`grep … | sed 's/^/  /'` 这类管道会给每行加前缀，`group-paths` 认这种行（它的路径
- * 正则把前缀算进路径）。两边认法不一致就会出「第一遍没裁、分组后第二遍才裁」的幂等违反（票 26 语料扫描
- * 抓到过一次），所以两边的路径候选都同样拒绝含空白的。
+ * 开头的空白单独留下：`grep … | sed 's/^/  /'` 这类管道会给每行加前缀，裁剪要把前缀原样写回。`group-paths`
+ * 也先剥掉行首空白再判「路径候选是否含空白」，两边同一套排除；行首缩进不算路径的一部分，不剥就会把带前缀的
+ * 多文件输出当成「路径含空白」，永远不分组（第二轮复审抓到）。
  */
 const PATH_ROW = /^(\s*)(.+?):(\d+)([:-])(.*)$/
 
@@ -121,7 +123,7 @@ function splitSegments(command: string): string[] {
   return segments
 }
 
-/** 把一个段切成 token：去引号、保留反斜杠转义、引号内的空白不切。 */
+/** 把一个段切成 token：去引号、引号外的反斜杠按 shell 规则解掉、引号内的空白不切。 */
 function tokenize(segment: string): string[] {
   const tokens: string[] = []
   let current = ''
@@ -145,6 +147,13 @@ function tokenize(segment: string): string[] {
       quote = char
       continue
     }
+    // 引号外的反斜杠是 shell 自己的转义：`grep -n a\+b` 里的 `\+` 到 grep 手里已经是 `+`。不剥掉的话
+    // BRE 会把它当「一个或多个」编译，真实命中 `a+b` 反而丢掉、假命中 `aaab` 被留下（第二轮复审抓到）。
+    if (char === '\\' && index + 1 < segment.length) {
+      current += segment[index + 1] as string
+      index++
+      continue
+    }
     if (/\s/.test(char)) {
       if (current !== '') {
         tokens.push(current)
@@ -158,8 +167,19 @@ function tokenize(segment: string): string[] {
   return tokens
 }
 
-/** 允许出现在 `grep` 前面的包装命令（`xargs grep …`、`env FOO=1 grep …`）。 */
-const WRAPPERS = new Set(['command', 'env', 'time', 'sudo', 'nice', 'nohup', 'xargs'])
+/**
+ * 允许出现在 `grep` 前面的包装命令，以及它们自己**带取值**的选项（`sudo -u root grep`、`xargs -n 1 grep`）。
+ * 只列「取值需要一起跨过」的选项；其他选项按单个 token 跳过。
+ */
+const WRAPPER_VALUE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['command', new Set()],
+  ['env', new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string'])],
+  ['nice', new Set(['-n', '--adjustment'])],
+  ['nohup', new Set()],
+  ['sudo', new Set(['-u', '-g', '-p', '-U', '-r', '-t', '-T', '-h', '-D', '-C', '--user', '--group', '--prompt', '--other-user', '--role', '--type', '--command-timeout', '--host', '--chdir', '--close-from'])],
+  ['time', new Set(['-f', '-o', '--format', '--output'])],
+  ['xargs', new Set(['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'])],
+])
 
 /** 段首的变量赋值（`FOO=1 grep …`）也算前缀，不改变「grep 是命令位」这一判断。 */
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
@@ -173,6 +193,39 @@ const VALUE_FLAGS = new Set([
 
 /** 纯字母短选项簇（`-rnwiE`）；带 `e` / `f` 的簇单独处理，因为它们可能把下一个 token 当取值。 */
 const SHORT_FLAGS = /^-[A-Za-z]+$/
+
+/** 带语义的长写选项与短写字母：`--fixed-strings` 与 `-F` 必须同样处理，否则会按错误方言裁。 */
+const LONG_FLAGS: ReadonlyMap<string, string> = new Map([
+  ['--extended-regexp', 'E'],
+  ['--fixed-strings', 'F'],
+  ['--ignore-case', 'i'],
+  ['--perl-regexp', 'P'],
+  ['--word-regexp', 'w'],
+])
+
+/**
+ * 段首真正被执行的那条命令的下标：跳过变量赋值与包装命令，连同包装自己的选项和取值。
+ *
+ * 只看 `grep` 前一个 token 不够（第二轮复审抓到）：`printf '%s\n' env grep …` 里的 `env` 只是 printf 的
+ * 参数，却被当成「grep 在 env 之后」而误裁；反过来 `xargs -0 grep`、`sudo -u root grep` 又因为中间隔着
+ * 选项而认不出、白白漏裁。这里从段首顺着包装链走到命令，只有命令本身是 grep 才算命令位。
+ * @param tokens - 一个段的 token。
+ * @returns 命令 token 的下标；段里只有赋值或包装时 `undefined`。
+ */
+function commandIndexOf(tokens: readonly string[]): number | undefined {
+  let index = 0
+  while (index < tokens.length) {
+    while (index < tokens.length && ASSIGNMENT.test(tokens[index] as string)) index++
+    if (index >= tokens.length) return undefined
+    const values = WRAPPER_VALUE_FLAGS.get(tokens[index] as string)
+    if (values === undefined) return index
+    index++
+    while (index < tokens.length && (tokens[index] as string).startsWith('-')) {
+      index += values.has(tokens[index] as string) ? 2 : 1
+    }
+  }
+  return undefined
+}
 
 /**
  * 拆一个短选项簇：`-e PAT`、`-nf PATTERNS`、`-nePAT` 都能认。
@@ -188,23 +241,22 @@ function shortCluster(token: string): { flags: string; kind: 'e' | 'f'; attached
 /**
  * 从一个段里收集 `grep` 的 pattern 与短选项。
  *
- * `grep` 必须处在命令位（段首，或 `xargs` / `env` 之类的包装之后、变量赋值之后）；段里其他位置出现的同名
- * token（`echo grep …`、`printf '%s\n' grep …`）不算。`-f`（模式来自文件）的调用不表态。
+ * 只有命令位是 `grep` 时才解析（见 {@link commandIndexOf}）：段里其他位置的同名 token（`echo grep …`、
+ * `printf '%s\n' grep …`）不算。`-f`（模式来自文件）的调用不表态。
  * @param tokens - 一个段的 token。
  * @returns 每个 `grep` 调用声明的 pattern 与选项。
  */
 function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source: string; readonly flags: ReadonlySet<string> }> {
   const patterns: Array<{ readonly source: string; readonly flags: ReadonlySet<string> }> = []
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index] as string
-    if (token !== 'grep' && !token.endsWith('/grep')) continue
-    const previous = index === 0 ? undefined : tokens[index - 1]
-    if (index > 0 && previous !== undefined && !WRAPPERS.has(previous) && !ASSIGNMENT.test(previous)) continue
-    const flags = new Set<string>()
-    const explicit: string[] = []
-    let pattern: string | undefined
-    let fromFile = false
-    let cursor = index + 1
+  const commandIndex = commandIndexOf(tokens)
+  if (commandIndex === undefined) return patterns
+  const command = tokens[commandIndex] as string
+  if (command !== 'grep' && !command.endsWith('/grep')) return patterns
+  const flags = new Set<string>()
+  const explicit: string[] = []
+  let pattern: string | undefined
+  let fromFile = false
+  let cursor = commandIndex + 1
     while (cursor < tokens.length) {
       const next = tokens[cursor] as string
       const cluster = shortCluster(next)
@@ -224,9 +276,20 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
         cursor++
         continue
       }
+      if (next.startsWith('--file=')) {
+        fromFile = true
+        cursor++
+        continue
+      }
       if (next === '--file') {
         fromFile = true
         cursor += 2
+        continue
+      }
+      const long = LONG_FLAGS.get(next)
+      if (long !== undefined) {
+        flags.add(long)
+        cursor++
         continue
       }
       if (VALUE_FLAGS.has(next)) {
@@ -246,10 +309,9 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
       if (pattern === undefined && explicit.length === 0) pattern = next
       break
     }
-    if (fromFile) continue
-    if (pattern !== undefined) explicit.push(pattern)
-    for (const source of explicit) patterns.push({ source, flags })
-  }
+  if (fromFile) return patterns
+  if (pattern !== undefined) explicit.push(pattern)
+  for (const source of explicit) patterns.push({ source, flags })
   return patterns
 }
 
@@ -301,7 +363,10 @@ function compilePattern(source: string, flags: ReadonlySet<string>): RegExp | un
   if (flags.has('P')) return undefined
   const fixed = flags.has('F')
   let body = fixed ? escapeRegExp(source) : flags.has('E') ? source : translateBre(source)
-  if (flags.has('w')) body = `\\b(?:${body})\\b`
+  // `-w` 的语义是「命中片段的左右邻接字符都不是词字符」，不是 `\b`：`\b` 要求边界一侧是词字符，
+  // 对 `@`、`TODO:` 这种以非词字符收尾的 pattern 恰好反过来——`\b(?:@)\b` 会命中 `a@b` 而漏掉 ` @ `
+  // （第二轮复审实测）。用两侧 lookaround 直接表达 grep 的邻接条件。
+  if (flags.has('w')) body = `(?<!\\w)(?:${body})(?!\\w)`
   try {
     return new RegExp(body, flags.has('i') ? 'gi' : 'g')
   } catch {
