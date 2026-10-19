@@ -180,9 +180,10 @@ describe('票 26 · grep 长行裁剪', () => {
 
 describe('票 26 复审落修', () => {
   it('BRE 里 + ? ( ) | 是字面量：a+b 只命中 a+b，不把 + 当量词', () => {
-    const rx = grepPatterns("grep 'a+b' f")[0]
-    expect(rx?.test('a+b')).toBe(true)
-    expect(rx?.test('aaab')).toBe(false)
+    // 每条断言重新取正则：`grepPatterns` 返回带 `g` 的正则，复用同一实例时 `.test()` 会推进 `lastIndex`，
+    // 阴性断言会假绿（收敛计划阶段 0 的测试卫生）。
+    expect(grepPatterns("grep 'a+b' f")[0]?.test('a+b')).toBe(true)
+    expect(grepPatterns("grep 'a+b' f")[0]?.test('aaab')).toBe(false)
   })
 
   it('-nie 组合簇保留其余选项（i 仍生效）', () => {
@@ -338,9 +339,9 @@ describe('票 26 · 第三轮复审落修', () => {
 
 describe('票 26 · 第五轮复审落修', () => {
   it('双引号里的 \\ 按 shell 解成单反斜杠：-F 搜的是字面量 a\\b', () => {
-    const rx = grepPatterns('grep -nF "a\\\\b" f')[0]
-    expect(rx?.test('a\\b')).toBe(true)
-    expect(rx?.test('a\\\\b')).toBe(false)
+    // 同上：每次断言重新取正则，避免复用实例推进 `lastIndex`。
+    expect(grepPatterns('grep -nF "a\\\\b" f')[0]?.test('a\\b')).toBe(true)
+    expect(grepPatterns('grep -nF "a\\\\b" f')[0]?.test('a\\\\b')).toBe(false)
   })
 
   it('双引号里的转义引号不提前结束字符串：引号里的 grep 不当命令位', () => {
