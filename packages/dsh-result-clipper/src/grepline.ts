@@ -5,7 +5,8 @@
  *
  * 依据（票 26，`docs/dsh-sed-grep-cost.md` 第五节）：语料里 5,292 条 >300 字的命中行，86% 能按命令里的
  * pattern 定位到命中；整条变换在 5.84M token 的样本上省 0.59M（10.2%），折算到全部 grep token 约 6.9%。
- * 定位不到的行**原样保留**（不省也不破坏）。
+ * 定位不到的行**原样保留**（不省也不破坏）；同一条命令里任一次 grep 调用不表态（或某个 pattern 编译失败）时，
+ * 整条结果都不裁——多段输出无法按调用切分，只丢那一条 pattern 会让它的真实命中被别的窗口删掉。
  *
  * 四条边界：
  *
@@ -279,6 +280,12 @@ interface ParsedPatterns {
    * 最长匹配）。窗口只能用保守形态（只裁最早命中起点以前，见 {@link trimAroundMatches}）。
    */
   readonly openEnded: boolean
+  /**
+   * 这次 grep 调用不表态（pattern 来自文件 / PCRE / 方言不猜 / 空 pattern / 编译失败）：命中位置无法定位。
+   * 同一条 bash 命令的输出无法按调用切分，所以只要有一次调用不表态，整条结果都不能裁——否则不表态调用的
+   * 真实命中会被另一次调用的窗口删掉（第 4 次联合复审）。
+   */
+  readonly abstained: boolean
 }
 
 /**
@@ -287,14 +294,14 @@ interface ParsedPatterns {
  * 只有命令位是 `grep` 时才解析（见 {@link commandIndexOf}）：段里其他位置的同名 token（`echo grep …`、
  * `printf '%s\n' grep …`）不算。`-f`（模式来自文件）的调用不表态。
  * @param tokens - 一个段的 token。
- * @returns 每个 `grep` 调用声明的 pattern、选项与窗口标记。
+ * @returns 每个 `grep` 调用声明的 pattern、选项、窗口标记与「不表态」标记。
  */
 function patternsOf(tokens: readonly string[]): ParsedPatterns {
   const patterns: Array<{ readonly source: string; readonly flags: ReadonlySet<string> }> = []
   const commandIndex = commandIndexOf(tokens)
-  if (commandIndex === undefined) return { list: [], openEnded: false }
+  if (commandIndex === undefined) return { list: [], openEnded: false, abstained: false }
   const command = tokens[commandIndex] as string
-  if (command !== 'grep' && !command.endsWith('/grep')) return { list: [], openEnded: false }
+  if (command !== 'grep' && !command.endsWith('/grep')) return { list: [], openEnded: false, abstained: false }
   const flags = new Set<string>()
   const explicit: string[] = []
   let pattern: string | undefined
@@ -360,36 +367,36 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
     if (pattern === undefined && explicit.length === 0) pattern = next
     cursor++
   }
-  if (fromFile) return { list: [], openEnded: false }
+  if (fromFile) return { list: [], openEnded: false, abstained: true }
   // `-P`（PCRE）的语义与 JS 不等价，整次调用不表态（与票 26 的边界一致）。
-  if (flags.has('P')) return { list: [], openEnded: false }
+  if (flags.has('P')) return { list: [], openEnded: false, abstained: true }
   if (pattern !== undefined) explicit.push(pattern)
   // 真正的换行在 POSIX grep 里是 pattern 列表分隔（`grep -e $'A\nB'` 是两个 pattern），不是正则的一部分；
   // 把它整串交给 JS 会变成一个含换行的正则、两个真实命中都定位不到（联合复审实测）。方言不猜：整次调用
   // 不表态。引号外的 `\` + 换行已在分词时按 shell 续行删掉，不会走到这里。
-  if (explicit.some(source => source.includes('\n'))) return { list: [], openEnded: false }
+  if (explicit.some(source => source.includes('\n'))) return { list: [], openEnded: false, abstained: true }
   // 空 pattern（`-e ''` / `''`）匹配所有行、没有可定位的命中位置；按整次调用不表态。不这样判的话，一旦
   // 分词把空参数丢掉，`-e` 的取值会左移成文件名、按文件名裁行（票 26 第五轮复审）。
-  if (explicit.some(source => source === '')) return { list: [], openEnded: false }
+  if (explicit.some(source => source === '')) return { list: [], openEnded: false, abstained: true }
   // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
   // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
   // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
-  if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return { list: [], openEnded: false }
+  if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return { list: [], openEnded: false, abstained: true }
   // 方括号表达式里 JS 表达不了等价语义的 POSIX 构造，原样交给 JS 都会把真实命中定位错：首成员 `]`（POSIX 当
   // 字面成员、JS 读成空字符类 / 任意字符，实测 `[]a]`）、方括号里的反斜杠（POSIX 当字面成员、JS 当转义，实测
   // `[\b]`）、排序元素 `[. .]` 与等价类 `[= =]`（POSIX 按字符处理、JS 读成普通字符集，实测 `[[.a.]]`）。方言
   // 不猜，整次调用不表态；`-F` 下整串是字面量，照常编译。
-  if (!flags.has('F') && explicit.some(hasUnsupportedBracket)) return { list: [], openEnded: false }
+  if (!flags.has('F') && explicit.some(hasUnsupportedBracket)) return { list: [], openEnded: false, abstained: true }
   const extended = flags.has('E')
   // BRE 的 `^` / `$` 只在 pattern 开头 / 结尾是锚点，其余位置是字面量（`grep 'foo^bar'` 搜字面 `foo^bar`）；
   // JS 里两者永远是断言，原样编译定位不到真实命中（联合复审实测裁掉了 `foo^bar`）。方言不猜，整次调用不表态。
   // `-E` 实测与 JS 一致（`grep -E 'foo^bar'` 同样无命中），不在此列；`-F` 下整串是字面量，照常编译。
-  if (!flags.has('F') && !extended && explicit.some(hasMisplacedBreAnchor)) return { list: [], openEnded: false }
+  if (!flags.has('F') && !extended && explicit.some(hasMisplacedBreAnchor)) return { list: [], openEnded: false, abstained: true }
   // 反向引用（`\1`…`\9`）按捕获组编号解析：顶层分支独立编译会重排组号，`\2` 在分支里可能变成别的含义甚至
   // 八进制转义（`grep -E '(foo)|(Bz+E)\2'` 的第二段真实命中会因此定位不到）。组号跨分支改写不可还原，整次
   // 调用不表态（票 27 复审）。
   if (!flags.has('F') && explicit.some(source => hasBackReference(source) && hasAlternation(source, extended))) {
-    return { list: [], openEnded: false }
+    return { list: [], openEnded: false, abstained: true }
   }
   // POSIX 是 leftmost-longest、JS 是 leftmost-first：`grep -E 'BEGIN|BEGIN.*END'` 的真实命中以 END 结尾，
   // JS 只认第一个能成立的短分支 BEGIN。顶层交替拆成独立分支后，各分支命中的并集覆盖真实命中的**起点**（最长
@@ -403,7 +410,7 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
     const branches = splitAlternatives(source, extended)
     // 能匹配空串的交替（`a|`、`(a|)`、`a*|b`）在每个位置都算命中，没有可定位的命中位置：与空 pattern 同层，
     // 整次调用不表态。空串命中在 `matchSpans` 里被跳过，按它定位会把真实命中的周边内容当成省略裁掉。
-    if (compilePattern(source, flags)?.test('') === true) return { list: [], openEnded: false }
+    if (compilePattern(source, flags)?.test('') === true) return { list: [], openEnded: false, abstained: true }
     // 括号内还有交替时拆不干净，原 pattern 仍用来定位起点（JS 与 POSIX 的 leftmost 起点相同），窗口退回保守形态。
     if (branches === undefined || branches.some(branch => hasAlternation(branch, extended))) {
       openEnded = true
@@ -416,7 +423,7 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
   // 位置，多个量词却会重新配比（`a+(ab+)?` 在 `aab…` 上 JS 只到 `aa`、POSIX 到 `a`+`a`+`b…`）。终点不可信，
   // 整次调用退回保守窗口；`-F` 是字面量，没有量词。
   if (!flags.has('F') && patterns.some(entry => countRepetitions(entry.source, extended) >= 2)) openEnded = true
-  return { list: patterns, openEnded }
+  return { list: patterns, openEnded, abstained: false }
 }
 
 /**
@@ -743,10 +750,16 @@ function grepPatternsWithMeta(command: string): { readonly patterns: RegExp[]; r
   let openEnded = false
   for (const segment of splitSegments(command)) {
     const parsed = patternsOf(tokenize(segment))
+    // 同一条 bash 命令的输出无法按调用切分：任一次 grep 不表态，整条结果都不裁，否则它的真实命中会被
+    // 另一次调用的 pattern 窗口删掉（第 4 次联合复审）。纯并集（每段都解析成功）仍照常裁。
+    if (parsed.abstained) return { patterns: [], openEnded: false }
     openEnded = openEnded || parsed.openEnded
     for (const { source, flags } of parsed.list) {
       const compiled = compilePattern(source, flags)
-      if (compiled !== undefined) patterns.push(compiled)
+      // 编译失败同样是「命中位置无法定位」（如 BRE 开头的字面 `*`）：不能丢掉这一条、再用其余 pattern
+      // 裁同一行，否则真实命中会被标成省略（第 4 次联合复审实测 `-e MATCH -e '*abc'`）。
+      if (compiled === undefined) return { patterns: [], openEnded: false }
+      patterns.push(compiled)
     }
   }
   return { patterns, openEnded }

@@ -636,3 +636,42 @@ describe('票 26/27 · 第 3 次复审落修（BRE 锚点 / 方括号 POSIX 构�
     for (const match of matches) expect(trimmed).toContain(match)
   })
 })
+
+describe('票 26/27 · 第 4 次联合复审落修（编译失败 / 多段不表态，2026-10-19）', () => {
+  it('BRE 重复算子位置的字面 * 不因编译失败被静默丢掉：整次调用不表态', () => {
+    // POSIX BRE：pattern 开头 / `\(` / `\|` 之后的 `*` 是字面量；JS 却会抛 Nothing to repeat。
+    expect(grepPatterns("grep -n -e MATCH -e '*abc' f")).toEqual([])
+    expect(grepPatterns(String.raw`grep -n -e MATCH -e '\(*abc\)' f`)).toEqual([])
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(400)}*abc${'z'.repeat(400)}`
+    const text = `f.ts:1:${content}`
+    expect(trimGrepLongLines(text, "grep -n -e MATCH -e '*abc' f")).toBe(text)
+  })
+
+  it.skipIf(!grepAvailable)('真实 grep 对拍：字面 * 的真实命中完整保留（整次不表态）', () => {
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(400)}*abc${'z'.repeat(400)}`
+    const matches = realGrepMatches(['-o', '-e', 'MATCH', '-e', '*abc'], content)
+    expect(matches).toContain('*abc')
+    const text = `f.ts:1:${content}`
+    const trimmed = trimGrepLongLines(text, "grep -n -e MATCH -e '*abc' f")
+    expect(trimmed).toBe(text)
+    for (const match of matches) expect(trimmed).toContain(match)
+  })
+
+  it('同一条命令里任一次 grep 不表态：整条结果不裁（多段输出无法按调用切分）', () => {
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(900)}SECOND${'z'.repeat(400)}`
+    const text = `f.ts:1:${content}\nf.ts:2:${content}`
+    expect(trimGrepLongLines(text, "grep -nE 'MATCH|SECOND' f; grep -n -e '' f")).toBe(text)
+    expect(trimGrepLongLines(text, "grep -nE 'MATCH' f; grep -nP 'SECOND' g")).toBe(text)
+    expect(trimGrepLongLines(text, "grep -nE 'MATCH' f; grep -n -f pats.txt g")).toBe(text)
+  })
+
+  it('纯并集（每段都解析成功）仍照常裁', () => {
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(900)}SECOND${'z'.repeat(400)}`
+    const text = `f.ts:1:${content}`
+    const trimmed = trimGrepLongLines(text, "grep -nE 'MATCH' f; grep -nE 'SECOND' g")
+    expect(trimmed).not.toBe(text)
+    expect(trimmed).toContain('MATCH')
+    expect(trimmed).toContain('SECOND')
+    expect(trimGrepLongLines(trimmed, "grep -nE 'MATCH' f; grep -nE 'SECOND' g")).toBe(trimmed)
+  })
+})
