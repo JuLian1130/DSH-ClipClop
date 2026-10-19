@@ -6,8 +6,7 @@
  * 验证自己（参见 `tests/helpers/grep-replay.ts` 的说明）。
  *
  * 语料不存在时语料部分跳过；fixture 部分总是跑（CI 里没有语料也能回归）。
- * 收敛计划阶段 0：`DSH_GREP_DIFF=1` 打开语料回放，`DSH_GREP_DIFF_MAX` 限制评估行数（0 = 全量），
- * `DSH_GREP_DIFF_STRICT=1` 才把失败判红（现有实现预期会红，先出清单）；阶段 1 收尾时改默认。
+ * 语料回放默认运行，失败即判红；`DSH_GREP_DIFF_MAX` 限制评估行数（默认 500，0 = 全量）。
  * `DSH_GREP_DIFF_EXPORT=<path>` 把通过的语料样本导成 fixture。
  *
  * 安全：语料里的命令是真实会话命令，不直接放进当前 shell 跑。shim 目录是唯一的 PATH，外部命令（`rm`、
@@ -40,12 +39,6 @@ import { replayArgsOf } from './helpers/grep-replay.ts'
 const CORPUS_ROOT =
   process.env.DSH_CONDENSE_CORPUS ?? (existsSync('/tmp/dsh-condense') ? '/tmp/dsh-condense' : undefined)
 
-/** 语料回放开关（阶段 0 默认关，避免现有实现的红挡住常规门禁）。 */
-const DIFF_ENABLED = process.env.DSH_GREP_DIFF === '1'
-
-/** 严格模式：失败即判红（阶段 1 收尾时改用）。 */
-const STRICT = process.env.DSH_GREP_DIFF_STRICT === '1'
-
 /** 评估行数上限；0 表示全量。 */
 const MAX_ROWS = Number(process.env.DSH_GREP_DIFF_MAX ?? 500)
 
@@ -64,20 +57,11 @@ require('node:fs').appendFileSync(process.env.DSH_DIFF_LOG, JSON.stringify(proce
 `
 
 type CorpusRow = { callId: string; command: string; text: string }
-type FixtureRow = CorpusRow & { argvs?: string[][]; knownRed?: boolean; expectTrim?: boolean }
+type FixtureRow = CorpusRow & { argvs?: string[][]; expectTrim?: boolean }
 
 type Failure = { callId: string; command: string; fragment: string; textLength: number }
 
 type Outcome = { argvs: string[][]; failures: string[]; skips: string[]; calls: number; fragments: number }
-
-/** `\w` 与非 ASCII 组合的已知反例：真实 grep 有命中、当前实现会删；阶段 1 的闸门裁决后才能进白名单或删标记。 */
-const KNOWN_RED: FixtureRow = {
-  callId: 'known-red/w-non-ascii',
-  command: "grep -n -e '\\wé' -e MATCH f",
-  text: `1:${'x'.repeat(900)} " ééé " ${'y'.repeat(900)} MATCH ${'z'.repeat(900)}`,
-  argvs: [['-n', '-e', '\\wé', '-e', 'MATCH', 'f']],
-  knownRed: true,
-}
 
 /** 只放行不会写文件、不碰网络的命令；危险构造整条跳过并计数（跳过数不是失败）。 */
 function unsafeReason(command: string): string | undefined {
@@ -304,7 +288,7 @@ describe('grep 差分回放', () => {
     }
   })
 
-  it.skipIf(!DIFF_ENABLED || CORPUS_ROOT === undefined)(
+  it.skipIf(CORPUS_ROOT === undefined)(
     '语料：真实 grep 的每个命中片段都完整保留',
     { timeout: 1_800_000 },
     async () => {
@@ -345,7 +329,7 @@ describe('grep 差分回放', () => {
 
       if (EXPORT_PATH !== undefined) {
         const regressions = fixtureRows.filter(row => row.callId.startsWith('regression/'))
-        writeFixture(EXPORT_PATH, [...passing, ...regressions, KNOWN_RED])
+        writeFixture(EXPORT_PATH, [...passing, ...regressions])
       }
       for (const failure of failures) reportFailure(failure)
       const skipText = [...skips]
@@ -356,13 +340,13 @@ describe('grep 差分回放', () => {
           `失败 ${failures.length} 条 / 跳过 ${skipText === '' ? '无' : skipText} / ` +
           `耗时 ${Math.round(performance.now() - startedAt)} ms`,
       )
-      if (STRICT) expect(failures).toEqual([])
+      expect(failures).toEqual([])
       expect(evaluated).toBeGreaterThan(0)
     },
   )
 
   it.skipIf(fixtureRows.length === 0)(
-    'fixture：已知样本零删除（knownRed 只报告）',
+    'fixture：承诺子集保留命中，子集外整次不裁',
     { timeout: 300_000 },
     () => {
       for (const row of fixtureRows) {
@@ -371,10 +355,6 @@ describe('grep 差分回放', () => {
         else if (row.expectTrim === false) expect(trimmed, row.callId).toBe(row.text)
         if (row.argvs === undefined && unsafeReason(row.command) !== undefined) continue
         const outcome = row.argvs === undefined ? evaluate(row.command, row.text) : evaluateWithArgvs(row.command, row.text, row.argvs)
-        if (row.knownRed === true) {
-          console.log(`[grep-diff] knownRed ${row.callId}: 失败 ${outcome.failures.length} 条（阶段 1 裁决）`)
-          continue
-        }
         if (outcome.failures.length > 0) {
           reportFailure({
             callId: row.callId,

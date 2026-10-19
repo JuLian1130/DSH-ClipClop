@@ -371,55 +371,11 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
     if (pattern === undefined && explicit.length === 0) pattern = next
     cursor++
   }
-  if (fromFile) return { list: [], openEnded: false, abstained: true }
-  // `-P`（PCRE）的语义与 JS 不等价，整次调用不表态（与票 26 的边界一致）。
-  if (flags.has('P')) return { list: [], openEnded: false, abstained: true }
-  // 方言选项冲突时真实 grep 是**后写者胜**（`grep -F -E` 用 ERE、`grep -E -F` 用字面量、`-E -G` 用 BRE）；
-  // 实现只收进无序集合、还原不了顺序，按其中一种编译就会在另一种顺序下把真实命中裁掉（联合复审实测
-  // `grep -nF -E 'foo|bar'` 丢掉了位置 400 的 `foo` 命中）。方言冲突不猜：整次调用不表态。
-  if ((flags.has('E') ? 1 : 0) + (flags.has('F') ? 1 : 0) + (flags.has('G') ? 1 : 0) > 1) {
-    return { list: [], openEnded: false, abstained: true }
-  }
   if (pattern !== undefined) explicit.push(pattern)
-  // 真正的换行在 POSIX grep 里是 pattern 列表分隔（`grep -e $'A\nB'` 是两个 pattern），不是正则的一部分；
-  // 把它整串交给 JS 会变成一个含换行的正则、两个真实命中都定位不到（联合复审实测）。方言不猜：整次调用
-  // 不表态。引号外的 `\` + 换行已在分词时按 shell 续行删掉，不会走到这里。
-  if (explicit.some(source => source.includes('\n'))) return { list: [], openEnded: false, abstained: true }
-  // 空 pattern（`-e ''` / `''`）匹配所有行、没有可定位的命中位置；按整次调用不表态。不这样判的话，一旦
-  // 分词把空参数丢掉，`-e` 的取值会左移成文件名、按文件名裁行（票 26 第五轮复审）。
-  if (explicit.some(source => source === '')) return { list: [], openEnded: false, abstained: true }
-  // 非 BMP 字符在 JS 里是代理对、在 grep 里是一个 UTF-8 字符：`A😀?B` 的 `?` 会绑到低代理码元上、匹配不到
-  // grep 的真实命中，正文是 BMP 时行级守卫也拦不住（第 6 次联合复审实测删掉了 `AB`）。方言不猜：整次调用
-  // 不表态；`-F` 下整串是字面量、按码元逐位匹配与 grep 的字节序列一致，照常编译。
-  if (!flags.has('F') && explicit.some(source => NON_BMP.test(source))) {
+  if (!isPromisedInvocation({ sources: explicit, flags, fromFile })) {
     return { list: [], openEnded: false, abstained: true }
   }
-  // `-i` 的大小写折叠按 locale：本机 BSD grep 在 UTF-8 locale 下把 `ſ` 与 `S` 当同一字符，JS 的 `i` 标志
-  // 不折叠「非 ASCII 折叠到 ASCII」的字符（`/ſ/i.test('S') === false`），真实命中会被裁掉（第 7 次联合复审
-  // 实测 `grep -niE 'ſ|MATCH'` 删掉 `S`；`-F` 的字面量同样按 `i` 折叠）。方言不猜：整次调用不表态。
-  if (flags.has('i') && explicit.some(source => /[^\x00-\x7F]/.test(source))) {
-    return { list: [], openEnded: false, abstained: true }
-  }
-  // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
-  // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
-  // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
-  if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return { list: [], openEnded: false, abstained: true }
-  // 方括号表达式里 JS 表达不了等价语义的 POSIX 构造，原样交给 JS 都会把真实命中定位错：首成员 `]`（POSIX 当
-  // 字面成员、JS 读成空字符类 / 任意字符，实测 `[]a]`）、方括号里的反斜杠（POSIX 当字面成员、JS 当转义，实测
-  // `[\b]`）、排序元素 `[. .]` 与等价类 `[= =]`（POSIX 按字符处理、JS 读成普通字符集，实测 `[[.a.]]`）。方言
-  // 不猜，整次调用不表态；`-F` 下整串是字面量，照常编译。
-  if (!flags.has('F') && explicit.some(hasUnsupportedBracket)) return { list: [], openEnded: false, abstained: true }
   const extended = flags.has('E')
-  // BRE 的 `^` / `$` 只在 pattern 开头 / 结尾是锚点，其余位置是字面量（`grep 'foo^bar'` 搜字面 `foo^bar`）；
-  // JS 里两者永远是断言，原样编译定位不到真实命中（联合复审实测裁掉了 `foo^bar`）。方言不猜，整次调用不表态。
-  // `-E` 实测与 JS 一致（`grep -E 'foo^bar'` 同样无命中），不在此列；`-F` 下整串是字面量，照常编译。
-  if (!flags.has('F') && !extended && explicit.some(hasMisplacedBreAnchor)) return { list: [], openEnded: false, abstained: true }
-  // 反向引用（`\1`…`\9`）按捕获组编号解析：顶层分支独立编译会重排组号，`\2` 在分支里可能变成别的含义甚至
-  // 八进制转义（`grep -E '(foo)|(Bz+E)\2'` 的第二段真实命中会因此定位不到）。组号跨分支改写不可还原，整次
-  // 调用不表态（票 27 复审）。
-  if (!flags.has('F') && explicit.some(source => hasBackReference(source) && hasAlternation(source, extended))) {
-    return { list: [], openEnded: false, abstained: true }
-  }
   // POSIX 是 leftmost-longest、JS 是 leftmost-first：`grep -E 'BEGIN|BEGIN.*END'` 的真实命中以 END 结尾，
   // JS 只认第一个能成立的短分支 BEGIN。顶层交替拆成独立分支后，各分支命中的并集覆盖真实命中的**起点**（最长
   // 匹配一定落在某个分支上），两侧都能照常裁（票 27）。终点是否可信另见 loop 之后的重复算子判定。
@@ -488,7 +444,7 @@ function translateBre(source: string): string {
  *
  * JS 把这两个转义当字面 `<` / `>`，原样编译会在「词首 `foo`」这类真实命中上定位不到（第 7 次联合复审实测
  * `grep -nE -e MATCH -e '\<foo'` 的 `foo` 被裁掉）。方括号表达式里的反斜杠是字面量、不翻（这类构造由
- * `hasUnsupportedBracket` 整次不表态兜着）；`\\<`（转义反斜杠 + 字面 `<`）也不翻。
+ * `isPromisedInvocation` 整次不表态兜着）；`\\<`（转义反斜杠 + 字面 `<`）也不翻。
  * @param source - ERE 模式。
  * @returns JS 正则源码。
  */
@@ -656,121 +612,54 @@ function splitAlternatives(source: string, extended: boolean): string[] | undefi
   return branches.length > 1 ? branches : undefined
 }
 
-/**
- * 模式里有没有 JS 表达不了等价语义的**方括号表达式**：原样交给 JS 会把真实命中定位错。三类构造——
- * 首成员是 `]`（POSIX 当字面成员、JS 读成空字符类 / 任意字符）、方括号里的反斜杠（POSIX 当字面成员、JS 当
- * 转义）、排序元素 `[. .]` 与等价类 `[= =]`（POSIX 按字符处理、JS 读成普通字符集）。这类跨方言语义分歧不猜，
- * 整次调用不表态（见 `patternsOf`）。
- * @param source - pattern 原文。
- * @returns 有这种方括号表达式时为 `true`。
- */
-function hasUnsupportedBracket(source: string): boolean {
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index] as string
-    if (char === '\\' && index + 1 < source.length) {
-      index++
-      continue
+/** 只接纳设计文档规则 4 的 pattern 子集；任一 pattern 越界就放弃整次调用。 */
+function isPromisedInvocation(parsed: {
+  readonly sources: readonly string[]
+  readonly flags: ReadonlySet<string>
+  readonly fromFile: boolean
+}): boolean {
+  const { sources, flags, fromFile } = parsed
+  if (fromFile || flags.has('P')) return false
+  if (['E', 'F', 'G'].filter(flag => flags.has(flag)).length > 1) return false
+  const fixed = flags.has('F')
+  const extended = flags.has('E')
+  return sources.length > 0 && sources.every(source => {
+    if (source === '' || source.includes('\n')) return false
+    if (flags.has('i') && /[^\x00-\x7F]/.test(source)) return false
+    if (fixed) return true
+    if (NON_BMP.test(source)) return false
+    let atBranchStart = true
+    for (let index = 0; index < source.length; index++) {
+      const char = source[index] as string
+      if (char === '\\') {
+        const next = source[++index]
+        // 仅接纳标点字面量、BRE 算子及词首/词尾；字母转义与引用不透传给 JS。
+        if (next === undefined || !'\\.^$*+?(){}|[]/<>-'.includes(next)) return false
+        atBranchStart = !extended && (next === '(' || next === '|')
+        continue
+      }
+      if (char === '[') {
+        let cursor = index + 1
+        if (source[cursor] === '^') cursor++
+        if (source[cursor] === ']') return false
+        for (; cursor < source.length && source[cursor] !== ']'; cursor++) {
+          const inner = source[cursor]
+          if (inner === '\\') return false
+          if (inner === '[' && ':.='.includes(source[cursor + 1] ?? '')) return false
+        }
+        if (cursor === source.length) return false
+        index = cursor
+      } else if (!extended && char === '^' && !atBranchStart) {
+        return false
+      } else if (!extended && char === '$') {
+        if (index + 1 < source.length && source.slice(index + 1, index + 3) !== '\\)') return false
+      } else if (extended && char === '(' && source[index + 1] === '?') {
+        return false
+      }
+      atBranchStart = extended && (char === '(' || char === '|')
     }
-    if (char !== '[') continue
-    // `[]` / `[^]`：`]` 紧跟 `[` / `[^` 时是 POSIX 的字面成员，JS 却在这里收尾或按 `[^]` 吃任意字符。
-    if (source[index + 1] === ']') return true
-    let cursor = index + 1
-    if (source[cursor] === '^') cursor++
-    if (source[cursor] === ']') return true
-    for (; cursor < source.length; cursor++) {
-      const inner = source[cursor] as string
-      if (inner === '\\') return true
-      if (inner === '[' && (source[cursor + 1] === '.' || source[cursor + 1] === '=')) return true
-      if (inner === ']') break
-    }
-    index = cursor
-  }
-  return false
-}
-
-/**
- * 模式里有没有**位置不对的 BRE 锚点**：BRE 的 `^` 只在 pattern 开头、`\(` 或 `\|` 之后是锚点，`$` 只在结尾或
- * `\)` 之前是锚点，其余位置是字面量（`grep 'foo^bar'` 搜字面 `foo^bar`，BSD 实测）；JS 里两者永远是断言，
- * 原样编译会命不中真实命中。`$` 紧挨 `\|` 时 BSD 当字面量、GNU 当锚点，方言不猜，一并算位置不对。方括号内是
- * 字面成员，不算；`-E` 实测与 JS 一致，不在本函数职责内（调用方只对 BRE 用）。
- * @param source - BRE pattern 原文。
- * @returns 有位置不对的锚点时为 `true`。
- */
-function hasMisplacedBreAnchor(source: string): boolean {
-  let bracketStart = -1
-  // 刚经过 pattern 开头、`\(` 或 `\|`：只有这些位置上的 `^` 才是锚点。
-  let atBranchStart = true
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index] as string
-    if (bracketStart >= 0) {
-      // 与 {@link hasAlternation} 同一套方括号边界：`]` 紧跟 `[` / `[^` 时是字面量。
-      const literalClose = index === bracketStart + 1
-        || (index === bracketStart + 2 && source[bracketStart + 1] === '^')
-      if (char === ']' && !literalClose) bracketStart = -1
-      continue
-    }
-    if (char === '[') {
-      bracketStart = index
-      atBranchStart = false
-      continue
-    }
-    if (char === '\\' && index + 1 < source.length) {
-      const next = source[index + 1] as string
-      atBranchStart = next === '(' || next === '|'
-      index++
-      continue
-    }
-    if (char === '^') {
-      if (!atBranchStart) return true
-      atBranchStart = false
-      continue
-    }
-    if (char === '$') {
-      const tail = source[index + 1]
-      const beforeGroupEnd = tail === '\\' && source[index + 2] === ')'
-      if (tail !== undefined && !beforeGroupEnd) return true
-      atBranchStart = false
-      continue
-    }
-    atBranchStart = false
-  }
-  return false
-}
-
-/**
- * 模式里有没有**反向引用**（`\1`…`\9`）：连续反斜杠按奇偶成对看——`\\1` 是字面量反斜杠 + `1`，不是引用；
- * 方括号表达式里没有引用语义。只有真正的引用会在顶层分支独立编译时被重排组号改义。
- * @param source - pattern 原文。
- * @returns 有反向引用时为 `true`。
- */
-function hasBackReference(source: string): boolean {
-  let bracketStart = -1
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index] as string
-    if (bracketStart >= 0) {
-      // 与 {@link hasAlternation} 同一套方括号边界：`]` 紧跟 `[` / `[^` 时是字面量。
-      const literalClose = index === bracketStart + 1
-        || (index === bracketStart + 2 && source[bracketStart + 1] === '^')
-      if (char === ']' && !literalClose) bracketStart = -1
-      continue
-    }
-    if (char === '[') {
-      bracketStart = index
-      continue
-    }
-    if (char !== '\\') continue
-    let run = 0
-    while (source[index + run] === '\\') run++
-    const next = source[index + run]
-    if (run % 2 === 1) {
-      if (next !== undefined && next >= '1' && next <= '9') return true
-      // 被转义的字符不再是语法字符：`\[` 不开方括号表达式。
-      index += run
-    } else {
-      index += run - 1
-    }
-  }
-  return false
+    return true
+  })
 }
 
 function escapeRegExp(source: string): string {
@@ -781,10 +670,9 @@ function escapeRegExp(source: string): string {
  * 编译一个 pattern。
  * @param source - pattern 原文。
  * @param flags - 选项字母。
- * @returns 正则；`-P`（PCRE）与编译失败一律 `undefined`——宁可不动，也不按别的方言猜着裁。
+ * @returns 正则；编译失败返回 `undefined`，整条结果不裁。
  */
 function compilePattern(source: string, flags: ReadonlySet<string>): RegExp | undefined {
-  if (flags.has('P')) return undefined
   const fixed = flags.has('F')
   let body = fixed ? escapeRegExp(source) : flags.has('E') ? translateEreWordBoundaries(source) : translateBre(source)
   // `-w` 的语义是「命中片段的左右邻接字符都不是词字符」，不是 `\b`：`\b` 要求边界一侧是词字符，

@@ -799,3 +799,32 @@ describe('票 26/27 · 第 7 次联合复审落修（2026-10-19）', () => {
     expect(trimGrepLongLines(literal, String.raw`grep -nE 'a\|b' f`).match(/…\[省略 \d+ 字符\]…/g)).toHaveLength(3)
   })
 })
+
+
+describe('阶段 1 · 承诺子集', () => {
+  for (const dialect of ['', 'E']) {
+    const outside = [
+      { source: '\\wé', hit: 'éé' },
+      { source: '\\bfoo', hit: 'foo' },
+      { source: '\\sfoo', hit: ' foo' },
+      { source: '\\d', hit: '1' },
+      { source: '\\q', hit: 'q' },
+      { source: dialect === 'E' ? '(foo)\\1' : '\\(foo\\)\\1', hit: 'foofoo' },
+    ]
+    it.each(outside)(`${dialect || 'BRE'} 白名单外 $source：单 pattern、混合 pattern 与跨调用都不裁`, ({ source, hit }) => {
+      const text = `1:${'x'.repeat(900)} ${hit} ${'y'.repeat(900)} MATCH ${'z'.repeat(900)}`
+      for (const option of ['', 'w', 'i']) {
+        const command = `grep -n${dialect}${option} -e '${source}' f`
+        for (const invocation of [command, `${command} -e MATCH`, `${command}; grep -n MATCH f`]) {
+          expect(trimGrepLongLines(text, invocation), invocation).toBe(text)
+        }
+      }
+    })
+    it.each(outside)(`-F 下 $source 仍按完整字面量裁剪`, ({ source }) => {
+      const text = `1:${longContent(source)}`
+      const trimmed = trimGrepLongLines(text, `grep -nF -e '${source}' f`)
+      expect(trimmed).not.toBe(text)
+      expect(trimmed).toContain(source)
+    })
+  }
+})
