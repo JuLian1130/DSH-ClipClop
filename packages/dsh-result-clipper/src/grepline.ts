@@ -230,6 +230,7 @@ const SHORT_FLAGS = /^-[A-Za-z]+$/
 
 /** 带语义的长写选项与短写字母：`--fixed-strings` 与 `-F` 必须同样处理，否则会按错误方言裁。 */
 const LONG_FLAGS: ReadonlyMap<string, string> = new Map([
+  ['--basic-regexp', 'G'],
   ['--extended-regexp', 'E'],
   ['--fixed-strings', 'F'],
   ['--ignore-case', 'i'],
@@ -370,6 +371,12 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
   if (fromFile) return { list: [], openEnded: false, abstained: true }
   // `-P`（PCRE）的语义与 JS 不等价，整次调用不表态（与票 26 的边界一致）。
   if (flags.has('P')) return { list: [], openEnded: false, abstained: true }
+  // 方言选项冲突时真实 grep 是**后写者胜**（`grep -F -E` 用 ERE、`grep -E -F` 用字面量、`-E -G` 用 BRE）；
+  // 实现只收进无序集合、还原不了顺序，按其中一种编译就会在另一种顺序下把真实命中裁掉（联合复审实测
+  // `grep -nF -E 'foo|bar'` 丢掉了位置 400 的 `foo` 命中）。方言冲突不猜：整次调用不表态。
+  if ((flags.has('E') ? 1 : 0) + (flags.has('F') ? 1 : 0) + (flags.has('G') ? 1 : 0) > 1) {
+    return { list: [], openEnded: false, abstained: true }
+  }
   if (pattern !== undefined) explicit.push(pattern)
   // 真正的换行在 POSIX grep 里是 pattern 列表分隔（`grep -e $'A\nB'` 是两个 pattern），不是正则的一部分；
   // 把它整串交给 JS 会变成一个含换行的正则、两个真实命中都定位不到（联合复审实测）。方言不猜：整次调用
@@ -827,6 +834,9 @@ export function trimAroundMatches(
 /** 已分组输出的组员行前缀（与 `condense.ts` 的 `GROUPED_ROW` 同形：`行号:` / `行号-`）。 */
 const GROUPED_MEMBER_ROW = /^\d+[:-]/
 
+/** 非 BMP 字符（emoji 等）：JS 正则按 UTF-16 码元匹配、grep 按 UTF-8 字符，命中位置会错开；含这类字符的行不裁。 */
+const NON_BMP = /[\uD800-\uDFFF]/
+
 /**
  * 这一行像不像 `group-paths` 写出的组头（路径行）：不含空白、长度有限、不是空行或 `--`。
  *
@@ -865,6 +875,9 @@ export function trimGrepLongLines(text: string, command: string | undefined): st
     // 单文件上下文行裁就会与第一遍不同（整链幂等，票 26 第五轮复审）。
     if (row.path === undefined && row.sep === '-' && isGroupedHeader(runStart > 0 ? lines[runStart - 1] : undefined)) continue
     if (row.content.length <= GREP_LONG_LINE_MIN_CHARS) continue
+    // 非 BMP 字符在 JS 里是代理对、在 grep 的 UTF-8 字符语义里是一个字符：`.` / 量词按码元匹配会定位不到真实
+    // 命中，按找到的更晚命中裁会把前面的真实命中删掉（第 5 次联合复审实测 `A😀B😀C` 被删）。方言不猜：整行不裁。
+    if (NON_BMP.test(row.content)) continue
     const trimmed = trimAroundMatches(row.content, patterns, GREP_LONG_LINE_WINDOW, openEnded)
     if (trimmed === row.content) continue
     lines[index] = row.path === undefined

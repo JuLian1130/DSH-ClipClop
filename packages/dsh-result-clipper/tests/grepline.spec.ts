@@ -341,8 +341,16 @@ describe('票 26 · 第五轮复审落修', () => {
   })
 
   it('方括号里的 |、-F 字面量与 ERE 的转义 | 不算交替，照常编译', () => {
-    expect(grepPatterns('grep -nF "a|b" f')[0]?.test('a|b')).toBe(true)
-    expect(grepPatterns('grep -nF "(a|b)" f')[0]?.test('(a|b)')).toBe(true)
+    const literalBar = grepPatterns('grep -nF "a|b" f')[0]
+    expect(literalBar?.test('a|b')).toBe(true)
+    // `|` 是字面量：不能匹配单独的 `a`，长行也不能按 `a` 定位裁。
+    expect(literalBar?.test('a')).toBe(false)
+    const literalParen = grepPatterns('grep -nF "(a|b)" f')[0]
+    expect(literalParen?.test('(a|b)')).toBe(true)
+    expect(literalParen?.test('a')).toBe(false)
+    expect(literalParen?.test('a|b')).toBe(false)
+    const noLiteral = `f.ts:1:${'x'.repeat(400)}a${'y'.repeat(400)}`
+    expect(trimGrepLongLines(noLiteral, 'grep -nF "(a|b)" f')).toBe(noLiteral)
     expect(grepPatterns('grep -nE "[a|b]" f')[0]?.test('|')).toBe(true)
     expect(grepPatterns('grep -nE "a\\|b" f')[0]?.test('a|b')).toBe(true)
   })
@@ -673,5 +681,33 @@ describe('票 26/27 · 第 4 次联合复审落修（编译失败 / 多段不表
     expect(trimmed).toContain('MATCH')
     expect(trimmed).toContain('SECOND')
     expect(trimGrepLongLines(trimmed, "grep -nE 'MATCH' f; grep -nE 'SECOND' g")).toBe(trimmed)
+  })
+})
+
+describe('票 26/27 · 第 5 次联合复审落修（2026-10-19）', () => {
+  it.skipIf(!grepAvailable)('含非 BMP 字符的命中行不裁：真实 grep -o 的命中完整保留', () => {
+    const content = `${'x'.repeat(900)}A😀B😀C${'y'.repeat(900)}MATCH${'z'.repeat(900)}`
+    const matches = realGrepMatches(['-o', '-E', '-e', 'A.{1}B.{1}C', '-e', 'MATCH'], content)
+    expect(matches).toContain('A😀B😀C')
+    const text = `f.ts:1:${content}`
+    // `.` 与量词在 JS 里按 UTF-16 码元匹配，定位不到真实命中；按后面的 MATCH 裁会把 `A😀B😀C` 删掉。
+    expect(trimGrepLongLines(text, "grep -nE -e 'A.{1}B.{1}C' -e MATCH f")).toBe(text)
+    // 没有重复算子的同形 pattern 同样不裁（缺口不在保守窗口那一层）。
+    expect(trimGrepLongLines(text, "grep -n -e 'A.B.C' -e MATCH f")).toBe(text)
+  })
+
+  it('方言选项冲突（-F / -E / -G 同现）整次不表态，不按其中一种猜着裁', () => {
+    expect(grepPatterns("grep -nF -E 'foo|bar' f")).toEqual([])
+    expect(grepPatterns("grep -nE -F 'foo|bar' f")).toEqual([])
+    expect(grepPatterns("grep -nE -G 'foo\\|bar' f")).toEqual([])
+    expect(grepPatterns("grep -n --basic-regexp --extended-regexp 'foo|bar' f")).toEqual([])
+    const content = `${'x'.repeat(400)}foo${'y'.repeat(400)}foo|bar${'z'.repeat(400)}`
+    const text = `f.ts:1:${content}`
+    expect(trimGrepLongLines(text, "grep -nF -E 'foo|bar' f")).toBe(text)
+  })
+
+  it.skipIf(!grepAvailable)('真实 grep 的方言选项是后写者胜：冲突调用不裁才不会删命中', () => {
+    expect(realGrepMatches(['-o', '-F', '-E', 'foo|bar'], 'foo')).toEqual(['foo'])
+    expect(realGrepMatches(['-o', '-E', '-F', 'foo|bar'], 'foo|bar')).toEqual(['foo|bar'])
   })
 })
