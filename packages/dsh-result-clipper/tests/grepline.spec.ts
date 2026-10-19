@@ -285,4 +285,11 @@ describe('票 26 · 第三轮复审落修', () => {
     expect(grepPatterns("grep -nE '[[:alpha:]]+' f")).toEqual([])
     expect(grepPatterns("grep -nF '[[:digit:]]' f")[0]?.test('[[:digit:]]')).toBe(true)
   })
+
+  it('一次调用里混进 POSIX 字符类时整条不表态（其余 pattern 也不裁）', () => {
+    const command = "grep -n -e MATCH -e '[[:digit:]]' f"
+    expect(grepPatterns(command)).toEqual([])
+    const text = `1:${'x'.repeat(300)}MATCH${'y'.repeat(600)}7${'z'.repeat(300)}`
+    expect(trimGrepLongLines(text, command)).toBe(text)
+  })
 })

@@ -319,6 +319,10 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
   }
   if (fromFile) return patterns
   if (pattern !== undefined) explicit.push(pattern)
+  // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
+  // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
+  // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
+  if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return patterns
   for (const source of explicit) patterns.push({ source, flags })
   return patterns
 }
@@ -365,15 +369,11 @@ function escapeRegExp(source: string): string {
  * 编译一个 pattern。
  * @param source - pattern 原文。
  * @param flags - 选项字母。
- * @returns 正则；`-P`（PCRE）、POSIX 字符类与编译失败一律 `undefined`——宁可不动，也不按别的方言猜着裁。
+ * @returns 正则；`-P`（PCRE）与编译失败一律 `undefined`——宁可不动，也不按别的方言猜着裁。
  */
 function compilePattern(source: string, flags: ReadonlySet<string>): RegExp | undefined {
   if (flags.has('P')) return undefined
   const fixed = flags.has('F')
-  // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
-  // 方言不猜：整条调用不表态（语料 48,948 条含 grep 的命令里只有 3 条用到，不值得为它建映射表）。
-  // `-F` 下它就是字面量，照常编译。
-  if (!fixed && /\[:[a-z]+:\]/.test(source)) return undefined
   let body = fixed ? escapeRegExp(source) : flags.has('E') ? source : translateBre(source)
   // `-w` 的语义是「命中片段的左右邻接字符都不是词字符」，不是 `\b`：`\b` 要求边界一侧是词字符，
   // 对 `@`、`TODO:` 这种以非词字符收尾的 pattern 恰好反过来——`\b(?:@)\b` 会命中 `a@b` 而漏掉 ` @ `
