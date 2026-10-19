@@ -35,6 +35,9 @@ export const GREP_LONG_LINE_WINDOW = 200
 /** 省略标记的前缀；幂等判据也靠它（带标记的行不再处理）。 */
 export const LONG_LINE_MARK = '…[省略 '
 
+/** 非 BMP 字符（emoji 等）：JS 正则按 UTF-16 码元匹配、grep 按 UTF-8 字符，命中位置会错开；含这类字符的正文行不裁，pattern 含这类字符时整次不表态。 */
+const NON_BMP = /[\uD800-\uDFFF]/
+
 /**
  * 行首是 `行号:正文` / `行号-正文` 的单文件输出。
  *
@@ -385,6 +388,12 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
   // 空 pattern（`-e ''` / `''`）匹配所有行、没有可定位的命中位置；按整次调用不表态。不这样判的话，一旦
   // 分词把空参数丢掉，`-e` 的取值会左移成文件名、按文件名裁行（票 26 第五轮复审）。
   if (explicit.some(source => source === '')) return { list: [], openEnded: false, abstained: true }
+  // 非 BMP 字符在 JS 里是代理对、在 grep 里是一个 UTF-8 字符：`A😀?B` 的 `?` 会绑到低代理码元上、匹配不到
+  // grep 的真实命中，正文是 BMP 时行级守卫也拦不住（第 6 次联合复审实测删掉了 `AB`）。方言不猜：整次调用
+  // 不表态；`-F` 下整串是字面量、按码元逐位匹配与 grep 的字节序列一致，照常编译。
+  if (!flags.has('F') && explicit.some(source => NON_BMP.test(source))) {
+    return { list: [], openEnded: false, abstained: true }
+  }
   // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
   // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
   // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
@@ -833,9 +842,6 @@ export function trimAroundMatches(
 
 /** 已分组输出的组员行前缀（与 `condense.ts` 的 `GROUPED_ROW` 同形：`行号:` / `行号-`）。 */
 const GROUPED_MEMBER_ROW = /^\d+[:-]/
-
-/** 非 BMP 字符（emoji 等）：JS 正则按 UTF-16 码元匹配、grep 按 UTF-8 字符，命中位置会错开；含这类字符的行不裁。 */
-const NON_BMP = /[\uD800-\uDFFF]/
 
 /**
  * 这一行像不像 `group-paths` 写出的组头（路径行）：不含空白、长度有限、不是空行或 `--`。

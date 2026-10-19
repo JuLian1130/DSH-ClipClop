@@ -341,16 +341,18 @@ describe('票 26 · 第五轮复审落修', () => {
   })
 
   it('方括号里的 |、-F 字面量与 ERE 的转义 | 不算交替，照常编译', () => {
-    const literalBar = grepPatterns('grep -nF "a|b" f')[0]
-    expect(literalBar?.test('a|b')).toBe(true)
-    // `|` 是字面量：不能匹配单独的 `a`，长行也不能按 `a` 定位裁。
-    expect(literalBar?.test('a')).toBe(false)
-    const literalParen = grepPatterns('grep -nF "(a|b)" f')[0]
-    expect(literalParen?.test('(a|b)')).toBe(true)
-    expect(literalParen?.test('a')).toBe(false)
-    expect(literalParen?.test('a|b')).toBe(false)
-    const noLiteral = `f.ts:1:${'x'.repeat(400)}a${'y'.repeat(400)}`
-    expect(trimGrepLongLines(noLiteral, 'grep -nF "(a|b)" f')).toBe(noLiteral)
+    // 每条断言都重新取一次正则：`grepPatterns` 返回带 `g` 的正则，复用同一实例时 `.test()` 会推进 `lastIndex`，
+    // 阴性断言会假绿（第 6 次联合复审删掉 `escapeRegExp` 的 `|` 后用例仍全过）。
+    expect(grepPatterns('grep -nF "a|b" f')[0]?.test('a|b')).toBe(true)
+    expect(grepPatterns('grep -nF "a|b" f')[0]?.test('a')).toBe(false)
+    // `|` 是字面量：只有 `a` 的长行不能按 `a` 定位裁。
+    const noBar = `f.ts:1:${'x'.repeat(400)}a${'y'.repeat(400)}`
+    expect(trimGrepLongLines(noBar, 'grep -nF "a|b" f')).toBe(noBar)
+    expect(grepPatterns('grep -nF "(a|b)" f')[0]?.test('(a|b)')).toBe(true)
+    expect(grepPatterns('grep -nF "(a|b)" f')[0]?.test('a')).toBe(false)
+    expect(grepPatterns('grep -nF "(a|b)" f')[0]?.test('a|b')).toBe(false)
+    const noParen = `f.ts:1:${'x'.repeat(400)}a${'y'.repeat(400)}`
+    expect(trimGrepLongLines(noParen, 'grep -nF "(a|b)" f')).toBe(noParen)
     expect(grepPatterns('grep -nE "[a|b]" f')[0]?.test('|')).toBe(true)
     expect(grepPatterns('grep -nE "a\\|b" f')[0]?.test('a|b')).toBe(true)
   })
@@ -709,5 +711,20 @@ describe('票 26/27 · 第 5 次联合复审落修（2026-10-19）', () => {
   it.skipIf(!grepAvailable)('真实 grep 的方言选项是后写者胜：冲突调用不裁才不会删命中', () => {
     expect(realGrepMatches(['-o', '-F', '-E', 'foo|bar'], 'foo')).toEqual(['foo'])
     expect(realGrepMatches(['-o', '-E', '-F', 'foo|bar'], 'foo|bar')).toEqual(['foo|bar'])
+  })
+})
+
+describe('票 26/27 · 第 6 次联合复审落修（2026-10-19）', () => {
+  it.skipIf(!grepAvailable)('pattern 含非 BMP 字符时整次不表态：正文 BMP 的真实命中不被删', () => {
+    const content = `${'x'.repeat(400)}AB${'y'.repeat(900)}MATCH${'z'.repeat(400)}`
+    const command = "grep -nE -e 'A😀?B' -e MATCH f"
+    const matches = realGrepMatches(['-o', '-E', '-e', 'A😀?B', '-e', 'MATCH'], content)
+    expect(matches).toContain('AB')
+    const text = `f.ts:1:${content}`
+    // `?` 绑在低代理码元上，JS 匹配不到 grep 的真实命中 `AB`；整次不表态后正文原样保留。
+    expect(grepPatterns(command)).toEqual([])
+    expect(trimGrepLongLines(text, command)).toBe(text)
+    // `-F` 下 astral 是字面量、按码元逐位匹配与 grep 的字节序列一致，照常编译。
+    expect(grepPatterns("grep -nF 'A😀?B' f")).toHaveLength(1)
   })
 })
