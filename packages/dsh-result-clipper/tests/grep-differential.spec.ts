@@ -64,7 +64,9 @@ require('node:fs').appendFileSync(process.env.DSH_DIFF_LOG, JSON.stringify(proce
 `
 
 type CorpusRow = { callId: string; command: string; text: string }
-type FixtureRow = CorpusRow & { argvs?: string[][]; knownRed?: boolean }
+type FixtureRow = CorpusRow & { argvs?: string[][]; knownRed?: boolean; expectTrim?: boolean }
+
+type Failure = { callId: string; command: string; fragment: string; textLength: number }
 
 type Outcome = { argvs: string[][]; failures: string[]; skips: string[]; calls: number; fragments: number }
 
@@ -112,7 +114,7 @@ function captureArgvs(command: string): string[][] {
       execFileSync('/bin/bash', ['-c', `cd(){ :; }; ${command}`], {
         cwd: dir,
         env: { PATH: dir, HOME: dir, TMPDIR: dir, DSH_DIFF_LOG: logPath },
-        timeout: 3_000,
+        timeout: 10_000,
         stdio: 'ignore',
         maxBuffer: 1024 * 1024,
       })
@@ -154,6 +156,8 @@ function evaluate(command: string, text: string): Outcome {
   }
   const body = trimmed.replace(MARKER, '')
   outcome.argvs = captureArgvs(command)
+  // 命令可能被 `env` / `xargs` 一类包装吞掉，grep 根本没执行：记成跳过原因，不静默算作已评估。
+  if (outcome.argvs.length === 0) outcome.skips.push('no-argv')
   for (const argv of outcome.argvs) {
     const replay = replayArgsOf(argv)
     if ('skip' in replay) {
@@ -242,9 +246,12 @@ function writeFixture(path: string, rows: readonly FixtureRow[]): void {
   writeFileSync(path, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`)
 }
 
-/** 汇总每一行判定的耗时与失败详情，便于把红清单抄进收敛计划。 */
-function reportFailure(callId: string, command: string, fragment: string): void {
-  console.log(`[grep-diff] 命中被删 callId=${callId} fragment=${JSON.stringify(fragment)} command=${command.slice(0, 200)}`)
+/** 打印单条失败详情（正文长度与完整命令），便于把红清单抄进收敛计划。 */
+function reportFailure(failure: Failure): void {
+  console.log(
+    `[grep-diff] 命中被删 callId=${failure.callId} fragment=${JSON.stringify(failure.fragment)} ` +
+      `textLength=${failure.textLength} command=${JSON.stringify(failure.command)}`,
+  )
 }
 
 const fixtureRows: FixtureRow[] = existsSync(FIXTURE_PATH)
@@ -253,6 +260,28 @@ const fixtureRows: FixtureRow[] = existsSync(FIXTURE_PATH)
       .filter(Boolean)
       .map((line) => JSON.parse(line) as FixtureRow)
   : []
+
+describe('grep argv 解释', () => {
+  it('没有 -e 时，-- 之后的第一个操作数是 pattern', () => {
+    expect(replayArgsOf(['-n', '--', 'MATCH', 'f'])).toEqual({ args: ['-o', '-e', 'MATCH'] })
+  })
+
+  it('单独的 - 在 pattern 位置是字面 pattern，不是 stdin 文件', () => {
+    expect(replayArgsOf(['-n', '-', 'f'])).toEqual({ args: ['-o', '-e', '-'] })
+  })
+
+  it('-- 之后以 - 开头的操作数同样按 pattern 处理', () => {
+    expect(replayArgsOf(['--', '-x', 'f'])).toEqual({ args: ['-o', '-e', '-x'] })
+  })
+
+  it('已有 -e 时，-- 之后的操作数不覆盖 pattern', () => {
+    expect(replayArgsOf(['-e', 'a', '--', 'b'])).toEqual({ args: ['-o', '-e', 'a'] })
+  })
+
+  it('-f 整次跳过', () => {
+    expect(replayArgsOf(['-f', 'pats', 'x'])).toEqual({ skip: 'pattern-file' })
+  })
+})
 
 describe('grep 差分回放', () => {
   it('oracle 无命中时返回空片段', () => {
@@ -280,13 +309,14 @@ describe('grep 差分回放', () => {
     { timeout: 1_800_000 },
     async () => {
       const cap = MAX_ROWS > 0 ? MAX_ROWS : Number.POSITIVE_INFINITY
-      const failures: { callId: string; command: string; fragment: string }[] = []
+      const failures: Failure[] = []
       const skips = new Map<string, number>()
       const passing: FixtureRow[] = []
       let scanned = 0
       let evaluated = 0
       let calls = 0
       let fragments = 0
+      const startedAt = performance.now()
 
       for await (const row of corpusRows(CORPUS_ROOT as string)) {
         scanned += 1
@@ -302,7 +332,7 @@ describe('grep 差分回放', () => {
         fragments += outcome.fragments
         evaluated += 1
         for (const fragment of outcome.failures) {
-          failures.push({ callId: row.callId, command: row.command, fragment })
+          failures.push({ callId: row.callId, command: row.command, fragment, textLength: row.text.length })
         }
         if (outcome.failures.length === 0 && outcome.fragments > 0 && passing.length < 150) {
           const compact = compactText(row.text)
@@ -317,16 +347,14 @@ describe('grep 差分回放', () => {
         const regressions = fixtureRows.filter(row => row.callId.startsWith('regression/'))
         writeFixture(EXPORT_PATH, [...passing, ...regressions, KNOWN_RED])
       }
-      for (const failure of failures.slice(0, 20)) {
-
-        reportFailure(failure.callId, failure.command, failure.fragment)
-      }
+      for (const failure of failures) reportFailure(failure)
       const skipText = [...skips]
         .map(([reason, count]) => `${reason}:${count}`)
         .join(', ')
       console.log(
         `[grep-diff] 扫描 ${scanned} 行 / 评估 ${evaluated} 行 / 调用 ${calls} 次 / 片段 ${fragments} 个 / ` +
-          `失败 ${failures.length} 条 / 跳过 ${skipText === '' ? '无' : skipText}`,
+          `失败 ${failures.length} 条 / 跳过 ${skipText === '' ? '无' : skipText} / ` +
+          `耗时 ${Math.round(performance.now() - startedAt)} ms`,
       )
       if (STRICT) expect(failures).toEqual([])
       expect(evaluated).toBeGreaterThan(0)
@@ -338,13 +366,23 @@ describe('grep 差分回放', () => {
     { timeout: 300_000 },
     () => {
       for (const row of fixtureRows) {
+        const trimmed = trimGrepLongLines(row.text, row.command)
+        if (row.expectTrim === true) expect(trimmed, row.callId).not.toBe(row.text)
+        else if (row.expectTrim === false) expect(trimmed, row.callId).toBe(row.text)
         if (row.argvs === undefined && unsafeReason(row.command) !== undefined) continue
         const outcome = row.argvs === undefined ? evaluate(row.command, row.text) : evaluateWithArgvs(row.command, row.text, row.argvs)
         if (row.knownRed === true) {
           console.log(`[grep-diff] knownRed ${row.callId}: 失败 ${outcome.failures.length} 条（阶段 1 裁决）`)
           continue
         }
-        if (outcome.failures.length > 0) reportFailure(row.callId, row.command, outcome.failures[0] as string)
+        if (outcome.failures.length > 0) {
+          reportFailure({
+            callId: row.callId,
+            command: row.command,
+            fragment: outcome.failures[0] as string,
+            textLength: row.text.length,
+          })
+        }
         expect(outcome.failures).toEqual([])
       }
     },

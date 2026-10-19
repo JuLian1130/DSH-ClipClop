@@ -88,8 +88,8 @@ export function replayArgsOf(argv: readonly string[]): Replay {
       continue
     }
     if (stopOptions || !token.startsWith('-') || token === '-') {
-      // `--` 之后全是文件；`-` 是 stdin 操作数；没有 `-e` / `-f` 时第一个普通参数是 pattern，其余是文件。
-      if (!stopOptions && token !== '-' && !sawPatternOption && patterns.length === 0) patterns.push(token)
+      // `--` 之后全是操作数；`-` 也是操作数。没有 `-e` / `-f` 时第一个操作数是 pattern，其余是文件（忽略）。
+      if (!sawPatternOption && patterns.length === 0) patterns.push(token)
       continue
     }
     if (token.startsWith('--')) {
