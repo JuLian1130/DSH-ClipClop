@@ -653,6 +653,16 @@ describe('票 26：命中长行裁剪（grep-long-line）', () => {
     }))
   })
 
+  it('只作用于 bash：pwsh 的 grep 命令不裁（设计文档的边界）', async () => {
+    const { fixture } = await mounted({ condenseByCommand: true })
+    fixture.ctx.tools.register(textTool('pwsh', LONG_MATCH_BODY))
+    const result = await fixture.ctx.tools.execute(exec('pwsh', undefined, { command: 'grep -n MATCH big.txt' }))
+
+    const text = textOf(result.content)
+    expect(text).toBe(LONG_MATCH_BODY)
+    expect(text).not.toContain('…[省略 ')
+  })
+
   it('「按命令语义精简」关着：正文逐字交回，不写入口', async () => {
     const spill = new FakeSpill()
     const { fixture, path } = await mounted({ condenseByCommand: false }, undefined, spill)

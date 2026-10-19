@@ -388,11 +388,11 @@ async function process(
           maxLineChars: config.condenseMaxLineChars,
           entryReserveChars: ENTRY_RESERVE,
         }
-        // 票 26：通用链里的「命中长行裁剪」要看命令。上下文只在本次调用里拼，不落盘；「按命令语义精简」关着时
-        // 命令感知的那条通用规则也不跑——与命令族不接手是同一层产品语义。
+        // 票 26：通用链里的「命中长行裁剪」要看命令，且只作用于 bash 的 grep 输出（设计文档的边界）。上下文只在
+        // 本次调用里拼，不落盘；「按命令语义精简」关着时那条规则也不跑——与命令族不接手是同一层产品语义。
         const condenseContext: CondenseContext = {
-          command: commandOf(exec),
-          grepLongLine: config.condenseByCommand.get(),
+          command: exec.name === 'bash' ? commandOf(exec) : undefined,
+          condenseByCommand: config.condenseByCommand.get(),
         }
         // 票 16：先分派、再决定跑哪一套。事实按**下游正文**现算（计划 §4.2 末尾）；「不接族」的判据都在
         // `selectFamily` 里（平台面只认 bash；需要完整输入的族用 `facts` 自守），只放弃命令族那一步——
@@ -810,17 +810,6 @@ function familyEnabled(config: Required<Config>, family: CommandFamilyId): boole
  * @param truncated - 输入是否已被工具自身截断。
  * @returns 事实 map。
  */
-/**
- * 这次调用的 shell 命令全文；不是 shell 形状（没有 `command` 参数）时 `undefined`。
- * @param exec - 这次工具调用。
- */
-function commandOf(exec: ToolExecution): string | undefined {
-  const args = exec.arguments
-  if (typeof args !== 'object' || args === null) return undefined
-  const command = (args as { readonly command?: unknown }).command
-  return typeof command === 'string' ? command : undefined
-}
-
 function factsOf(
   exec: ToolExecution,
   result: Readonly<ToolExecutionResult>,
@@ -833,6 +822,17 @@ function factsOf(
     truncated,
     body,
   }, estimateUnits)
+}
+
+/**
+ * 这次调用的 shell 命令全文；不是 shell 形状（没有 `command` 参数）时 `undefined`。
+ * @param exec - 这次工具调用。
+ */
+function commandOf(exec: ToolExecution): string | undefined {
+  const args = exec.arguments
+  if (typeof args !== 'object' || args === null) return undefined
+  const command = (args as { readonly command?: unknown }).command
+  return typeof command === 'string' ? command : undefined
 }
 
 /**

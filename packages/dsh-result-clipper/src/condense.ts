@@ -35,7 +35,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { estimateContent } from '@deepseek-ai/dsh-token-meter/estimate'
 import type { CommandFamilyId } from './dispatch.ts'
 import { ENTRY_RESERVE } from './entry.ts'
-import { trimGrepLongLines } from './grepline.ts'
+import { LONG_LINE_MARK, trimGrepLongLines } from './grepline.ts'
 import {
   isUpstreamNoticeLine,
   SINGLE_LINE_TRUNCATION,
@@ -108,7 +108,7 @@ export interface CondenseContext {
    * 「按命令语义精简」开关的当前值。关着时命令感知的通用规则不跑，与命令族不接手同一条产品语义：
    * 那层会丢内容的收窄由同一个勾选控制。
    */
-  readonly grepLongLine?: boolean | undefined
+  readonly condenseByCommand?: boolean | undefined
 }
 
 /** 通用形状变换的一条规则：id 收窄到 {@link GeneralRuleId}，于是调用方不必为族 id 留分支。 */
@@ -366,6 +366,13 @@ function groupPaths(text: string, maxLines: number): string {
       continue
     }
     const path = head[1] as string
+    // 与 `grepline.ts` 的 `parseRow` 同一条排除：路径候选含空白或过长时不当路径行，原样保留。两边认法不
+    // 一致会出「第一遍没裁、分组后第二遍才裁」的幂等违反（票 26 复审）。
+    if (/\s/.test(path) || path.length > 300) {
+      out.push(lines[i] as string)
+      i++
+      continue
+    }
     const rows: Array<readonly [string, string, string]> = [[head[2] as string, head[3] as string, head[4] as string]]
     let j = i + 1
     while (j < lines.length) {
@@ -412,7 +419,8 @@ function groupPaths(text: string, maxLines: number): string {
  *
  * **上游位置说明**：它通常在正文末尾，`tailLines` 的尾部预算会把它留住；留住的那一条由 `condenseText` 识别为
  * 上游入口，调用方不再写本层入口（票 20）。这条规则因此不再因为说明的存在而放弃。**位置说明与截断说明所在的
- * 行不参与单行截断**：它们指向完整输出，截掉路径等于把入口弄坏（票 20 复审）。
+ * 行不参与单行截断**：它们指向完整输出，截掉路径等于把入口弄坏（票 20 复审）。**已带「命中长行裁剪」标记的
+ * 行同样不参与单行截断**（票 26 复审）：那一行已经按命中保留过，按行首再截会删掉后面的命中。
  * @param text - 下游正文。
  * @param params - 精简参数。
  * @returns 封顶后的正文；不触发封顶时原样交回。
@@ -425,7 +433,10 @@ function tailCap(text: string, params: CondenseParams): string {
   let truncated = 0
   if (overLongLine) {
     capped = capped.map((line) => {
-      if (line.length <= params.maxLineChars || isUpstreamNoticeLine(line)) return line
+      // 带「命中长行裁剪」标记的行不参与单行封顶：那行已经是围绕命中保留过的表示，按行首再截一次会把
+      // 后面的命中删掉（票 26 复审）。
+      if (line.length <= params.maxLineChars || isUpstreamNoticeLine(line)
+        || line.includes(LONG_LINE_MARK)) return line
       const mark = `${SINGLE_LINE_TRUNCATION}+${line.length - params.maxLineChars}]`
       truncated++
       return line.slice(0, params.maxLineChars - mark.length) + mark
@@ -462,7 +473,7 @@ export function generalRules(params: CondenseParams): readonly GeneralRule[] {
       id: 'grep-long-line',
       lossy: true,
       apply: (text: string, context?: CondenseContext) =>
-        context?.grepLongLine === true ? trimGrepLongLines(text, context.command) : text,
+        context?.condenseByCommand === true ? trimGrepLongLines(text, context.command) : text,
     },
     { id: 'tail-cap', lossy: true, apply: (text: string) => tailCap(text, params) },
     { id: 'group-paths', lossy: false, apply: (text: string) => groupPaths(text, params.maxLines) },

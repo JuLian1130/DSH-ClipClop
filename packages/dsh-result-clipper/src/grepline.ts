@@ -7,12 +7,13 @@
  * pattern 定位到命中；整条变换在 5.84M token 的样本上省 0.59M（10.2%），折算到全部 grep token 约 6.9%。
  * 定位不到的行**原样保留**（不省也不破坏）。
  *
- * 两条边界：
+ * 三条边界：
  *
  * 1. **只认 grep 自己的输出形状**：`path:行号:正文` 或 `行号:正文`（`-` 分隔的 `-A/-B` 上下文行同样处理）。
- *    命令里认不出 grep（`git log --grep`、`echo grep`、`grep -f 模式文件`）就不动。
- * 2. **幂等**：已经带省略标记、或已被 `tail-cap` 单行截断的行跳过——整链第二遍施加时这条规则不改变
- *    任何行。规则是**有损**的，靠调用方的回退入口兜底。
+ * 2. **只认命令位的 grep**：分段的第一个 token 才是命令（允许 `xargs` / `env` / `sudo` 之类前缀）；引号里的
+ *    `grep`、`printf` 的参数、`git log --grep` 都不算。
+ * 3. **幂等**：已经带省略标记、或已被 `tail-cap` 单行截断的行跳过——整链第二遍施加时这条规则不改变任何行。
+ *    规则是**有损**的，靠调用方的回退入口兜底。
  *
  * @module
  */
@@ -42,12 +43,12 @@ const BARE_ROW = /^(\s*)(\d+)([:-])(.*)$/
  *
  * 开头的空白要留住：`grep … | sed 's/^/  /'` 这类管道会给每行加前缀，`group-paths` 认这种行（它的路径
  * 正则把前缀算进路径）。两边认法不一致就会出「第一遍没裁、分组后第二遍才裁」的幂等违反（票 26 语料扫描
- * 抓到过一次）。
+ * 抓到过一次），所以两边的路径候选都同样拒绝含空白的。
  */
 const PATH_ROW = /^(\s*)(.+?):(\d+)([:-])(.*)$/
 
 /**
- * 把一行拆成 `{ path?, line, sep, content }`；不是 grep 输出形状时 `undefined`。
+ * 把一行拆成 `{ lead, path?, line, sep, content }`；不是 grep 输出形状时 `undefined`。
  * @param line - 结果里的一行。
  */
 function parseRow(line: string): { lead: string; path?: string; line: string; sep: string; content: string } | undefined {
@@ -72,16 +73,6 @@ function parseRow(line: string): { lead: string; path?: string; line: string; se
   }
   return undefined
 }
-
-/** 带一个取值的短选项（`-A 3` / `-m 5` / `-f 模式文件`）。 */
-const VALUE_FLAGS = new Set([
-  '-A', '-B', '-C', '-m', '-f',
-  '--include', '--exclude', '--exclude-dir', '--include-dir',
-  '--max-count', '--after-context', '--before-context', '--context',
-])
-
-/** 纯字母短选项簇（`-rnwiE`）；单独处理带 `e` / `f` 的簇，因为它们要把下一个 token 当取值。 */
-const SHORT_FLAGS = /^-[A-Za-z]+$/
 
 /**
  * 把命令串按顶层分隔符切开：`&&` / `||` / `;` / `|` / 换行。
@@ -167,12 +158,48 @@ function tokenize(segment: string): string[] {
   return tokens
 }
 
-/** 从一个段里收集 `grep` 的 pattern 与短选项。`-f`（模式来自文件）的调用不表态。 */
+/** 允许出现在 `grep` 前面的包装命令（`xargs grep …`、`env FOO=1 grep …`）。 */
+const WRAPPERS = new Set(['command', 'env', 'time', 'sudo', 'nice', 'nohup', 'xargs'])
+
+/** 段首的变量赋值（`FOO=1 grep …`）也算前缀，不改变「grep 是命令位」这一判断。 */
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
+
+/** 带一个取值的短选项（`-A 3` / `-m 5`；`-e` / `-f` 在 {@link patternsOf} 里单独处理）。 */
+const VALUE_FLAGS = new Set([
+  '-A', '-B', '-C', '-m',
+  '--include', '--exclude', '--exclude-dir',
+  '--max-count', '--after-context', '--before-context', '--context',
+])
+
+/** 纯字母短选项簇（`-rnwiE`）；带 `e` / `f` 的簇单独处理，因为它们可能把下一个 token 当取值。 */
+const SHORT_FLAGS = /^-[A-Za-z]+$/
+
+/**
+ * 拆一个短选项簇：`-e PAT`、`-nf PATTERNS`、`-nePAT` 都能认。
+ * @param token - 以 `-` 开头的 token。
+ * @returns 选项字母、`e`/`f` 的种类与可能附在簇尾的取值；不是这种形状时 `undefined`。
+ */
+function shortCluster(token: string): { flags: string; kind: 'e' | 'f'; attached: string } | undefined {
+  const match = /^-([A-Za-z]*?)([ef])(.*)$/.exec(token)
+  if (match === null) return undefined
+  return { flags: match[1] as string, kind: match[2] as 'e' | 'f', attached: match[3] as string }
+}
+
+/**
+ * 从一个段里收集 `grep` 的 pattern 与短选项。
+ *
+ * `grep` 必须处在命令位（段首，或 `xargs` / `env` 之类的包装之后、变量赋值之后）；段里其他位置出现的同名
+ * token（`echo grep …`、`printf '%s\n' grep …`）不算。`-f`（模式来自文件）的调用不表态。
+ * @param tokens - 一个段的 token。
+ * @returns 每个 `grep` 调用声明的 pattern 与选项。
+ */
 function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source: string; readonly flags: ReadonlySet<string> }> {
   const patterns: Array<{ readonly source: string; readonly flags: ReadonlySet<string> }> = []
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index] as string
     if (token !== 'grep' && !token.endsWith('/grep')) continue
+    const previous = index === 0 ? undefined : tokens[index - 1]
+    if (index > 0 && previous !== undefined && !WRAPPERS.has(previous) && !ASSIGNMENT.test(previous)) continue
     const flags = new Set<string>()
     const explicit: string[] = []
     let pattern: string | undefined
@@ -180,10 +207,16 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
     let cursor = index + 1
     while (cursor < tokens.length) {
       const next = tokens[cursor] as string
-      if (next === '-e' || next === '--regexp') {
-        const value = tokens[cursor + 1]
-        if (value !== undefined) explicit.push(value)
-        cursor += 2
+      const cluster = shortCluster(next)
+      if (cluster !== undefined) {
+        for (const flag of cluster.flags) flags.add(flag)
+        const value = cluster.attached !== '' ? cluster.attached : tokens[cursor + 1]
+        if (cluster.kind === 'e') {
+          if (value !== undefined) explicit.push(value)
+        } else {
+          fromFile = true
+        }
+        cursor += cluster.attached !== '' ? 1 : 2
         continue
       }
       if (next.startsWith('--regexp=')) {
@@ -191,18 +224,7 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
         cursor++
         continue
       }
-      if (next === '-f' || next === '--file') {
-        fromFile = true
-        cursor += 2
-        continue
-      }
-      if (/^-[A-Za-z]*e$/.test(next)) {
-        const value = tokens[cursor + 1]
-        if (value !== undefined) explicit.push(value)
-        cursor += 2
-        continue
-      }
-      if (/^-[A-Za-z]*f$/.test(next)) {
+      if (next === '--file') {
         fromFile = true
         cursor += 2
         continue
@@ -231,23 +253,54 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
   return patterns
 }
 
-/** 把 BRE 的转义写法翻成 JS 正则认识的写法（只翻「或 / 分组 / 量词」，其余交给 `new RegExp` 报错）。 */
+/**
+ * 把 BRE（`grep` 默认的正则方言）翻成 JS 正则。
+ *
+ * BRE 里 `+ ? ( ) { } |` 是**字面量**，要写成 `\+ \? \( \) \{ \} \|` 才是操作符；JS 正好的反过来。只做这个
+ * 方向的对换，其余字符原样保留（`* . [ ] ^ $` 两边同义）——不做对换的话 `grep 'a+b'` 会被当成量词、把真实
+ * 命中 `a+b` 丢掉（票 26 复审抓到）。
+ * @param source - BRE 模式。
+ * @returns JS 正则源码。
+ */
 function translateBre(source: string): string {
-  return source
-    .replace(/\\\|/g, '|')
-    .replace(/\\\(/g, '(')
-    .replace(/\\\)/g, ')')
-    .replace(/\\\+/g, '+')
-    .replace(/\\\?/g, '?')
+  let out = ''
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (char !== '\\') {
+      out += '+?(){}|'.includes(char) ? `\\${char}` : char
+      continue
+    }
+    const next = source[index + 1]
+    if (next === undefined) {
+      out += '\\\\'
+      break
+    }
+    if ('|()+?{}'.includes(next)) {
+      out += next
+    } else if (next === '<' || next === '>') {
+      out += '\\b'
+    } else {
+      out += `\\${next}`
+    }
+    index++
+  }
+  return out
 }
 
 function escapeRegExp(source: string): string {
   return source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/**
+ * 编译一个 pattern。
+ * @param source - pattern 原文。
+ * @param flags - 选项字母。
+ * @returns 正则；`-P`（PCRE）与编译失败一律 `undefined`——宁可不动，也不按别的方言猜着裁。
+ */
 function compilePattern(source: string, flags: ReadonlySet<string>): RegExp | undefined {
+  if (flags.has('P')) return undefined
   const fixed = flags.has('F')
-  let body = fixed ? escapeRegExp(source) : flags.has('E') || flags.has('P') ? source : translateBre(source)
+  let body = fixed ? escapeRegExp(source) : flags.has('E') ? source : translateBre(source)
   if (flags.has('w')) body = `\\b(?:${body})\\b`
   try {
     return new RegExp(body, flags.has('i') ? 'gi' : 'g')
@@ -289,6 +342,9 @@ function matchSpans(content: string, patterns: readonly RegExp[]): Array<{ start
 
 /**
  * 把一条超长正文裁到命中 ± 窗口，返回裁剪后的正文；命中覆盖整段时原样返回（没有可省的字符）。
+ *
+ * 中间的空档也要标出来：首尾各命中一处、中间隔一大段时，不能因为两端被窗口覆盖就整行返回——那样后面的
+ * `tail-cap` 会按行首截断，把末尾的命中丢掉（票 26 复审抓到）。
  * @param content - 命中行的正文（不含 `path:行号:` 前缀）。
  * @param patterns - {@link grepPatterns} 的结果。
  * @param window - 命中两侧各留多少字符。
@@ -304,9 +360,6 @@ export function trimAroundMatches(content: string, patterns: readonly RegExp[], 
     if (last !== undefined && start <= last[1]) last[1] = Math.max(last[1], end)
     else windows.push([start, end])
   }
-  const first = windows[0] as [number, number]
-  const lastWindow = windows[windows.length - 1] as [number, number]
-  if (first[0] === 0 && lastWindow[1] === content.length) return content
   let trimmed = ''
   let position = 0
   for (const [start, end] of windows) {
@@ -315,7 +368,7 @@ export function trimAroundMatches(content: string, patterns: readonly RegExp[], 
     position = end
   }
   if (position < content.length) trimmed += `${LONG_LINE_MARK}${content.length - position} 字符]…`
-  return trimmed
+  return trimmed === content ? content : trimmed
 }
 
 /**

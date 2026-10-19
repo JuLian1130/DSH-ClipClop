@@ -155,7 +155,7 @@ describe.skipIf(!corpusRoot)('票 15 判据 6：真实语料上的幂等与判�
           tally.targetWithText++
           const callId = typeof row.callId === 'string' ? row.callId : '(无 callId)'
           const command = typeof row.command === 'string' ? row.command : undefined
-          const context = grepLongLine ? { command, grepLongLine: true } : undefined
+          const context = grepLongLine ? { command, condenseByCommand: true } : undefined
 
           // 判据 6：单条规则 f(f(x)) == f(x)。守卫放弃（undefined）不算违反，单独计数。
           for (const rule of rules) {
