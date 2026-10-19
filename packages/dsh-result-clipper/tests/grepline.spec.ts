@@ -28,13 +28,12 @@ const longContent = (mark: string, pad = 1000): string => `${'x'.repeat(pad)}${m
 const ctx = (command: string): CondenseContext => ({ command, condenseByCommand: true })
 
 describe('票 26 · grep 长行裁剪', () => {
-  it('command 里的 pattern 能解析出正则（含 -e / -F / -E / -i / BRE 或）', () => {
+  it('command 里的 pattern 能解析出正则（含 -e / -F / -E / -i）', () => {
     expect(grepPatterns('grep -n "alpha" f.ts')).toHaveLength(1)
-    expect(grepPatterns('cd x && grep -rnwiE "alpha|beta" src | head')).toHaveLength(1)
+    expect(grepPatterns('cd x && grep -rnwiE "alpha" src | head')).toHaveLength(1)
     expect(grepPatterns('grep -e alpha -e beta f.ts')).toHaveLength(2)
     expect(grepPatterns('grep -F "a.b" f.ts')[0]?.test('a.b')).toBe(true)
     expect(grepPatterns('grep -i "alpha" f.ts')[0]?.test('ALPHA')).toBe(true)
-    expect(grepPatterns('grep -n "alpha\\|beta" f.ts')[0]?.test('beta')).toBe(true)
     expect(grepPatterns('grep -n "alpha" f.ts && echo "grep -n beta"')[0]?.test('beta')).toBe(false)
   })
 
@@ -124,7 +123,7 @@ describe('票 26 · grep 长行裁剪', () => {
   it('窗口两侧都留：多处命中时窗口可合并', () => {
     const content = `${'a'.repeat(500)}ONE${'b'.repeat(300)}TWO${'c'.repeat(500)}`
     const verdict = condenseText('bash', `f.ts:1:${content}`, at({ minUnits: 0 }),
-      undefined, ctx('grep -E "ONE|TWO" f.ts'))
+      undefined, ctx('grep -e ONE -e TWO f.ts'))
     expect(verdict.kind).toBe('condensed')
     if (verdict.kind !== 'condensed') return
     expect(verdict.text).toContain('ONE')
@@ -291,5 +290,58 @@ describe('票 26 · 第三轮复审落修', () => {
     expect(grepPatterns(command)).toEqual([])
     const text = `1:${'x'.repeat(300)}MATCH${'y'.repeat(600)}7${'z'.repeat(300)}`
     expect(trimGrepLongLines(text, command)).toBe(text)
+  })
+})
+
+describe('票 26 · 第五轮复审落修', () => {
+  it('双引号里的 \\ 按 shell 解成单反斜杠：-F 搜的是字面量 a\\b', () => {
+    const rx = grepPatterns('grep -nF "a\\\\b" f')[0]
+    expect(rx?.test('a\\b')).toBe(true)
+    expect(rx?.test('a\\\\b')).toBe(false)
+  })
+
+  it('双引号里的转义引号不提前结束字符串：引号里的 grep 不当命令位', () => {
+    const command = String.raw`printf '%s\n' "fake\"; grep -n MATCH f; tail" 'f.ts:1:x'`
+    expect(grepPatterns(command)).toEqual([])
+    const text = `f.ts:1:${'x'.repeat(400)}MATCH${'y'.repeat(400)}`
+    expect(trimGrepLongLines(text, command)).toBe(text)
+  })
+
+  it('空 pattern（-e \'\' / \'\'）整次调用不表态，不把文件名当 pattern', () => {
+    expect(grepPatterns("grep -n -e '' f")).toEqual([])
+    expect(grepPatterns("grep -n '' f")).toEqual([])
+    expect(grepPatterns("grep -n -e '' -e MATCH f")).toEqual([])
+    const text = `f.ts:1:${'x'.repeat(400)}f${'y'.repeat(400)}`
+    expect(trimGrepLongLines(text, "grep -n -e '' f")).toBe(text)
+  })
+
+  it('交替分支（-E 的 | / BRE 的 \\|）整次调用不表态；方括号里的 | 与 -F 字面量照常', () => {
+    expect(grepPatterns("grep -nE 'BEGIN|BEGIN.*END' f")).toEqual([])
+    expect(grepPatterns(String.raw`grep -n 'BEGIN\|BEGIN.*END' f`)).toEqual([])
+    expect(grepPatterns('grep -nF "a|b" f')[0]?.test('a|b')).toBe(true)
+    expect(grepPatterns('grep -nE "[a|b]" f')[0]?.test('|')).toBe(true)
+    const text = `f.ts:1:${'x'.repeat(900)}BEGIN${'y'.repeat(900)}END${'z'.repeat(900)}`
+    expect(trimGrepLongLines(text, "grep -nE 'BEGIN|BEGIN.*END' f")).toBe(text)
+  })
+
+  it('已分组的多文件上下文行第二遍不再裁（整链幂等）', () => {
+    const file = 'very-long-directory-name/'.repeat(5) + 'f.ts'
+    const content = `foo${'a'.repeat(700)}${'x'.repeat(700)}`
+    const raw = [`${file}:1:bar`, `${file}-2-${content}`, `${file}:3:baz`].join('\n')
+    const context = ctx(`grep -vnH --label=${file} -A1 foo`)
+    const first = condenseText('bash', raw, at(), undefined, context)
+    expect(first.kind).toBe('condensed')
+    if (first.kind !== 'condensed') return
+    expect(first.lossy).toBe(false)
+    expect(first.rules).toContain('group-paths')
+    expect(first.text.startsWith(`${file}\n`)).toBe(true)
+    expect(condenseText('bash', first.text, at(), undefined, context)).toEqual({ kind: 'unchanged' })
+  })
+
+  it('没有组头的单文件上下文行照常裁', () => {
+    const text = `1:bar\n2-${'x'.repeat(400)}MATCH${'y'.repeat(400)}`
+    const trimmed = trimGrepLongLines(text, 'grep -n -A1 MATCH f.ts')
+    expect(trimmed).not.toBe(text)
+    expect(trimmed).toContain('MATCH')
   })
 })

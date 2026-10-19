@@ -10,7 +10,8 @@
  * 三条边界：
  *
  * 1. **只认 grep 自己的输出形状**：`path:行号:正文` 或 `行号:正文`（分隔符是 `-` 的单文件上下文行也认；
- *    多文件 `-A/-B` 的 `path-行号-正文` 是上下文行、不是命中行，不裁）。
+ *    多文件 `-A/-B` 的 `path-行号-正文` 是上下文行、不是命中行，不裁；已分组输出里的组员 `行号-正文` 同样
+ *    不裁——分组把前者改写成这个形状，第二遍再裁会与第一遍不同）。
  * 2. **只认命令位的 grep**：分段的首个命令才是命令位；`xargs` / `env` / `sudo` / `time` / `nice` / `nohup` /
  *    `command` 这些包装连同它们自己的选项与取值可以出现在前面（`xargs -0 grep`、`sudo -u root grep`）。引号
  *    里的 `grep`、`printf` 的参数、`git log --grep` 都不算。
@@ -88,6 +89,13 @@ function splitSegments(command: string): string[] {
     const char = command[index] as string
     if (quote !== undefined) {
       current += char
+      // 双引号里的反斜杠能转义引号（`\"`），下一个字符不能当引号结束；单引号里反斜杠没有这个作用。
+      // 切分只需要判断引号何时结束，真正把转义解成字符在 `tokenize` 里（票 26 第五轮复审）。
+      if (quote === '"' && char === '\\' && index + 1 < command.length) {
+        current += command[index + 1] as string
+        index++
+        continue
+      }
       if (char === quote) quote = undefined
       continue
     }
@@ -128,6 +136,9 @@ function tokenize(segment: string): string[] {
   const tokens: string[] = []
   let current = ''
   let quote: string | undefined
+  // 当前位置是否已经在 token 里。引号开合本身也算：`-e ''` 的空参数是 shell 的一个真实取值，不能丢
+  // （丢了以后 `-e` 会拿下一个参数当 pattern，通常是文件名——票 26 第五轮复审）。
+  let started = false
   for (let index = 0; index < segment.length; index++) {
     const char = segment[index] as string
     if (quote !== undefined) {
@@ -135,35 +146,48 @@ function tokenize(segment: string): string[] {
         quote = undefined
         continue
       }
-      if (char === '\\' && index + 1 < segment.length) {
-        current += char + (segment[index + 1] as string)
-        index++
-        continue
+      // 双引号里的反斜杠只对 `$` `` ` `` `"` `\` 与换行有转义作用（shell 规则），其余原样保留；单引号里
+      // 反斜杠没有转义作用，连引号结束都只认 `'`（票 26 第五轮复审，双引号内 `\\` 曾被原样保留）。
+      if (quote === '"' && char === '\\' && index + 1 < segment.length) {
+        const next = segment[index + 1] as string
+        if (next === '\n') {
+          index++
+          continue
+        }
+        if (next === '"' || next === '\\' || next === '$' || next === '`') {
+          current += next
+          index++
+          continue
+        }
       }
       current += char
       continue
     }
     if (char === '"' || char === "'") {
       quote = char
+      started = true
       continue
     }
     // 引号外的反斜杠是 shell 自己的转义：`grep -n a\+b` 里的 `\+` 到 grep 手里已经是 `+`。不剥掉的话
     // BRE 会把它当「一个或多个」编译，真实命中 `a+b` 反而丢掉、假命中 `aaab` 被留下（第二轮复审抓到）。
     if (char === '\\' && index + 1 < segment.length) {
       current += segment[index + 1] as string
+      started = true
       index++
       continue
     }
     if (/\s/.test(char)) {
-      if (current !== '') {
+      if (started) {
         tokens.push(current)
         current = ''
+        started = false
       }
       continue
     }
     current += char
+    started = true
   }
-  if (current !== '') tokens.push(current)
+  if (started) tokens.push(current)
   return tokens
 }
 
@@ -319,10 +343,17 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
   }
   if (fromFile) return patterns
   if (pattern !== undefined) explicit.push(pattern)
+  // 空 pattern（`-e ''` / `''`）匹配所有行、没有可定位的命中位置；按整次调用不表态。不这样判的话，一旦
+  // 分词把空参数丢掉，`-e` 的取值会左移成文件名、按文件名裁行（票 26 第五轮复审）。
+  if (explicit.some(source => source === '')) return patterns
   // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
   // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
   // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
   if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return patterns
+  // POSIX 是 leftmost-longest、JS 是 leftmost-first：`grep -E 'BEGIN|BEGIN.*END'` 的真实命中以 END 结尾，
+  // JS 只认第一个能成立的短分支 BEGIN，按它的窗口裁会把命中后半截删掉。方言不猜，含交替分支的整次调用
+  // 不表态（与 `-P`、POSIX 字符类同层；票 26 第五轮复审）。
+  if (!flags.has('F') && explicit.some(source => hasAlternation(source, flags.has('E')))) return patterns
   for (const source of explicit) patterns.push({ source, flags })
   return patterns
 }
@@ -359,6 +390,38 @@ function translateBre(source: string): string {
     index++
   }
   return out
+}
+
+/**
+ * 模式里有没有**交替分支**（POSIX 的 leftmost-longest 与 JS 的 leftmost-first 不等价）：方括号表达式里的
+ * `|` 是普通字符，`-F` 下整串都是字面量，都不算；转义规则按方言——ERE 是裸 `|`，BRE 是 `\|`。
+ * @param source - pattern 原文。
+ * @param extended - 是不是 `-E`（ERE）。
+ * @returns 有交替分支时为 `true`。
+ */
+function hasAlternation(source: string, extended: boolean): boolean {
+  let bracketStart = -1
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (bracketStart >= 0) {
+      // `]` 紧跟 `[` / `[^` 时是字面量，其余 `]` 收尾方括号表达式。
+      const literalClose = index === bracketStart + 1
+        || (index === bracketStart + 2 && source[bracketStart + 1] === '^')
+      if (char === ']' && !literalClose) bracketStart = -1
+      continue
+    }
+    if (char === '[') {
+      bracketStart = index
+      continue
+    }
+    if (char === '\\' && index + 1 < source.length) {
+      if (!extended && source[index + 1] === '|') return true
+      index++
+      continue
+    }
+    if (extended && char === '|') return true
+  }
+  return false
 }
 
 function escapeRegExp(source: string): string {
@@ -448,6 +511,24 @@ export function trimAroundMatches(content: string, patterns: readonly RegExp[], 
   return trimmed === content ? content : trimmed
 }
 
+/** 已分组输出的组员行前缀（与 `condense.ts` 的 `GROUPED_ROW` 同形：`行号:` / `行号-`）。 */
+const GROUPED_MEMBER_ROW = /^\d+[:-]/
+
+/**
+ * 这一行像不像 `group-paths` 写出的组头（路径行）：不含空白、长度有限、不是空行或 `--`。
+ *
+ * 组头只用来判断 `行号-正文` 是不是「已分组多文件输出」的上下文组员：分组把 `path-行号-正文` 改写成
+ * 这个形状，第二遍再按单文件上下文行裁就会与第一遍不同（整链幂等，票 26 第五轮复审）。单文件输出没有
+ * 组头，连续组员行一直走到正文开头，`undefined` 即不算。
+ * @param header - 连续组员行之前的那一行；没有时为 `undefined`。
+ * @returns 像组头时为 `true`。
+ */
+function isGroupedHeader(header: string | undefined): boolean {
+  if (header === undefined) return false
+  const candidate = header.replace(/^\s+/, '')
+  return candidate !== '' && candidate !== '--' && candidate.length <= 300 && !/\s/.test(candidate)
+}
+
 /**
  * 按命令里的 grep pattern 裁剪超长命中行；没有裁剪时返回原文（调用方据此不算「施加过」）。
  * @param text - 下游正文。
@@ -459,11 +540,17 @@ export function trimGrepLongLines(text: string, command: string | undefined): st
   if (patterns.length === 0) return text
   let changed = false
   const lines = text.split('\n')
+  // 连续组员行的起点：已分组输出里组头紧挨在连续组员之前；单文件输出没有组头，下标停在正文开头。
+  let runStart = 0
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] as string
+    if (!GROUPED_MEMBER_ROW.test(line)) runStart = index + 1
     if (line.includes(LONG_LINE_MARK) || line.includes(SINGLE_LINE_TRUNCATION)) continue
     const row = parseRow(line)
     if (row === undefined) continue
+    // 已分组多文件输出的上下文组员（`行号-正文`）不裁：分组把 `path-行号-正文` 改写成这个形状，第二遍再按
+    // 单文件上下文行裁就会与第一遍不同（整链幂等，票 26 第五轮复审）。
+    if (row.path === undefined && row.sep === '-' && isGroupedHeader(runStart > 0 ? lines[runStart - 1] : undefined)) continue
     if (row.content.length <= GREP_LONG_LINE_MIN_CHARS) continue
     const trimmed = trimAroundMatches(row.content, patterns, GREP_LONG_LINE_WINDOW)
     if (trimmed === row.content) continue
