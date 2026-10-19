@@ -257,58 +257,66 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
   let pattern: string | undefined
   let fromFile = false
   let cursor = commandIndex + 1
-    while (cursor < tokens.length) {
-      const next = tokens[cursor] as string
-      const cluster = shortCluster(next)
-      if (cluster !== undefined) {
-        for (const flag of cluster.flags) flags.add(flag)
-        const value = cluster.attached !== '' ? cluster.attached : tokens[cursor + 1]
-        if (cluster.kind === 'e') {
-          if (value !== undefined) explicit.push(value)
-        } else {
-          fromFile = true
-        }
-        cursor += cluster.attached !== '' ? 1 : 2
-        continue
-      }
-      if (next.startsWith('--regexp=')) {
-        explicit.push(next.slice('--regexp='.length))
-        cursor++
-        continue
-      }
-      if (next.startsWith('--file=')) {
+  while (cursor < tokens.length) {
+    const next = tokens[cursor] as string
+    const cluster = shortCluster(next)
+    if (cluster !== undefined) {
+      for (const flag of cluster.flags) flags.add(flag)
+      const value = cluster.attached !== '' ? cluster.attached : tokens[cursor + 1]
+      if (cluster.kind === 'e') {
+        if (value !== undefined) explicit.push(value)
+      } else {
         fromFile = true
-        cursor++
-        continue
       }
-      if (next === '--file') {
-        fromFile = true
-        cursor += 2
-        continue
-      }
-      const long = LONG_FLAGS.get(next)
-      if (long !== undefined) {
-        flags.add(long)
-        cursor++
-        continue
-      }
-      if (VALUE_FLAGS.has(next)) {
-        cursor += 2
-        continue
-      }
-      if (SHORT_FLAGS.test(next)) {
-        for (const flag of next.slice(1)) flags.add(flag)
-        cursor++
-        continue
-      }
-      if (next.startsWith('-')) {
-        cursor++
-        continue
-      }
-      // 显式 `-e` 给过 pattern 时，第一个非选项 token 是文件/目录，不是 pattern。
-      if (pattern === undefined && explicit.length === 0) pattern = next
-      break
+      cursor += cluster.attached !== '' ? 1 : 2
+      continue
     }
+    if (next.startsWith('--regexp=')) {
+      explicit.push(next.slice('--regexp='.length))
+      cursor++
+      continue
+    }
+    if (next === '--regexp') {
+      const value = tokens[cursor + 1]
+      if (value !== undefined) explicit.push(value)
+      cursor += 2
+      continue
+    }
+    if (next.startsWith('--file=')) {
+      fromFile = true
+      cursor++
+      continue
+    }
+    if (next === '--file') {
+      fromFile = true
+      cursor += 2
+      continue
+    }
+    const long = LONG_FLAGS.get(next)
+    if (long !== undefined) {
+      flags.add(long)
+      cursor++
+      continue
+    }
+    if (VALUE_FLAGS.has(next)) {
+      cursor += 2
+      continue
+    }
+    if (SHORT_FLAGS.test(next)) {
+      for (const flag of next.slice(1)) flags.add(flag)
+      cursor++
+      continue
+    }
+    if (next.startsWith('-')) {
+      cursor++
+      continue
+    }
+    // 非选项：还没拿到 pattern 时它就是 pattern，否则是文件/目录。GNU grep 的 getopt 会置换参数，选项写在
+    // pattern 之后照样生效（`grep -n MATCH -i f`），所以这里不退出，继续把后面的选项收进来——不然
+    // `-i` / `-F` / `-E` 这类会改变匹配的选项被漏掉，真实命中就被裁掉了（第三轮复审抓到）。
+    if (pattern === undefined && explicit.length === 0) pattern = next
+    cursor++
+  }
   if (fromFile) return patterns
   if (pattern !== undefined) explicit.push(pattern)
   for (const source of explicit) patterns.push({ source, flags })
@@ -357,11 +365,15 @@ function escapeRegExp(source: string): string {
  * 编译一个 pattern。
  * @param source - pattern 原文。
  * @param flags - 选项字母。
- * @returns 正则；`-P`（PCRE）与编译失败一律 `undefined`——宁可不动，也不按别的方言猜着裁。
+ * @returns 正则；`-P`（PCRE）、POSIX 字符类与编译失败一律 `undefined`——宁可不动，也不按别的方言猜着裁。
  */
 function compilePattern(source: string, flags: ReadonlySet<string>): RegExp | undefined {
   if (flags.has('P')) return undefined
   const fixed = flags.has('F')
+  // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
+  // 方言不猜：整条调用不表态（语料 48,948 条含 grep 的命令里只有 3 条用到，不值得为它建映射表）。
+  // `-F` 下它就是字面量，照常编译。
+  if (!fixed && /\[:[a-z]+:\]/.test(source)) return undefined
   let body = fixed ? escapeRegExp(source) : flags.has('E') ? source : translateBre(source)
   // `-w` 的语义是「命中片段的左右邻接字符都不是词字符」，不是 `\b`：`\b` 要求边界一侧是词字符，
   // 对 `@`、`TODO:` 这种以非词字符收尾的 pattern 恰好反过来——`\b(?:@)\b` 会命中 `a@b` 而漏掉 ` @ `

@@ -258,3 +258,31 @@ describe('票 26 · 第二轮复审落修', () => {
     expect(trimmed).not.toContain('a@b')
   })
 })
+
+describe('票 26 · 第三轮复审落修', () => {
+  it('空格形 --regexp 与 -e 同义，多个 pattern 全部收集', () => {
+    expect(grepPatterns('grep -n --regexp ALPHA --regexp OMEGA')).toHaveLength(2)
+    expect(grepPatterns('grep -e ALPHA --regexp OMEGA')).toHaveLength(2)
+  })
+
+  it('两个 --regexp 命中在同一长行时都活下来', () => {
+    const text = `1:${'x'.repeat(900)}ALPHA${'y'.repeat(900)}OMEGA${'z'.repeat(900)}`
+    const trimmed = trimGrepLongLines(text, 'grep -n --regexp ALPHA --regexp OMEGA')
+    expect(trimmed).toContain('ALPHA')
+    expect(trimmed).toContain('OMEGA')
+  })
+
+  it('pattern 之后的选项照样生效（grep -n MATCH -i）', () => {
+    expect(grepPatterns('grep -n MATCH -i')[0]?.test('match')).toBe(true)
+    const text = `1:${'x'.repeat(900)}MATCH${'y'.repeat(900)}match${'z'.repeat(900)}`
+    const trimmed = trimGrepLongLines(text, 'grep -n MATCH -i')
+    expect(trimmed).toContain('MATCH')
+    expect(trimmed).toContain('match')
+  })
+
+  it('POSIX 字符类不猜方言：默认与 -E 都不表态，-F 按字面量照常', () => {
+    expect(grepPatterns("grep -n '[[:digit:]]' f")).toEqual([])
+    expect(grepPatterns("grep -nE '[[:alpha:]]+' f")).toEqual([])
+    expect(grepPatterns("grep -nF '[[:digit:]]' f")[0]?.test('[[:digit:]]')).toBe(true)
+  })
+})
