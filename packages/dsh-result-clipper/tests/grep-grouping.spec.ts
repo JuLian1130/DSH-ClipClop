@@ -145,6 +145,23 @@ describe('票 25 · 路径前缀分组', () => {
     expect(condenseText('bash', verdict.text, at())).toEqual({ kind: 'unchanged' })
   })
 
+  it('数字后缀的兄弟文件（`path-2:行号:正文`）不会被吞成组员', () => {
+    // 上下文行只认 `-` 分隔：`A-2` 是另一个文件，它的第 7 行不能变成 `A` 的第 2 行（否则还原时 `-2:` 变 `:2:`）。
+    const sibling = `${A}-2`
+    const text = [
+      ...Array.from({ length: 20 }, (_, i) => `${A}:${i + 1}:${CONTENT}`),
+      `${sibling}:7:sibling content`,
+    ].join('\n')
+    const verdict = condenseText('bash', text, at())
+    expect(verdict.kind).toBe('condensed')
+    if (verdict.kind !== 'condensed') return
+    const lines = verdict.text.split('\n')
+    expect(lines.slice(0, 21)).toEqual([A, ...Array.from({ length: 20 }, (_, i) => `${i + 1}:${CONTENT}`)])
+    expect(lines.at(-1)).toBe(`${sibling}:7:sibling content`)
+    expect(lines).not.toContain(`2:7:sibling content`)
+    expect(condenseText('bash', verdict.text, at())).toEqual({ kind: 'unchanged' })
+  })
+
   it('正文里孤立的「数字:」行不会让整条规则放弃', () => {
     const text = [
       ...Array.from({ length: 20 }, (_, i) => `${A}:${i + 1}:${CONTENT}`),

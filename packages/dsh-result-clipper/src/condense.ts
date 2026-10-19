@@ -297,8 +297,12 @@ function dedupAdjacent(text: string): string {
 /** 一行 grep 命中：`path:行号:正文`（多文件）。 */
 const GREP_ROW = /^(.*?):(\d+)([:-])(.*)$/
 
-/** `-A/-B` 的上下文行：整行是 `path-行号-正文`，去掉 `${path}-` 前缀后按这个形状解析。 */
-const CONTEXT_ROW = /^(\d+)([:-])(.*)$/
+/**
+ * `-A/-B` 的上下文行：整行是 `path-行号-正文`，去掉 `${path}-` 前缀后按这个形状解析。第二处分隔符只认 `-`
+ * ——真实 grep 的上下文行从不在这里写冒号，认了冒号就会把「文件名是 `path-数字` 的兄弟文件」的命中行（
+ * `path-2:7:正文`）吞成当前文件的第 2 行，文件归属与行号都改不回来。
+ */
+const CONTEXT_ROW = /^(\d+)-(.*)$/
 
 /** 已经分组过的组员：以 `行号:` 或 `行号-` 开头（组头不会是这种形状）。 */
 const GROUPED_ROW = /^\d+[:-]/
@@ -342,12 +346,12 @@ function groupPaths(text: string, maxLines: number): string {
     while (j < lines.length) {
       const line = lines[j] as string
       // 上下文行先于命中行解析：上下文正文自带 `:数字:` 时（时间戳），先跑 `GREP_ROW` 会把 `path-21-started at 12`
-      // 当成路径、以「换了文件」为由断组，整段 -A 输出就一个组也合不成。代价是极少数「文件名以 `${path}-` 开头」
-      // 的命中行（`a.ts` 与 `a.ts-2-b.ts` 相邻）被读成上下文行——两种解释在字节上无法区分，取上下文优先；这条
-      // 同样无损（按组头还原得到同一串字节），只是分组边界不同。
+      // 当成路径、以「换了文件」为由断组，整段 -A 输出就一个组也合不成。`CONTEXT_ROW` 只认 `-` 分离，所以
+      // 「文件名以 `path-` 开头」的命中行里只有 `path-2-b.ts:5:正文` 这种会被读成上下文行——两种解释在字节上
+      // 无法区分，取上下文优先；它仍无损（按组头还原得到同一串字节），只是分组边界不同。
       const ctx = line.startsWith(`${path}-`) ? CONTEXT_ROW.exec(line.slice(path.length + 1)) : null
       if (ctx !== null) {
-        rows.push([ctx[1] as string, ctx[2] as string, ctx[3] as string])
+        rows.push([ctx[1] as string, '-', ctx[2] as string])
         j++
         continue
       }
