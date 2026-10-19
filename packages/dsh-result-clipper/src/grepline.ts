@@ -7,7 +7,7 @@
  * pattern 定位到命中；整条变换在 5.84M token 的样本上省 0.59M（10.2%），折算到全部 grep token 约 6.9%。
  * 定位不到的行**原样保留**（不省也不破坏）。
  *
- * 三条边界：
+ * 四条边界：
  *
  * 1. **只认 grep 自己的输出形状**：`path:行号:正文` 或 `行号:正文`（分隔符是 `-` 的单文件上下文行也认；
  *    多文件 `-A/-B` 的 `path-行号-正文` 是上下文行、不是命中行，不裁；已分组输出里的组员 `行号-正文` 同样
@@ -17,6 +17,8 @@
  *    里的 `grep`、`printf` 的参数、`git log --grep` 都不算。
  * 3. **幂等**：已经带省略标记、或已被 `tail-cap` 单行截断的行跳过——整链第二遍施加时这条规则不改变任何行。
  *    规则是**有损**的，靠调用方的回退入口兜底。
+ * 4. **终点不可信时只裁前段**：pattern 含嵌套交替、或有两个及以上重复算子时，JS 的首个匹配终点可能短于
+ *    POSIX 的最长匹配；这类调用只裁最早命中起点以前，命中及其后整段保留（票 27）。
  *
  * @module
  */
@@ -170,8 +172,15 @@ function tokenize(segment: string): string[] {
     }
     // 引号外的反斜杠是 shell 自己的转义：`grep -n a\+b` 里的 `\+` 到 grep 手里已经是 `+`。不剥掉的话
     // BRE 会把它当「一个或多个」编译，真实命中 `a+b` 反而丢掉、假命中 `aaab` 被留下（第二轮复审抓到）。
+    // 反斜杠 + 换行是续行：shell 把这两个字符一起删掉、后面的字符接在当前 token 上（`-e MA\<换行>TCH`
+    // 的 pattern 是 `MATCH`）。把它当内容会让 pattern 带一个换行、真实命中定位不到（联合复审抓到）。
     if (char === '\\' && index + 1 < segment.length) {
-      current += segment[index + 1] as string
+      const next = segment[index + 1] as string
+      if (next === '\n') {
+        index++
+        continue
+      }
+      current += next
       started = true
       index++
       continue
@@ -265,7 +274,10 @@ function shortCluster(token: string): { flags: string; kind: 'e' | 'f'; attached
 /** 一次 `grep` 调用编译用的 pattern，与「真实命中终点不可知」的窗口标记。 */
 interface ParsedPatterns {
   readonly list: ReadonlyArray<{ readonly source: string; readonly flags: ReadonlySet<string> }>
-  /** 含嵌套交替、分支拆不干净：窗口只能用保守形态（只裁最早命中起点以前，见 {@link trimAroundMatches}）。 */
+  /**
+   * 匹配终点不可信：含嵌套交替、或某个 pattern 有两个及以上重复算子（JS 的匹配终点可能短于 POSIX
+   * 最长匹配）。窗口只能用保守形态（只裁最早命中起点以前，见 {@link trimAroundMatches}）。
+   */
   readonly openEnded: boolean
 }
 
@@ -352,6 +364,10 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
   // `-P`（PCRE）的语义与 JS 不等价，整次调用不表态（与票 26 的边界一致）。
   if (flags.has('P')) return { list: [], openEnded: false }
   if (pattern !== undefined) explicit.push(pattern)
+  // 真正的换行在 POSIX grep 里是 pattern 列表分隔（`grep -e $'A\nB'` 是两个 pattern），不是正则的一部分；
+  // 把它整串交给 JS 会变成一个含换行的正则、两个真实命中都定位不到（联合复审实测）。方言不猜：整次调用
+  // 不表态。引号外的 `\` + 换行已在分词时按 shell 续行删掉，不会走到这里。
+  if (explicit.some(source => source.includes('\n'))) return { list: [], openEnded: false }
   // 空 pattern（`-e ''` / `''`）匹配所有行、没有可定位的命中位置；按整次调用不表态。不这样判的话，一旦
   // 分词把空参数丢掉，`-e` 的取值会左移成文件名、按文件名裁行（票 26 第五轮复审）。
   if (explicit.some(source => source === '')) return { list: [], openEnded: false }
@@ -367,8 +383,8 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
     return { list: [], openEnded: false }
   }
   // POSIX 是 leftmost-longest、JS 是 leftmost-first：`grep -E 'BEGIN|BEGIN.*END'` 的真实命中以 END 结尾，
-  // JS 只认第一个能成立的短分支 BEGIN。顶层交替拆成独立分支后，各分支命中的并集覆盖真实命中（最长匹配一定
-  // 落在某个分支上），两侧都能照常裁（票 27）。
+  // JS 只认第一个能成立的短分支 BEGIN。顶层交替拆成独立分支后，各分支命中的并集覆盖真实命中的**起点**（最长
+  // 匹配一定落在某个分支上），两侧都能照常裁（票 27）。终点是否可信另见 loop 之后的重复算子判定。
   let openEnded = false
   for (const source of explicit) {
     if (flags.has('F') || !hasAlternation(source, extended)) {
@@ -387,6 +403,10 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
     }
     for (const branch of branches) patterns.push({ source: branch, flags })
   }
+  // 两个及以上重复算子时 JS 的匹配终点可能短于 POSIX 的最长匹配：唯一的量词会吃满到后缀还能匹配的最后一个
+  // 位置，多个量词却会重新配比（`a+(ab+)?` 在 `aab…` 上 JS 只到 `aa`、POSIX 到 `a`+`a`+`b…`）。终点不可信，
+  // 整次调用退回保守窗口；`-F` 是字面量，没有量词。
+  if (!flags.has('F') && patterns.some(entry => countRepetitions(entry.source, extended) >= 2)) openEnded = true
   return { list: patterns, openEnded }
 }
 
@@ -457,8 +477,47 @@ function hasAlternation(source: string, extended: boolean): boolean {
 }
 
 /**
+ * 数一个模式里的**重复算子**（ERE 的 `* + ? {…}`；BRE 的 `*`、`\+`、`\?`、`\{…\}`；方括号表达式与
+ * 转义后的字面量不算；`-F` 整串是字面量，调用方先判掉）。
+ *
+ * 只有一个（或没有）重复算子时，JS 的贪心匹配终点等于 POSIX 的最长匹配：唯一的量词会吃满到后缀还能匹配的
+ * 最后一个位置。两个及以上就会重新配比——`a+(ab+)?` 在 `aab…` 上 JS 让 `a+` 吃满后跳过可选组（只到 `aa`），
+ * POSIX 会把一个 `a` 让给后面的组（到 `a`+`a`+`b…`）。终点不可信，调用方退回保守窗口。
+ * @param source - pattern 原文。
+ * @param extended - 是不是 `-E`（ERE）。
+ * @returns 重复算子的个数。
+ */
+function countRepetitions(source: string, extended: boolean): number {
+  let count = 0
+  let bracketStart = -1
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (bracketStart >= 0) {
+      // 与 {@link hasAlternation} 同一套方括号边界：`]` 紧跟 `[` / `[^` 时是字面量。
+      const literalClose = index === bracketStart + 1
+        || (index === bracketStart + 2 && source[bracketStart + 1] === '^')
+      if (char === ']' && !literalClose) bracketStart = -1
+      continue
+    }
+    if (char === '[') {
+      bracketStart = index
+      continue
+    }
+    if (char === '\\' && index + 1 < source.length) {
+      if (!extended && '?+{'.includes(source[index + 1] as string)) count++
+      index++
+      continue
+    }
+    if (extended && '*+?{'.includes(char)) count++
+    else if (!extended && char === '*') count++
+  }
+  return count
+}
+
+/**
  * 把顶层交替拆开（ERE 的裸 `|` / BRE 的 `\|`；括号与方括号表达式内不算）：每个分支单独编译，命中窗口取各分支
- * 命中的并集。POSIX 的最长匹配一定落在某个分支的命中里，所以并集覆盖真实命中——只会多留、不会少留。
+ * 命中的并集。POSIX 的最长匹配一定落在某个分支的命中里，所以并集覆盖真实命中的**起点**（终点是否可信由
+ * {@link countRepetitions} 判定，见 `patternsOf`）。
  * @param source - pattern 原文。
  * @param extended - 是不是 `-E`（ERE）。
  * @returns 各顶层分支；没有顶层交替时 `undefined`。
@@ -625,7 +684,8 @@ function matchSpans(content: string, patterns: readonly RegExp[]): Array<{ start
  * @param content - 命中行的正文（不含 `path:行号:` 前缀）。
  * @param patterns - {@link grepPatterns} 的结果。
  * @param window - 命中两侧各留多少字符。
- * @param openEnded - 含嵌套交替、真实命中终点不可知：只裁最早命中起点以前，命中及其后整段保留。
+ * @param openEnded - 真实命中终点不可知（嵌套交替，或 pattern 有两个及以上重复算子）：只裁最早命中起点以前，
+ *   命中及其后整段保留。
  */
 export function trimAroundMatches(
   content: string,

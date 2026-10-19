@@ -483,3 +483,51 @@ describe('票 27 · 交替分支按顶层拆分', () => {
     }
   })
 })
+
+describe('票 26/27 · 联合复审落修（2026-10-19）', () => {
+  it('引号外的反斜杠续行按 shell 删掉：两个 pattern 的命中都留下', () => {
+    const command = 'grep -n -e MATCH -e \\\nSECOND'
+    expect(grepPatterns(command)).toHaveLength(2)
+    expect(grepPatterns(command).some(rx => rx.test('SECOND'))).toBe(true)
+    const content = `${'x'.repeat(900)}MATCH${'y'.repeat(900)}SECOND${'z'.repeat(900)}`
+    const text = `f.ts:1:${content}`
+    const trimmed = trimGrepLongLines(text, command)
+    expect(trimmed).not.toBe(text)
+    expect(trimmed).toContain('MATCH')
+    expect(trimmed).toContain('SECOND')
+  })
+
+  it('pattern 里的真换行是 grep 的 pattern 列表：整次调用不表态，真实命中不被删', () => {
+    const command = "grep -nF -e 'ALPHA\nOMEGA' -e MATCH"
+    expect(grepPatterns(command)).toEqual([])
+    const content = `${'x'.repeat(900)}ALPHA${'y'.repeat(900)}MATCH${'z'.repeat(900)}OMEGA`
+    const text = `f.ts:1:${content}`
+    expect(trimGrepLongLines(text, command)).toBe(text)
+  })
+
+  it.skipIf(!grepAvailable)('两个及以上重复算子走保守窗口：非交替的真实最长命中完整保留', () => {
+    const content = `${'x'.repeat(900)}aab${'b'.repeat(900)}${'z'.repeat(900)}`
+    const command = "grep -nE 'a+(ab+)?' f"
+    const matches = realGrepMatches(['-o', '-E', 'a+(ab+)?'], content)
+    expect(matches.length).toBeGreaterThan(0)
+    const trimmed = trimGrepLongLines(`f.ts:1:${content}`, command)
+    for (const match of matches) expect(trimmed, `命中 ${match}`).toContain(match)
+    expect(trimGrepLongLines(trimmed, command)).toBe(trimmed)
+  })
+
+  it.skipIf(!grepAvailable)('顶层交替里含两个重复算子的分支同样走保守窗口（真实最长命中完整保留）', () => {
+    const content = `${'x'.repeat(900)}foo${'y'.repeat(900)}aab${'b'.repeat(900)}${'z'.repeat(900)}`
+    const command = "grep -nE 'foo|a+(ab+)?' f"
+    const matches = realGrepMatches(['-o', '-E', 'foo|a+(ab+)?'], content)
+    expect(matches.length).toBeGreaterThan(0)
+    const trimmed = trimGrepLongLines(`f.ts:1:${content}`, command)
+    for (const match of matches) expect(trimmed, `命中 ${match}`).toContain(match)
+  })
+
+  it('-w × 顶层交替：lookaround 逐分支生效，a@b 里的 @ 不算命中', () => {
+    const content = `${'p'.repeat(400)}x@y${'q'.repeat(400)} TODO: fix${'r'.repeat(400)}`
+    const trimmed = trimGrepLongLines(`f.ts:1:${content}`, "grep -nwE 'TODO:|@' f")
+    expect(trimmed).toContain('TODO:')
+    expect(trimmed).not.toContain('x@y')
+  })
+})
