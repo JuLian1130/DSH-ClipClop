@@ -127,6 +127,24 @@ describe('票 25 · 路径前缀分组', () => {
     expect(expand(verdict.text)).toBe(text)
   })
 
+  it('上下文正文自带 `:数字:`（时间戳）时仍并入同一组', () => {
+    // 真实 `grep -Hn -A1` 的形状：命中行与上下文行交替，上下文正文是带时分秒的日志。
+    const STAMP = 'const started = "12:34:56"'
+    const text = Array.from({ length: 10 }, (_, i) => [
+      `${A}:${2 * i + 1}:${CONTENT}`,
+      `${A}-${2 * i + 2}-${STAMP}`,
+    ]).flat().join('\n')
+    const verdict = condenseText('bash', text, at())
+    expect(verdict.kind).toBe('condensed')
+    if (verdict.kind !== 'condensed') return
+    expect(verdict.text).toBe([
+      A,
+      ...Array.from({ length: 10 }, (_, i) => [`${2 * i + 1}:${CONTENT}`, `${2 * i + 2}-${STAMP}`]).flat(),
+    ].join('\n'))
+    expect(expand(verdict.text)).toBe(text)
+    expect(condenseText('bash', verdict.text, at())).toEqual({ kind: 'unchanged' })
+  })
+
   it('正文里孤立的「数字:」行不会让整条规则放弃', () => {
     const text = [
       ...Array.from({ length: 20 }, (_, i) => `${A}:${i + 1}:${CONTENT}`),

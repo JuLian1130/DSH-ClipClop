@@ -341,16 +341,19 @@ function groupPaths(text: string, maxLines: number): string {
     let j = i + 1
     while (j < lines.length) {
       const line = lines[j] as string
-      const next = GREP_ROW.exec(line)
-      if (next !== null) {
-        if (next[1] !== path) break
-        rows.push([next[2] as string, next[3] as string, next[4] as string])
+      // 上下文行先于命中行解析：上下文正文自带 `:数字:` 时（时间戳），先跑 `GREP_ROW` 会把 `path-21-started at 12`
+      // 当成路径、以「换了文件」为由断组，整段 -A 输出就一个组也合不成。代价是极少数「文件名以 `${path}-` 开头」
+      // 的命中行（`a.ts` 与 `a.ts-2-b.ts` 相邻）被读成上下文行——两种解释在字节上无法区分，取上下文优先；这条
+      // 同样无损（按组头还原得到同一串字节），只是分组边界不同。
+      const ctx = line.startsWith(`${path}-`) ? CONTEXT_ROW.exec(line.slice(path.length + 1)) : null
+      if (ctx !== null) {
+        rows.push([ctx[1] as string, ctx[2] as string, ctx[3] as string])
         j++
         continue
       }
-      const ctx = line.startsWith(`${path}-`) ? CONTEXT_ROW.exec(line.slice(path.length + 1)) : null
-      if (ctx === null) break
-      rows.push([ctx[1] as string, ctx[2] as string, ctx[3] as string])
+      const next = GREP_ROW.exec(line)
+      if (next === null || next[1] !== path) break
+      rows.push([next[2] as string, next[3] as string, next[4] as string])
       j++
     }
     if (rows.length === 1) {
