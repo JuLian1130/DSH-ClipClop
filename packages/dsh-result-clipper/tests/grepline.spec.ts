@@ -41,6 +41,24 @@ function realGrepMatches(args: readonly string[], input: string): string[] {
   }
 }
 
+/** 本机 grep 是否把 `ſ` 与 `S` 当同一字符（UTF-8 locale 才成立；C locale 下这条差异本就不存在）。 */
+const foldsLongS = (() => {
+  try {
+    return execFileSync('grep', ['-o', '-i', 'ſ'], { input: 'S\n', encoding: 'utf8' }) === 'S\n'
+  } catch {
+    return false
+  }
+})()
+
+/** 本机 grep 的 ERE 是否支持 `\<`（词首断言）：BSD 与 GNU 都支持，其余实现可能当字面量。 */
+const ereWordBoundary = (() => {
+  try {
+    return execFileSync('grep', ['-oE', '\\<foo'], { input: ' foo\n', encoding: 'utf8' }) === 'foo\n'
+  } catch {
+    return false
+  }
+})()
+
 /** 默认参数下的一次精简判定。 */
 const at = (over: Partial<CondenseParams> = {}): CondenseParams => ({ ...CONDENSE_DEFAULTS, ...over })
 
@@ -726,5 +744,57 @@ describe('票 26/27 · 第 6 次联合复审落修（2026-10-19）', () => {
     expect(trimGrepLongLines(text, command)).toBe(text)
     // `-F` 下 astral 是字面量、按码元逐位匹配与 grep 的字节序列一致，照常编译。
     expect(grepPatterns("grep -nF 'A😀?B' f")).toHaveLength(1)
+  })
+})
+
+describe('票 26/27 · 第 7 次联合复审落修（2026-10-19）', () => {
+  it.skipIf(!grepAvailable)('顶层分支按 grep -o 的推进语义合并：重叠起点不丢真实命中', () => {
+    // `B.{255}` 的分支自己先命中位置 450 并推进到 706；真实 grep 先命中 400 的 `A.{100}`、从 501 继续，
+    // 第二段命中起点 660——逐分支非重叠扫描会跳过它（第 7 次联合复审实测删掉第二段尾 10 字符）。
+    const content = `${'x'.repeat(400)}A${'x'.repeat(49)}B${'y'.repeat(209)}B${'z'.repeat(255)}${'q'.repeat(400)}`
+    const matches = realGrepMatches(['-o', '-E', 'A.{100}|B.{255}'], content)
+    expect(matches.map(match => match.length)).toEqual([101, 256])
+    const text = `f.ts:1:${content}`
+    const trimmed = trimGrepLongLines(text, "grep -nE 'A.{100}|B.{255}' f")
+    expect(trimmed).not.toBe(text)
+    for (const match of matches) expect(trimmed).toContain(match)
+  })
+
+  it('pattern 含非 ASCII 字符且 -i：整次不表态（JS 的 i 标志不折叠非 ASCII→ASCII）', () => {
+    // `/ſ/i.test('S') === false`，而 UTF-8 locale 的 grep 把 `ſ` 与 `S` 当同一字符；只丢这一条、拿
+    // 其余 pattern 裁，会把真实命中 `S` 删掉（第 7 次联合复审实测）。`-F` 的字面量同样按 `i` 折叠。
+    expect(grepPatterns("grep -niE 'ſ|MATCH' f")).toEqual([])
+    expect(grepPatterns("grep -niF 'ſ' f")).toEqual([])
+    expect(grepPatterns('grep -niE "match" f')).toHaveLength(1)
+    const text = `f.ts:1:${'x'.repeat(400)}S${'y'.repeat(900)}MATCH${'z'.repeat(400)}`
+    expect(trimGrepLongLines(text, "grep -niE 'ſ|MATCH' f")).toBe(text)
+  })
+
+  it.skipIf(!foldsLongS)('真实 grep 在 UTF-8 locale 下把 ſ 与 S 当同一字符：整次不表态后命中保留', () => {
+    const content = `${'x'.repeat(400)}S${'y'.repeat(900)}MATCH${'z'.repeat(400)}`
+    const matches = realGrepMatches(['-o', '-i', '-E', '-e', 'ſ', '-e', 'MATCH'], content)
+    expect(matches).toContain('S')
+    expect(trimGrepLongLines(`f.ts:1:${content}`, "grep -niE 'ſ|MATCH' f")).toBe(`f.ts:1:${content}`)
+  })
+
+  it.skipIf(!ereWordBoundary)('ERE 的 \\< / \\> 翻成词首 / 词尾断言：真实命中不被删', () => {
+    // JS 把 `\<` 当字面 `<`；BRE 早已翻成 `\b`，ERE 之前原样透传（第 7 次联合复审实测删掉 `foo`）。
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(400)} foo${'z'.repeat(400)}`
+    const matches = realGrepMatches(['-o', '-E', '-e', 'MATCH', '-e', '\\<foo'], content)
+    expect(matches).toContain('foo')
+    const command = String.raw`grep -nE -e MATCH -e '\<foo' f`
+    expect(grepPatterns(command)[1]?.test(' foo')).toBe(true)
+    const trimmed = trimGrepLongLines(`f.ts:1:${content}`, command)
+    for (const match of matches) expect(trimmed).toContain(match)
+    expect(trimGrepLongLines(trimmed, command)).toBe(trimmed)
+  })
+
+  it('方括号里的 | 与 ERE 字面 | 仍照常左右裁（能分辨「不算交替」与「被当成嵌套交替」）', () => {
+    // 两种实现的 `grepPatterns` 返回值相同，分叉只在裁剪形态：照常左右裁会留中间省略标记，
+    // 被当成嵌套交替走保守窗口则只剩头插标记（第 7 次联合复审的判据空转）。
+    const bars = `f.ts:1:${'x'.repeat(400)}|${'y'.repeat(900)}|${'z'.repeat(400)}`
+    expect(trimGrepLongLines(bars, 'grep -nE "[a|b]" f').match(/…\[省略 \d+ 字符\]…/g)).toHaveLength(3)
+    const literal = `f.ts:1:${'x'.repeat(400)}a|b${'y'.repeat(900)}a|b${'z'.repeat(400)}`
+    expect(trimGrepLongLines(literal, String.raw`grep -nE 'a\|b' f`).match(/…\[省略 \d+ 字符\]…/g)).toHaveLength(3)
   })
 })

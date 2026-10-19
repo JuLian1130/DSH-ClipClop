@@ -394,6 +394,12 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
   if (!flags.has('F') && explicit.some(source => NON_BMP.test(source))) {
     return { list: [], openEnded: false, abstained: true }
   }
+  // `-i` 的大小写折叠按 locale：本机 BSD grep 在 UTF-8 locale 下把 `ſ` 与 `S` 当同一字符，JS 的 `i` 标志
+  // 不折叠「非 ASCII 折叠到 ASCII」的字符（`/ſ/i.test('S') === false`），真实命中会被裁掉（第 7 次联合复审
+  // 实测 `grep -niE 'ſ|MATCH'` 删掉 `S`；`-F` 的字面量同样按 `i` 折叠）。方言不猜：整次调用不表态。
+  if (flags.has('i') && explicit.some(source => /[^\x00-\x7F]/.test(source))) {
+    return { list: [], openEnded: false, abstained: true }
+  }
   // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
   // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
   // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
@@ -473,6 +479,51 @@ function translateBre(source: string): string {
       out += `\\${next}`
     }
     index++
+  }
+  return out
+}
+
+/**
+ * 把 ERE 里的 `\<` / `\>`（grep 的词首 / 词尾断言，BSD 与 GNU 一致）翻成等价的 lookaround。
+ *
+ * JS 把这两个转义当字面 `<` / `>`，原样编译会在「词首 `foo`」这类真实命中上定位不到（第 7 次联合复审实测
+ * `grep -nE -e MATCH -e '\<foo'` 的 `foo` 被裁掉）。方括号表达式里的反斜杠是字面量、不翻（这类构造由
+ * `hasUnsupportedBracket` 整次不表态兜着）；`\\<`（转义反斜杠 + 字面 `<`）也不翻。
+ * @param source - ERE 模式。
+ * @returns JS 正则源码。
+ */
+function translateEreWordBoundaries(source: string): string {
+  let out = ''
+  let bracket = false
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (char === '[' && !bracket) {
+      bracket = true
+      out += char
+      continue
+    }
+    if (char === ']' && bracket) {
+      bracket = false
+      out += char
+      continue
+    }
+    if (!bracket && char === '\\' && index + 1 < source.length) {
+      const next = source[index + 1]
+      if (next === '<') {
+        out += '(?<!\\w)(?=\\w)'
+        index++
+        continue
+      }
+      if (next === '>') {
+        out += '(?<=\\w)(?!\\w)'
+        index++
+        continue
+      }
+      out += char + next
+      index++
+      continue
+    }
+    out += char
   }
   return out
 }
@@ -735,7 +786,7 @@ function escapeRegExp(source: string): string {
 function compilePattern(source: string, flags: ReadonlySet<string>): RegExp | undefined {
   if (flags.has('P')) return undefined
   const fixed = flags.has('F')
-  let body = fixed ? escapeRegExp(source) : flags.has('E') ? source : translateBre(source)
+  let body = fixed ? escapeRegExp(source) : flags.has('E') ? translateEreWordBoundaries(source) : translateBre(source)
   // `-w` 的语义是「命中片段的左右邻接字符都不是词字符」，不是 `\b`：`\b` 要求边界一侧是词字符，
   // 对 `@`、`TODO:` 这种以非词字符收尾的 pattern 恰好反过来——`\b(?:@)\b` 会命中 `a@b` 而漏掉 ` @ `
   // （第二轮复审实测）。用两侧 lookaround 直接表达 grep 的邻接条件。
@@ -781,18 +832,36 @@ function grepPatternsWithMeta(command: string): { readonly patterns: RegExp[]; r
   return { patterns, openEnded }
 }
 
-/** 命中在正文里的位置（`RegExp` 带 `g`，每次用前重置 `lastIndex`）。 */
+/**
+ * 命中在正文里的位置：按真实 `grep -o` 的推进语义合并各分支——从上一段命中的终点重新找最早起点，
+ * 同一起点取最长终点。
+ *
+ * 逐分支各自从头非重叠扫描会漏掉「起点落在别的分支已消费区间之后」的真实命中：`A.{100}|B.{255}` 在
+ * `x×400 + A + x×49 + B + y×209 + B + …` 上，`B.{255}` 先命中 B（位置 450）并推进到 706，跳过了真实第二段的
+ * 起点 660，窗口随之短 10 字符、第二段尾被裁（第 7 次联合复审实测）。grep 先取位置 400 的 `A.{100}`、从 501
+ * 继续，才命中 660；按同样推进合并即可复现它的命中序列。
+ * @param content - 命中行正文。
+ * @param patterns - 各顶层分支编译出的正则（带 `g`）。
+ * @returns 命中区间，按起点升序。
+ */
 function matchSpans(content: string, patterns: readonly RegExp[]): Array<{ start: number; end: number }> {
   const spans: Array<{ start: number; end: number }> = []
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(content)) !== null) {
-      if (match[0].length > 0) spans.push({ start: match.index, end: match.index + match[0].length })
-      if (match.index === pattern.lastIndex) pattern.lastIndex++
+  let position = 0
+  while (position <= content.length) {
+    let best: { start: number; end: number } | undefined
+    for (const pattern of patterns) {
+      pattern.lastIndex = position
+      const match = pattern.exec(content)
+      // 空匹配没有可定位的命中位置（`x*` 这类）：跳过，与旧实现一致。
+      if (match === null || match[0].length === 0) continue
+      const candidate = { start: match.index, end: match.index + match[0].length }
+      if (best === undefined || candidate.start < best.start
+        || (candidate.start === best.start && candidate.end > best.end)) best = candidate
     }
+    if (best === undefined) break
+    spans.push(best)
+    position = best.end
   }
-  spans.sort((left, right) => left.start - right.start)
   return spans
 }
 
