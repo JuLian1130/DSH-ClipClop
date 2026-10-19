@@ -262,20 +262,27 @@ function shortCluster(token: string): { flags: string; kind: 'e' | 'f'; attached
   return { flags: match[1] as string, kind: match[2] as 'e' | 'f', attached: match[3] as string }
 }
 
+/** 一次 `grep` 调用编译用的 pattern，与「真实命中终点不可知」的窗口标记。 */
+interface ParsedPatterns {
+  readonly list: ReadonlyArray<{ readonly source: string; readonly flags: ReadonlySet<string> }>
+  /** 含嵌套交替、分支拆不干净：窗口只能用保守形态（只裁最早命中起点以前，见 {@link trimAroundMatches}）。 */
+  readonly openEnded: boolean
+}
+
 /**
  * 从一个段里收集 `grep` 的 pattern 与短选项。
  *
  * 只有命令位是 `grep` 时才解析（见 {@link commandIndexOf}）：段里其他位置的同名 token（`echo grep …`、
  * `printf '%s\n' grep …`）不算。`-f`（模式来自文件）的调用不表态。
  * @param tokens - 一个段的 token。
- * @returns 每个 `grep` 调用声明的 pattern 与选项。
+ * @returns 每个 `grep` 调用声明的 pattern、选项与窗口标记。
  */
-function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source: string; readonly flags: ReadonlySet<string> }> {
+function patternsOf(tokens: readonly string[]): ParsedPatterns {
   const patterns: Array<{ readonly source: string; readonly flags: ReadonlySet<string> }> = []
   const commandIndex = commandIndexOf(tokens)
-  if (commandIndex === undefined) return patterns
+  if (commandIndex === undefined) return { list: [], openEnded: false }
   const command = tokens[commandIndex] as string
-  if (command !== 'grep' && !command.endsWith('/grep')) return patterns
+  if (command !== 'grep' && !command.endsWith('/grep')) return { list: [], openEnded: false }
   const flags = new Set<string>()
   const explicit: string[] = []
   let pattern: string | undefined
@@ -341,21 +348,46 @@ function patternsOf(tokens: readonly string[]): ReadonlyArray<{ readonly source:
     if (pattern === undefined && explicit.length === 0) pattern = next
     cursor++
   }
-  if (fromFile) return patterns
+  if (fromFile) return { list: [], openEnded: false }
+  // `-P`（PCRE）的语义与 JS 不等价，整次调用不表态（与票 26 的边界一致）。
+  if (flags.has('P')) return { list: [], openEnded: false }
   if (pattern !== undefined) explicit.push(pattern)
   // 空 pattern（`-e ''` / `''`）匹配所有行、没有可定位的命中位置；按整次调用不表态。不这样判的话，一旦
   // 分词把空参数丢掉，`-e` 的取值会左移成文件名、按文件名裁行（票 26 第五轮复审）。
-  if (explicit.some(source => source === '')) return patterns
+  if (explicit.some(source => source === '')) return { list: [], openEnded: false }
   // POSIX 字符类（`[[:digit:]]`）原样丢给 JS 会变成「这些符号的集合」，匹配不到真实字符、把命中裁掉。
   // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
   // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
-  if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return patterns
+  if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return { list: [], openEnded: false }
+  const extended = flags.has('E')
+  // 反向引用（`\1`…`\9`）按捕获组编号解析：顶层分支独立编译会重排组号，`\2` 在分支里可能变成别的含义甚至
+  // 八进制转义（`grep -E '(foo)|(Bz+E)\2'` 的第二段真实命中会因此定位不到）。组号跨分支改写不可还原，整次
+  // 调用不表态（票 27 复审）。
+  if (!flags.has('F') && explicit.some(source => hasBackReference(source) && hasAlternation(source, extended))) {
+    return { list: [], openEnded: false }
+  }
   // POSIX 是 leftmost-longest、JS 是 leftmost-first：`grep -E 'BEGIN|BEGIN.*END'` 的真实命中以 END 结尾，
-  // JS 只认第一个能成立的短分支 BEGIN，按它的窗口裁会把命中后半截删掉。方言不猜，含交替分支的整次调用
-  // 不表态（与 `-P`、POSIX 字符类同层；票 26 第五轮复审）。
-  if (!flags.has('F') && explicit.some(source => hasAlternation(source, flags.has('E')))) return patterns
-  for (const source of explicit) patterns.push({ source, flags })
-  return patterns
+  // JS 只认第一个能成立的短分支 BEGIN。顶层交替拆成独立分支后，各分支命中的并集覆盖真实命中（最长匹配一定
+  // 落在某个分支上），两侧都能照常裁（票 27）。
+  let openEnded = false
+  for (const source of explicit) {
+    if (flags.has('F') || !hasAlternation(source, extended)) {
+      patterns.push({ source, flags })
+      continue
+    }
+    const branches = splitAlternatives(source, extended)
+    // 能匹配空串的交替（`a|`、`(a|)`、`a*|b`）在每个位置都算命中，没有可定位的命中位置：与空 pattern 同层，
+    // 整次调用不表态。空串命中在 `matchSpans` 里被跳过，按它定位会把真实命中的周边内容当成省略裁掉。
+    if (compilePattern(source, flags)?.test('') === true) return { list: [], openEnded: false }
+    // 括号内还有交替时拆不干净，原 pattern 仍用来定位起点（JS 与 POSIX 的 leftmost 起点相同），窗口退回保守形态。
+    if (branches === undefined || branches.some(branch => hasAlternation(branch, extended))) {
+      openEnded = true
+      patterns.push({ source, flags })
+      continue
+    }
+    for (const branch of branches) patterns.push({ source: branch, flags })
+  }
+  return { list: patterns, openEnded }
 }
 
 /**
@@ -424,6 +456,99 @@ function hasAlternation(source: string, extended: boolean): boolean {
   return false
 }
 
+/**
+ * 把顶层交替拆开（ERE 的裸 `|` / BRE 的 `\|`；括号与方括号表达式内不算）：每个分支单独编译，命中窗口取各分支
+ * 命中的并集。POSIX 的最长匹配一定落在某个分支的命中里，所以并集覆盖真实命中——只会多留、不会少留。
+ * @param source - pattern 原文。
+ * @param extended - 是不是 `-E`（ERE）。
+ * @returns 各顶层分支；没有顶层交替时 `undefined`。
+ */
+function splitAlternatives(source: string, extended: boolean): string[] | undefined {
+  const branches: string[] = []
+  let current = ''
+  let depth = 0
+  let bracketStart = -1
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (bracketStart >= 0) {
+      current += char
+      const literalClose = index === bracketStart + 1
+        || (index === bracketStart + 2 && source[bracketStart + 1] === '^')
+      if (char === ']' && !literalClose) bracketStart = -1
+      continue
+    }
+    if (char === '[') {
+      bracketStart = index
+      current += char
+      continue
+    }
+    if (char === '\\' && index + 1 < source.length) {
+      const next = source[index + 1] as string
+      if (!extended) {
+        if (next === '(') depth++
+        if (next === ')') depth = Math.max(0, depth - 1)
+        if (next === '|' && depth === 0) {
+          branches.push(current)
+          current = ''
+          index++
+          continue
+        }
+      }
+      current += char + next
+      index++
+      continue
+    }
+    if (extended) {
+      if (char === '(') depth++
+      if (char === ')') depth = Math.max(0, depth - 1)
+      if (char === '|' && depth === 0) {
+        branches.push(current)
+        current = ''
+        continue
+      }
+    }
+    current += char
+  }
+  branches.push(current)
+  return branches.length > 1 ? branches : undefined
+}
+
+/**
+ * 模式里有没有**反向引用**（`\1`…`\9`）：连续反斜杠按奇偶成对看——`\\1` 是字面量反斜杠 + `1`，不是引用；
+ * 方括号表达式里没有引用语义。只有真正的引用会在顶层分支独立编译时被重排组号改义。
+ * @param source - pattern 原文。
+ * @returns 有反向引用时为 `true`。
+ */
+function hasBackReference(source: string): boolean {
+  let bracketStart = -1
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (bracketStart >= 0) {
+      // 与 {@link hasAlternation} 同一套方括号边界：`]` 紧跟 `[` / `[^` 时是字面量。
+      const literalClose = index === bracketStart + 1
+        || (index === bracketStart + 2 && source[bracketStart + 1] === '^')
+      if (char === ']' && !literalClose) bracketStart = -1
+      continue
+    }
+    if (char === '[') {
+      bracketStart = index
+      continue
+    }
+    if (char !== '\\') continue
+    let run = 0
+    while (source[index + run] === '\\') run++
+    const next = source[index + run]
+    if (run % 2 === 1) {
+      if (next !== undefined && next >= '1' && next <= '9') return true
+      // 被转义的字符不再是语法字符：`\[` 不开方括号表达式。
+      index += run
+    } else {
+      index += run - 1
+    }
+  }
+  return false
+}
+
 function escapeRegExp(source: string): string {
   return source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -455,14 +580,26 @@ function compilePattern(source: string, flags: ReadonlySet<string>): RegExp | un
  * @returns 编译好的正则；解析不出 pattern 时为空数组。
  */
 export function grepPatterns(command: string): RegExp[] {
+  return grepPatternsWithMeta(command).patterns
+}
+
+/**
+ * 与 {@link grepPatterns} 相同，但额外带出「真实命中终点不可知」的整次调用标记。
+ * @param command - bash 命令全文。
+ * @returns 编译好的正则与保守窗口标记。
+ */
+function grepPatternsWithMeta(command: string): { readonly patterns: RegExp[]; readonly openEnded: boolean } {
   const patterns: RegExp[] = []
+  let openEnded = false
   for (const segment of splitSegments(command)) {
-    for (const { source, flags } of patternsOf(tokenize(segment))) {
+    const parsed = patternsOf(tokenize(segment))
+    openEnded = openEnded || parsed.openEnded
+    for (const { source, flags } of parsed.list) {
       const compiled = compilePattern(source, flags)
       if (compiled !== undefined) patterns.push(compiled)
     }
   }
-  return patterns
+  return { patterns, openEnded }
 }
 
 /** 命中在正文里的位置（`RegExp` 带 `g`，每次用前重置 `lastIndex`）。 */
@@ -488,10 +625,22 @@ function matchSpans(content: string, patterns: readonly RegExp[]): Array<{ start
  * @param content - 命中行的正文（不含 `path:行号:` 前缀）。
  * @param patterns - {@link grepPatterns} 的结果。
  * @param window - 命中两侧各留多少字符。
+ * @param openEnded - 含嵌套交替、真实命中终点不可知：只裁最早命中起点以前，命中及其后整段保留。
  */
-export function trimAroundMatches(content: string, patterns: readonly RegExp[], window: number): string {
+export function trimAroundMatches(
+  content: string,
+  patterns: readonly RegExp[],
+  window: number,
+  openEnded = false,
+): string {
   const spans = matchSpans(content, patterns)
   if (spans.length === 0) return content
+  // POSIX 的最长匹配与 JS 的首个匹配起点相同，终点不早于 JS 的终点：只裁最早命中起点以前，命中及其后整段保留，
+  // 真实命中的后半截就不会被当成「命中之后的省略」删掉（票 27 的保守窗口）。
+  if (openEnded) {
+    const from = Math.max(0, (spans[0] as { start: number }).start - window)
+    return from === 0 ? content : `${LONG_LINE_MARK}${from} 字符]…${content.slice(from)}`
+  }
   const windows: Array<[number, number]> = []
   for (const span of spans) {
     const start = Math.max(0, span.start - window)
@@ -536,7 +685,7 @@ function isGroupedHeader(header: string | undefined): boolean {
  */
 export function trimGrepLongLines(text: string, command: string | undefined): string {
   if (command === undefined || command === '') return text
-  const patterns = grepPatterns(command)
+  const { patterns, openEnded } = grepPatternsWithMeta(command)
   if (patterns.length === 0) return text
   let changed = false
   const lines = text.split('\n')
@@ -552,7 +701,7 @@ export function trimGrepLongLines(text: string, command: string | undefined): st
     // 单文件上下文行裁就会与第一遍不同（整链幂等，票 26 第五轮复审）。
     if (row.path === undefined && row.sep === '-' && isGroupedHeader(runStart > 0 ? lines[runStart - 1] : undefined)) continue
     if (row.content.length <= GREP_LONG_LINE_MIN_CHARS) continue
-    const trimmed = trimAroundMatches(row.content, patterns, GREP_LONG_LINE_WINDOW)
+    const trimmed = trimAroundMatches(row.content, patterns, GREP_LONG_LINE_WINDOW, openEnded)
     if (trimmed === row.content) continue
     lines[index] = row.path === undefined
       ? `${row.lead}${row.line}${row.sep}${trimmed}`

@@ -8,15 +8,38 @@
  * @module
  */
 
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { CONDENSE_DEFAULTS, condenseText, type CondenseContext, type CondenseParams } from '../src/condense.ts'
 import {
   GREP_LONG_LINE_MIN_CHARS,
   GREP_LONG_LINE_WINDOW,
   grepPatterns,
+  LONG_LINE_MARK,
   trimAroundMatches,
   trimGrepLongLines,
 } from '../src/grepline.ts'
+
+/** 本机有没有真的 `grep`（对拍用例在无 grep 的平台上跳过）。 */
+const grepAvailable = (() => {
+  try {
+    execFileSync('grep', ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+})()
+
+/** 用真实 `grep` 跑一遍 pattern，取 `-o` 输出的每个命中片段；没有命中或命令失败时为空数组。 */
+function realGrepMatches(args: readonly string[], input: string): string[] {
+  try {
+    return execFileSync('grep', args, { input: `${input}\n`, encoding: 'utf8' })
+      .split('\n')
+      .filter(match => match !== '')
+  } catch {
+    return []
+  }
+}
 
 /** 默认参数下的一次精简判定。 */
 const at = (over: Partial<CondenseParams> = {}): CondenseParams => ({ ...CONDENSE_DEFAULTS, ...over })
@@ -160,6 +183,7 @@ describe('票 26 复审落修', () => {
 
   it('-P（PCRE）不按 JS 正则猜着裁', () => {
     expect(grepPatterns('grep -P "a\\d" f')).toEqual([])
+    expect(grepPatterns("grep -P -e 'a|b' -e MATCH f")).toEqual([])
   })
 
   it('首尾命中、中间空档：中间要标省略，不能整行返回', () => {
@@ -315,13 +339,21 @@ describe('票 26 · 第五轮复审落修', () => {
     expect(trimGrepLongLines(text, "grep -n -e '' f")).toBe(text)
   })
 
-  it('交替分支（-E 的 | / BRE 的 \\|）整次调用不表态；方括号里的 | 与 -F 字面量照常', () => {
-    expect(grepPatterns("grep -nE 'BEGIN|BEGIN.*END' f")).toEqual([])
-    expect(grepPatterns(String.raw`grep -n 'BEGIN\|BEGIN.*END' f`)).toEqual([])
+  it('方括号里的 |、-F 字面量与 ERE 的转义 | 不算交替，照常编译', () => {
     expect(grepPatterns('grep -nF "a|b" f')[0]?.test('a|b')).toBe(true)
+    expect(grepPatterns('grep -nF "(a|b)" f')[0]?.test('(a|b)')).toBe(true)
     expect(grepPatterns('grep -nE "[a|b]" f')[0]?.test('|')).toBe(true)
-    const text = `f.ts:1:${'x'.repeat(900)}BEGIN${'y'.repeat(900)}END${'z'.repeat(900)}`
-    expect(trimGrepLongLines(text, "grep -nE 'BEGIN|BEGIN.*END' f")).toBe(text)
+    expect(grepPatterns('grep -nE "a\\|b" f')[0]?.test('a|b')).toBe(true)
+  })
+
+  it('含反向引用的交替整次不表态（分支独立编译会改变捕获组编号）', () => {
+    const ere = String.raw`grep -nE '(foo)|(Bz+E)\2' f`
+    const bre = String.raw`grep -n '\(foo\)\|\(Bz\+E\)\2' f`
+    expect(grepPatterns(ere)).toEqual([])
+    expect(grepPatterns(bre)).toEqual([])
+    const content = `${'x'.repeat(300)}foo${'y'.repeat(300)}B${'z'.repeat(300)}EB${'z'.repeat(300)}E${'w'.repeat(300)}`
+    const text = `f.ts:1:${content}`
+    expect(trimGrepLongLines(text, ere)).toBe(text)
   })
 
   it('已分组的多文件上下文行第二遍不再裁（整链幂等）', () => {
@@ -343,5 +375,111 @@ describe('票 26 · 第五轮复审落修', () => {
     const trimmed = trimGrepLongLines(text, 'grep -n -A1 MATCH f.ts')
     expect(trimmed).not.toBe(text)
     expect(trimmed).toContain('MATCH')
+  })
+})
+
+describe('票 27 · 交替分支按顶层拆分', () => {
+  it('ERE 顶层交替：拆成独立分支定位，BEGIN 与 END 两侧都留下（真实最长命中完整）', () => {
+    const content = `${'x'.repeat(900)}BEGIN${'y'.repeat(900)}END${'z'.repeat(900)}`
+    const command = "grep -nE 'BEGIN|BEGIN.*END' f"
+    const first = condenseText('bash', `f.ts:1:${content}`, at(), undefined, ctx(command))
+    expect(first.kind).toBe('condensed')
+    if (first.kind !== 'condensed') return
+    expect(first.rules).toContain('grep-long-line')
+    // POSIX 的最长匹配是 BEGIN…END 整段：命中终点之后的内容也按窗口保留，不会被当成命中之前的省略。
+    expect(first.text).toContain(`BEGIN${'y'.repeat(900)}END`)
+    expect(first.text.length).toBeLessThan(content.length / 2)
+    expect(condenseText('bash', first.text, at(), undefined, ctx(command))).toEqual({ kind: 'unchanged' })
+  })
+
+  it('BRE 顶层交替（\\|）与 ERE 同样拆分并留下整段最长命中', () => {
+    const content = `${'x'.repeat(900)}BEGIN${'y'.repeat(900)}END${'z'.repeat(900)}`
+    const command = String.raw`grep -n 'BEGIN\|BEGIN.*END' f`
+    const first = condenseText('bash', `f.ts:1:${content}`, at(), undefined, ctx(command))
+    expect(first.kind).toBe('condensed')
+    if (first.kind !== 'condensed') return
+    expect(first.text).toContain(`BEGIN${'y'.repeat(900)}END`)
+    expect(condenseText('bash', first.text, at(), undefined, ctx(command))).toEqual({ kind: 'unchanged' })
+  })
+
+  it('拆分后的分支仍按原方言编译：BRE 的 \\+ 在分支里仍是量词', () => {
+    const patterns = grepPatterns(String.raw`grep -n 'a\+b\|c\+d' f`)
+    expect(patterns).toHaveLength(2)
+    expect(patterns.some(rx => rx.test('aaab'))).toBe(true)
+    expect(patterns.some(rx => rx.test('cccd'))).toBe(true)
+  })
+
+  it('ERE 的转义括号是字面量、不记层级：顶层 | 照样拆开', () => {
+    const patterns = grepPatterns('grep -nE "\\(a|b\\)" f')
+    expect(patterns).toHaveLength(2)
+    expect(patterns.some(rx => rx.test('(a'))).toBe(true)
+    expect(patterns.some(rx => rx.test('b)'))).toBe(true)
+  })
+
+  it('空分支（ERE 的 a| / BRE 的 a\\| / 嵌套 (a|)）与空 pattern 一样整次不表态', () => {
+    expect(grepPatterns("grep -nE 'a|' f")).toEqual([])
+    expect(grepPatterns(String.raw`grep -n 'a\|' f`)).toEqual([])
+    expect(grepPatterns("grep -nE -e 'a|' -e MATCH f")).toEqual([])
+    expect(grepPatterns("grep -nE '(a|)' f")).toEqual([])
+    expect(grepPatterns("grep -nwE 'a|' f")).toEqual([])
+    expect(grepPatterns("grep -nF '' f")).toEqual([])
+    const text = `f.ts:1:${'x'.repeat(400)}a${'y'.repeat(400)}`
+    expect(trimGrepLongLines(text, "grep -nE 'a|' f")).toBe(text)
+  })
+
+  it('转义反斜杠后的数字是字面量、不算反向引用（顶层交替照常拆）', () => {
+    const command = String.raw`grep -nE 'foo|\\1' f`
+    const patterns = grepPatterns(command)
+    expect(patterns).toHaveLength(2)
+    expect(patterns.some(rx => rx.test('\\1'))).toBe(true)
+    const content = `${'x'.repeat(400)}foo${'y'.repeat(400)}\\1${'z'.repeat(400)}`
+    const text = `f.ts:1:${content}`
+    const trimmed = trimGrepLongLines(text, command)
+    expect(trimmed).not.toBe(text)
+    expect(trimmed).toContain('\\1')
+  })
+
+  it('嵌套交替走保守窗口：只裁最早命中起点以前，命中及其后原样保留（ERE/BRE × -w）', () => {
+    const content = `${'x'.repeat(900)} abc ${'y'.repeat(900)}`
+    const commands = [
+      "grep -nE '(a|ab)c' f",
+      String.raw`grep -n '\(a\|ab\)c' f`,
+      "grep -nwE '(a|ab)c' f",
+      String.raw`grep -nw '\(a\|ab\)c' f`,
+      // 顶层能拆、但拆出的分支里还有交替：整次调用同样退回保守窗口。
+      "grep -nE 'zzz|(a|ab)c' f",
+    ]
+    const trimmed = `f.ts:1:${LONG_LINE_MARK}701 字符]…${content.slice(701)}`
+    for (const command of commands) {
+      // 最早命中起点是 `abc` 的 a（下标 901）：只裁掉它以前、200 字符窗口之前的 701 字符；
+      // 命中及其后整段原样保留——真实命中终点不可知的交替分支不会被删掉后半截。
+      expect(trimGrepLongLines(`f.ts:1:${content}`, command), command).toBe(trimmed)
+      expect(trimGrepLongLines(trimmed, command), command).toBe(trimmed)
+    }
+  })
+
+  it('保守窗口在最早命中贴着行首时不裁（没有可省的字符）', () => {
+    const content = `${'x'.repeat(50)} abc ${'y'.repeat(900)}`
+    const text = `f.ts:1:${content}`
+    expect(trimGrepLongLines(text, "grep -nE '(a|ab)c' f")).toBe(text)
+  })
+
+  it.skipIf(!grepAvailable)('真实 grep 对拍：grep -o 的每个命中片段都完整包含在裁后内容里', () => {
+    const content = `${'x'.repeat(900)}BEGIN${'y'.repeat(900)}END${'z'.repeat(900)}`
+    const spaced = `${'x'.repeat(900)} foo ${'y'.repeat(900)} bar ${'z'.repeat(900)}`
+    const cases = [
+      { command: "grep -nE 'BEGIN|BEGIN.*END' f", content, options: ['-o', '-E', 'BEGIN|BEGIN.*END'] },
+      { command: String.raw`grep -n 'BEGIN\|BEGIN.*END' f`, content, options: ['-o', 'BEGIN\\|BEGIN.*END'] },
+      { command: "grep -nE '(BEGIN|BEGIN.*END)' f", content, options: ['-o', '-E', '(BEGIN|BEGIN.*END)'] },
+      { command: "grep -nwE 'foo|bar' f", content: spaced, options: ['-o', '-w', '-E', 'foo|bar'] },
+    ]
+    for (const { command, content: line, options } of cases) {
+      const matches = realGrepMatches(options, line)
+      expect(matches.length, command).toBeGreaterThan(0)
+      const raw = `f.ts:1:${line}`
+      const trimmed = trimGrepLongLines(raw, command)
+      expect(trimmed, command).not.toBe(raw)
+      for (const match of matches) expect(trimmed, `${command} 的命中 ${match}`).toContain(match)
+    }
   })
 })
