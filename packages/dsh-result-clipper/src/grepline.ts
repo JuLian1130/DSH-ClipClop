@@ -375,11 +375,16 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
   // 方言不猜，且要按**整次 grep 调用**放弃：只丢掉含字符类的那一个 pattern、拿其余 pattern 去裁，同样会把
   // 它的真实命中标成省略（第四轮复审实测 `-e MATCH -e '[[:digit:]]'`）。`-F` 下字符类就是字面量，照常编译。
   if (!flags.has('F') && explicit.some(source => /\[:[a-z]+:\]/.test(source))) return { list: [], openEnded: false }
-  // 方括号表达式以 `]` 开头时 POSIX 与 JS 的语义不同：POSIX 把紧跟 `[` / `[^` 的 `]` 当字面成员（`[]a]` 是
-  // 「`]` 或 `a`」），JS 读成空字符类 / 任意字符，后面的表达式随之改义、真实命中定位不到（联合复审实测
-  // `grep -nE '[]a]|MATCH'` 把真实命中 `]` 裁掉）。方言不猜，整次调用不表态；`-F` 下整串是字面量，照常编译。
-  if (!flags.has('F') && explicit.some(hasLeadingBracketClose)) return { list: [], openEnded: false }
+  // 方括号表达式里 JS 表达不了等价语义的 POSIX 构造，原样交给 JS 都会把真实命中定位错：首成员 `]`（POSIX 当
+  // 字面成员、JS 读成空字符类 / 任意字符，实测 `[]a]`）、方括号里的反斜杠（POSIX 当字面成员、JS 当转义，实测
+  // `[\b]`）、排序元素 `[. .]` 与等价类 `[= =]`（POSIX 按字符处理、JS 读成普通字符集，实测 `[[.a.]]`）。方言
+  // 不猜，整次调用不表态；`-F` 下整串是字面量，照常编译。
+  if (!flags.has('F') && explicit.some(hasUnsupportedBracket)) return { list: [], openEnded: false }
   const extended = flags.has('E')
+  // BRE 的 `^` / `$` 只在 pattern 开头 / 结尾是锚点，其余位置是字面量（`grep 'foo^bar'` 搜字面 `foo^bar`）；
+  // JS 里两者永远是断言，原样编译定位不到真实命中（联合复审实测裁掉了 `foo^bar`）。方言不猜，整次调用不表态。
+  // `-E` 实测与 JS 一致（`grep -E 'foo^bar'` 同样无命中），不在此列；`-F` 下整串是字面量，照常编译。
+  if (!flags.has('F') && !extended && explicit.some(hasMisplacedBreAnchor)) return { list: [], openEnded: false }
   // 反向引用（`\1`…`\9`）按捕获组编号解析：顶层分支独立编译会重排组号，`\2` 在分支里可能变成别的含义甚至
   // 八进制转义（`grep -E '(foo)|(Bz+E)\2'` 的第二段真实命中会因此定位不到）。组号跨分支改写不可还原，整次
   // 调用不表态（票 27 复审）。
@@ -418,7 +423,8 @@ function patternsOf(tokens: readonly string[]): ParsedPatterns {
  * 把 BRE（`grep` 默认的正则方言）翻成 JS 正则。
  *
  * BRE 里 `+ ? ( ) { } |` 是**字面量**，要写成 `\+ \? \( \) \{ \} \|` 才是操作符；JS 正好的反过来。只做这个
- * 方向的对换，其余字符原样保留（`* . [ ] ^ $` 两边同义）——不做对换的话 `grep 'a+b'` 会被当成量词、把真实
+ * 方向的对换，其余字符原样保留（`* . [ ]` 两边同义；`^` / `$` 只在 pattern 开头 / 结尾是锚点，位置不对时
+ * `patternsOf` 整次不表态，不会走到原样透传）——不做对换的话 `grep 'a+b'` 会被当成量词、把真实
  * 命中 `a+b` 丢掉（票 26 复审抓到）。
  * @param source - BRE 模式。
  * @returns JS 正则源码。
@@ -577,13 +583,14 @@ function splitAlternatives(source: string, extended: boolean): string[] | undefi
 }
 
 /**
- * 模式里有没有**以 `]` 开头的方括号表达式**：POSIX 把紧跟 `[` / `[^` 的 `]` 当字面成员（`[]a]` 是「`]` 或
- * `a`」），JS 却把 `[]` 读成空字符类、`[^]` 读成任意字符，后面的表达式随之改义、匹配集与 grep 不同。这类
- * 跨方言语义分歧不猜，整次调用不表态（见 `patternsOf`）。
+ * 模式里有没有 JS 表达不了等价语义的**方括号表达式**：原样交给 JS 会把真实命中定位错。三类构造——
+ * 首成员是 `]`（POSIX 当字面成员、JS 读成空字符类 / 任意字符）、方括号里的反斜杠（POSIX 当字面成员、JS 当
+ * 转义）、排序元素 `[. .]` 与等价类 `[= =]`（POSIX 按字符处理、JS 读成普通字符集）。这类跨方言语义分歧不猜，
+ * 整次调用不表态（见 `patternsOf`）。
  * @param source - pattern 原文。
  * @returns 有这种方括号表达式时为 `true`。
  */
-function hasLeadingBracketClose(source: string): boolean {
+function hasUnsupportedBracket(source: string): boolean {
   for (let index = 0; index < source.length; index++) {
     const char = source[index] as string
     if (char === '\\' && index + 1 < source.length) {
@@ -591,8 +598,67 @@ function hasLeadingBracketClose(source: string): boolean {
       continue
     }
     if (char !== '[') continue
-    const after = source[index + 1]
-    if (after === ']' || (after === '^' && source[index + 2] === ']')) return true
+    // `[]` / `[^]`：`]` 紧跟 `[` / `[^` 时是 POSIX 的字面成员，JS 却在这里收尾或按 `[^]` 吃任意字符。
+    if (source[index + 1] === ']') return true
+    let cursor = index + 1
+    if (source[cursor] === '^') cursor++
+    if (source[cursor] === ']') return true
+    for (; cursor < source.length; cursor++) {
+      const inner = source[cursor] as string
+      if (inner === '\\') return true
+      if (inner === '[' && (source[cursor + 1] === '.' || source[cursor + 1] === '=')) return true
+      if (inner === ']') break
+    }
+    index = cursor
+  }
+  return false
+}
+
+/**
+ * 模式里有没有**位置不对的 BRE 锚点**：BRE 的 `^` 只在 pattern 开头、`\(` 或 `\|` 之后是锚点，`$` 只在结尾或
+ * `\)` 之前是锚点，其余位置是字面量（`grep 'foo^bar'` 搜字面 `foo^bar`，BSD 实测）；JS 里两者永远是断言，
+ * 原样编译会命不中真实命中。`$` 紧挨 `\|` 时 BSD 当字面量、GNU 当锚点，方言不猜，一并算位置不对。方括号内是
+ * 字面成员，不算；`-E` 实测与 JS 一致，不在本函数职责内（调用方只对 BRE 用）。
+ * @param source - BRE pattern 原文。
+ * @returns 有位置不对的锚点时为 `true`。
+ */
+function hasMisplacedBreAnchor(source: string): boolean {
+  let bracketStart = -1
+  // 刚经过 pattern 开头、`\(` 或 `\|`：只有这些位置上的 `^` 才是锚点。
+  let atBranchStart = true
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index] as string
+    if (bracketStart >= 0) {
+      // 与 {@link hasAlternation} 同一套方括号边界：`]` 紧跟 `[` / `[^` 时是字面量。
+      const literalClose = index === bracketStart + 1
+        || (index === bracketStart + 2 && source[bracketStart + 1] === '^')
+      if (char === ']' && !literalClose) bracketStart = -1
+      continue
+    }
+    if (char === '[') {
+      bracketStart = index
+      atBranchStart = false
+      continue
+    }
+    if (char === '\\' && index + 1 < source.length) {
+      const next = source[index + 1] as string
+      atBranchStart = next === '(' || next === '|'
+      index++
+      continue
+    }
+    if (char === '^') {
+      if (!atBranchStart) return true
+      atBranchStart = false
+      continue
+    }
+    if (char === '$') {
+      const tail = source[index + 1]
+      const beforeGroupEnd = tail === '\\' && source[index + 2] === ')'
+      if (tail !== undefined && !beforeGroupEnd) return true
+      atBranchStart = false
+      continue
+    }
+    atBranchStart = false
   }
   return false
 }

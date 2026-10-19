@@ -569,3 +569,70 @@ describe('票 26/27 · 复审落修 · 方括号首成员 ]（2026-10-19）', ()
     for (const match of matches) expect(trimmed).toContain(match)
   })
 })
+
+describe('票 26/27 · 第 3 次复审落修（BRE 锚点 / 方括号 POSIX 构造）', () => {
+  it('BRE 非锚点位置的 ^ / $ 是字面量：整次调用不表态', () => {
+    expect(grepPatterns("grep -n -e MATCH -e 'foo^bar' f")).toEqual([])
+    expect(grepPatterns("grep -n -e MATCH -e 'foo$bar' f")).toEqual([])
+    // `$` 紧挨 `\|` 时 BSD 当字面量、GNU 当锚点：方言不猜。
+    expect(grepPatterns("grep -n 'b$\\|d$' f")).toEqual([])
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(400)}foo^bar${'z'.repeat(400)}`
+    expect(trimGrepLongLines(`f.ts:1:${content}`, "grep -n -e MATCH -e 'foo^bar' f")).toBe(`f.ts:1:${content}`)
+  })
+
+  it('BRE 锚点的合法位置（开头 / 结尾 / \\( 之后 / \\) 之前 / \\| 之后）照常编译', () => {
+    expect(grepPatterns("grep -n '^foo' f")[0]?.test('foo')).toBe(true)
+    expect(grepPatterns("grep -n '^foo' f")[0]?.test('xfoo')).toBe(false)
+    expect(grepPatterns("grep -n 'foo$' f")[0]?.test('foo')).toBe(true)
+    expect(grepPatterns("grep -n 'foo$' f")[0]?.test('foox')).toBe(false)
+    const anchored = grepPatterns("grep -n '^a\\|^b' f")
+    expect(anchored).toHaveLength(2)
+    expect(anchored[0]?.test('abc')).toBe(true)
+    expect(anchored[1]?.test('bcd')).toBe(true)
+    expect(anchored[0]?.test('xbc')).toBe(false)
+    expect(grepPatterns("grep -n '\\(^a\\)b' f")[0]?.test('ab')).toBe(true)
+    expect(grepPatterns("grep -n 'a\\(b$\\)' f")[0]?.test('ab')).toBe(true)
+    expect(grepPatterns("grep -n 'a\\(b$\\)' f")[0]?.test('abc')).toBe(false)
+    expect(grepPatterns("grep -n '[^abc]' f")[0]?.test('d')).toBe(true)
+    expect(grepPatterns("grep -n '[^abc]' f")[0]?.test('a')).toBe(false)
+    expect(grepPatterns("grep -nE 'foo^bar' f")).toHaveLength(1)
+    expect(grepPatterns("grep -nF 'foo^bar' f")).toHaveLength(1)
+  })
+
+  it('方括号内反斜杠 / 排序元素 / 等价类：整次调用不表态', () => {
+    expect(grepPatterns(String.raw`grep -nE '[\b]|MATCH' f`)).toEqual([])
+    expect(grepPatterns(String.raw`grep -nE '[\d]|MATCH' f`)).toEqual([])
+    expect(grepPatterns("grep -nE '[[.a.]]|MATCH' f")).toEqual([])
+    expect(grepPatterns("grep -nE '[[=a=]]|MATCH' f")).toEqual([])
+    expect(grepPatterns("grep -nE '[a[.b.]c]|MATCH' f")).toEqual([])
+  })
+
+  it('普通方括号与字面 [ 不再误判：照常拆分与裁剪', () => {
+    expect(grepPatterns("grep -nE 'a[[]b' f")[0]?.test('a[b')).toBe(true)
+    expect(grepPatterns("grep -nE '[.a.]|MATCH' f")).toHaveLength(2)
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(400)}`
+    const trimmed = trimGrepLongLines(`f.ts:1:${content}`, "grep -nE 'a[[]b|MATCH' f")
+    expect(trimmed).toContain('MATCH')
+    expect(trimmed).not.toBe(`f.ts:1:${content}`)
+  })
+
+  it.skipIf(!grepAvailable)('真实 grep 对拍：方括号 POSIX 构造的真实命中完整保留（整次不表态）', () => {
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(400)}b${'z'.repeat(400)}`
+    const matches = realGrepMatches(['-o', '-E', '[\\b]|MATCH'], content)
+    expect(matches).toContain('b')
+    const text = `f.ts:1:${content}`
+    const trimmed = trimGrepLongLines(text, String.raw`grep -nE '[\b]|MATCH' f`)
+    expect(trimmed).toBe(text)
+    for (const match of matches) expect(trimmed).toContain(match)
+  })
+
+  it.skipIf(!grepAvailable)('真实 grep 对拍：排序元素的真实命中完整保留（整次不表态）', () => {
+    const content = `${'x'.repeat(400)}MATCH${'y'.repeat(400)}a${'z'.repeat(400)}`
+    const matches = realGrepMatches(['-o', '-E', '[[.a.]]|MATCH'], content)
+    expect(matches).toContain('a')
+    const text = `f.ts:1:${content}`
+    const trimmed = trimGrepLongLines(text, "grep -nE '[[.a.]]|MATCH' f")
+    expect(trimmed).toBe(text)
+    for (const match of matches) expect(trimmed).toContain(match)
+  })
+})
