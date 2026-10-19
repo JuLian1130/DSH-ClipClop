@@ -433,17 +433,17 @@ describe('票 27 · 交替分支按顶层拆分', () => {
   })
 
   it('拆分后的分支仍按原方言编译：BRE 的 \\+ 在分支里仍是量词', () => {
-    const patterns = grepPatterns(String.raw`grep -n 'a\+b\|c\+d' f`)
-    expect(patterns).toHaveLength(2)
-    expect(patterns.some(rx => rx.test('aaab'))).toBe(true)
-    expect(patterns.some(rx => rx.test('cccd'))).toBe(true)
+    const command = String.raw`grep -n 'a\+b\|c\+d' f`
+    expect(grepPatterns(command)).toHaveLength(2)
+    expect(grepPatterns(command).some(rx => rx.test('aaab'))).toBe(true)
+    expect(grepPatterns(command).some(rx => rx.test('cccd'))).toBe(true)
   })
 
   it('ERE 的转义括号是字面量、不记层级：顶层 | 照样拆开', () => {
-    const patterns = grepPatterns('grep -nE "\\(a|b\\)" f')
-    expect(patterns).toHaveLength(2)
-    expect(patterns.some(rx => rx.test('(a'))).toBe(true)
-    expect(patterns.some(rx => rx.test('b)'))).toBe(true)
+    const command = 'grep -nE "\\(a|b\\)" f'
+    expect(grepPatterns(command)).toHaveLength(2)
+    expect(grepPatterns(command).some(rx => rx.test('(a'))).toBe(true)
+    expect(grepPatterns(command).some(rx => rx.test('b)'))).toBe(true)
   })
 
   it('空分支（ERE 的 a| / BRE 的 a\\| / 嵌套 (a|)）与空 pattern 一样整次不表态', () => {
@@ -614,11 +614,11 @@ describe('票 26/27 · 第 3 次复审落修（BRE 锚点 / 方括号 POSIX 构�
     expect(grepPatterns("grep -n '^foo' f")[0]?.test('xfoo')).toBe(false)
     expect(grepPatterns("grep -n 'foo$' f")[0]?.test('foo')).toBe(true)
     expect(grepPatterns("grep -n 'foo$' f")[0]?.test('foox')).toBe(false)
-    const anchored = grepPatterns("grep -n '^a\\|^b' f")
-    expect(anchored).toHaveLength(2)
-    expect(anchored[0]?.test('abc')).toBe(true)
-    expect(anchored[1]?.test('bcd')).toBe(true)
-    expect(anchored[0]?.test('xbc')).toBe(false)
+    const command = "grep -n '^a\\|^b' f"
+    expect(grepPatterns(command)).toHaveLength(2)
+    expect(grepPatterns(command)[0]?.test('abc')).toBe(true)
+    expect(grepPatterns(command)[1]?.test('bcd')).toBe(true)
+    expect(grepPatterns(command)[0]?.test('xabc')).toBe(false)
     expect(grepPatterns("grep -n '\\(^a\\)b' f")[0]?.test('ab')).toBe(true)
     expect(grepPatterns("grep -n 'a\\(b$\\)' f")[0]?.test('ab')).toBe(true)
     expect(grepPatterns("grep -n 'a\\(b$\\)' f")[0]?.test('abc')).toBe(false)

@@ -32,7 +32,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { trimGrepLongLines } from '../src/grepline.ts'
 import { replayArgsOf } from './helpers/grep-replay.ts'
 
@@ -138,8 +138,9 @@ function fragmentsOf(args: readonly string[], text: string): string[] {
       maxBuffer: 256 * 1024 * 1024,
     })
     return output.split('\n').filter((fragment) => fragment !== '')
-  } catch {
-    return []
+  } catch (error) {
+    if ((error as { status?: number }).status === 1) return []
+    throw error
   }
 }
 
@@ -254,6 +255,26 @@ const fixtureRows: FixtureRow[] = existsSync(FIXTURE_PATH)
   : []
 
 describe('grep 差分回放', () => {
+  it('oracle 无命中时返回空片段', () => {
+    expect(fragmentsOf(['-o', '-e', 'ABSENT'], 'MATCH')).toEqual([])
+  })
+
+  it('oracle 正则执行错误不能当作无命中', () => {
+    expect(() => fragmentsOf(['-o', '-e', '['], 'MATCH')).toThrow()
+  })
+
+  it('oracle 不存在时 fixture 回放必须失败', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-grep-missing-'))
+    try {
+      vi.stubEnv('PATH', dir)
+      const text = '1:' + 'x'.repeat(900) + 'MATCH' + 'y'.repeat(900)
+      expect(() => evaluateWithArgvs('grep -n MATCH f', text, [['-n', 'MATCH', 'f']])).toThrow()
+    } finally {
+      vi.unstubAllEnvs()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(!DIFF_ENABLED || CORPUS_ROOT === undefined)(
     '语料：真实 grep 的每个命中片段都完整保留',
     { timeout: 1_800_000 },
@@ -292,7 +313,10 @@ describe('grep 差分回放', () => {
         if (evaluated >= cap) break
       }
 
-      if (EXPORT_PATH !== undefined) writeFixture(EXPORT_PATH, [...passing, KNOWN_RED])
+      if (EXPORT_PATH !== undefined) {
+        const regressions = fixtureRows.filter(row => row.callId.startsWith('regression/'))
+        writeFixture(EXPORT_PATH, [...passing, ...regressions, KNOWN_RED])
+      }
       for (const failure of failures.slice(0, 20)) {
 
         reportFailure(failure.callId, failure.command, failure.fragment)
