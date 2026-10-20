@@ -22,6 +22,8 @@ export type {
   AskResult,
   BooleanAnswer,
   ChoiceAnswer,
+  JsonArray,
+  JsonObject,
   JsonValue,
   Level,
   ProviderResponse,

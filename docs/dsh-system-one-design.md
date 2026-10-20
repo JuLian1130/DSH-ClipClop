@@ -82,6 +82,8 @@
 
 后端限额与边界由 provider 校验，契约不承诺统一：题数（vllm 64；SGLang 无文档上限）、choice 选项（vllm 26，d3 255；SGLang 1–255，>26 需 tokenizer 支持双字母 label）、score 档位（vllm 2–10；SGLang 1–10）、`state`（vllm 任意 JSON；SGLang 只收字符串/对象/数组，`null`/标量 422）、question id（vllm 非空；SGLang 允许空）、`model`（vllm 可选；SGLang 必填）。
 
+以上限额与边界按 2026-10-20 的 vllm 与 SGLang 源码核对；接新版本时以实际源码为准。
+
 ## 已裁决的取舍
 
 - **远程面推迟到第二步**（理由见上）：`@Remote` 标记、typert 的生成产物、以及为装饰器付出的测试期转译，一起在客户端半落地时再进来。第一步因此没有装饰器，也就没有测试期的转译配置。
@@ -97,7 +99,7 @@
 - **boolean 的 `optionDescriptions`**：与 choice 用同一个概念，key 用 `true`/`false` 而不是后端的 `yes`/`no`；两边都原生支持，映射无损。
 - **`/v1/systemone` 归入 `systemone` kind，vllm 与 SGLang 都是目标**：两边都实现 System One 的三种题型，行为差异由 provider 抹平，见上面的字段对照与限额。同一个 kind 换 `baseUrl` 覆盖 TypeSafe、OpenCode Zen、vllm 与 SGLang。
 - **`/v1/score` 不做**：它是打分原语（`query` + `items` + `label_token_ids` → scores 矩阵），不是决策协议——用它就得由 provider 自己渲染题面、套 chat template、并对答案 label 做分词校验，而这些正是 `/v1/systemone` 在服务端替我们做完的事。它服务的那批模型里，能进决策端点的（如 d3 的 `D3ForSequenceClassification`）已由 `/v1/systemone` 提供原生 readout；不能进的（RewardModel、部分 classification）各有专用门面，所以 `/v1/score` 对决策用途没有额外覆盖。
-- **决策端点的模型边界**：vllm 按“有没有注册 read strategy”判断，覆盖生成模型、pooling（Clef）、classification（d3）与 diffusion（DiffusionGemma），没有 read strategy 返回 501；检查点可自带 `decision_config.json` 走原生 readout，没有就走通用渲染路径。SGLang 默认要求生成模型，decision checkpoint 与 Clef 走各自的 readout（`decision_config.json`/`joint_head_config.json`）；`--enable-mis`、`--dllm-algorithm`、LoRA adapter 与部分 chat-template 配置按名拒绝。接具体 checkpoint 时实测走哪条。
+- **决策端点的模型边界**：vllm 按 `model_config.architecture` 从注册表选 read strategy，覆盖生成模型、pooling（Clef）、classification（d3）与 diffusion（DiffusionGemma）；没有注册策略的架构返回 501，不会自动回退到通用渲染。d3 的 `D3ForSequenceClassification` 策略读取 checkpoint 的 `hf_config.decision_config` 走原生 readout；生成模型走通用渲染。SGLang 默认要求生成模型，decision checkpoint 与 Clef 走各自的 readout（`decision_config.json`/`joint_head_config.json`）；`--enable-mis`、`--dllm-algorithm`、LoRA adapter 与部分 chat-template 配置按名拒绝。接具体 checkpoint 时实测走哪条。
 - **SGLang 的 `/v1/decisions` 不做**：它对我们这个契约是 SGLang 自己的 `/v1/systemone` 的子集，而且在我们在意的部分是更窄的那个——`/v1/decisions` 的答案没有 `confidence`、选项上限 26；`/v1/systemone` 有 confidence（choice/score）、choice 最多 255、score 1–10。它多出来的 `temperature`、`prompt_format_version`、`return_prompt_token_ids` 都是调参与复现性用途，契约里没有位置；其中 `temperature` 对决策检查点也不该由调用方定——checkpoint 自带的 `decision_config.json` 里写着，`/v1/systemone` 会自动沿用。
 - **`OpenAI decisions` 指 OpenAI 的 Decisions API**（`POST /v1/decisions`，题型 `predicate`／`choice`／`score`），不是 SGLang 的同名端点：两家路径相同而载荷互不兼容——题目标识 `name` 对 `id`、答案数组对映射、概率 `[{value, probability}]` 对 `{名字: float}`。SGLang 那个不做，所以「当前范围」的 provider 列表里不会有同名项。
 - **拒答（refusal）走 `Warning`，不新增答案类型**：有的规范（如 OpenAI Decisions API）会让某一题返回 `type: "refusal"`——模型拒绝回答这一题，没有判断结果，也不带 `probability`／`choice`／`score`／`confidence`。它按我们的口径落成两件事：该题从 `answers` 缺席，provider 另报一条带 `questionId` 的 `Warning`；未具名的整次拒答算 provider 级失败、抛错。契约因此不需要新增答案类型——`Warning.questionId` 就是为这种情况留的。拒答只有 provider 看得到（响应里那一项写着 refusal），服务拿不到，所以它只能由 provider 自报，这正是「服务不合成警告」那条的用例。
