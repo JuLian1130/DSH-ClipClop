@@ -39,7 +39,26 @@ const IMPORT_PACKAGE = "import type {} from '@dsh-clipclop/dsh-system-one'\n"
 const ASK = `${IMPORT_PACKAGE}import type { Context } from '@deepseek-ai/cordis'
 
 declare const ctx: Context
-export const asked: Promise<unknown> = ctx.systemOne.ask({ target: 'x', state: null, questions: {} })
+export const asked: Promise<unknown> = ctx.systemOne.ask({
+  target: 'x',
+  state: null,
+  questions: {
+    q: {
+      type: 'choice',
+      instructions: 'q?',
+      options: ['a', 'b'],
+      optionDescriptions: { a: 'first' },
+    },
+    s: {
+      type: 'score',
+      instructions: 's?',
+      levels: ['low', { label: 'high' }],
+    },
+  },
+  instructions: 'shared',
+  images: ['data:image/png;base64,AAAA'],
+  chatTemplateKwargs: { enable_thinking: false },
+})
 `
 
 /** 反向对照：拿掉类型 import，同一个用法必须编译不过。 */

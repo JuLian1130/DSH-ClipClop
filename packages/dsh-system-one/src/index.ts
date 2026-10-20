@@ -23,6 +23,7 @@ export type {
   BooleanAnswer,
   ChoiceAnswer,
   JsonValue,
+  Level,
   ProviderResponse,
   Question,
   ScoreAnswer,

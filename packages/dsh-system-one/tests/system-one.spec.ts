@@ -59,6 +59,81 @@ describe('ctx.systemOne', () => {
     expect(typeof result.latencyMs).toBe('number')
   })
 
+  it('可选的请求字段原样交给 provider，target 不进入 provider 请求', async () => {
+    const ctx = await mount()
+    const provider = new StubProvider()
+    ctx.systemOne.register('stub', provider)
+
+    const questions: Record<string, Question> = {
+      'turn.continue': {
+        type: 'boolean',
+        instructions: '',
+        optionDescriptions: { true: '继续', false: '停下' },
+      },
+      'turn.route': {
+        type: 'choice',
+        instructions: '下一步走哪条路？',
+        options: ['fix', 'ask'],
+        optionDescriptions: { fix: '直接修', ask: '先问用户' },
+      },
+      'turn.severity': {
+        type: 'score',
+        instructions: '问题有多严重？',
+        levels: ['low', { label: 'high', examples: ['数据丢失'] }],
+      },
+    }
+    const request: SystemOne.AskRequest = {
+      target: 'stub',
+      state: { step: 3 },
+      questions,
+      instructions: '你是会话导航器。',
+      images: ['https://example.com/a.png', 'data:image/png;base64,AAAA'],
+      chatTemplateKwargs: { enable_thinking: false },
+    }
+
+    await ctx.systemOne.ask(request)
+
+    const { target: _target, ...expected } = request
+    expect(provider.calls[0]).toEqual(expected)
+    expect('target' in (provider.calls[0] as object)).toBe(false)
+  })
+
+  it('答案的可信度信号与档位回显原样交回', async () => {
+    const ctx = await mount()
+    const scripted: ProviderResponse = {
+      answers: {
+        'turn.continue': {
+          type: 'boolean',
+          probability: 0.8,
+          confidence: 0.7,
+          labelMass: 0.9,
+          argmaxIsLabel: true,
+        },
+        'turn.severity': {
+          type: 'score',
+          score: 0.4,
+          probabilities: [0.6, 0.4],
+          confidence: 0.5,
+          labelMass: 1,
+          argmaxIsLabel: true,
+          legend: ['low', { label: 'high', examples: ['数据丢失'] }],
+        },
+      },
+    }
+    ctx.systemOne.register('stub', new StubProvider(scripted))
+
+    const result = await ctx.systemOne.ask({
+      target: 'stub',
+      state: null,
+      questions: {
+        'turn.continue': { type: 'boolean', instructions: '?' },
+        'turn.severity': { type: 'score', instructions: '?', levels: ['low', 'high'] },
+      },
+    })
+
+    expect(result.answers).toEqual(scripted.answers)
+  })
+
   it('provider 漏答的题从 answers 缺席，warnings 原样交回', async () => {
     const ctx = await mount()
     const scripted: ProviderResponse = {
