@@ -1,6 +1,6 @@
 # dsh-system-one 设计
 
-状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置、两个 provider（`systemone`、`openai`）与接入层的条目页都已落地，决策通道子插件与其页面仍未开工（范围见「当前范围与非目标」，机制见「决策通道」）。远程面不做。
+状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置、两个 provider（`systemone`、`openai`）、接入层的条目页与决策通道子插件的宿主半（工具、技能、两档引导、开关、阈值）都已落地，通道的页面与 bundle 多行复验仍未开工（范围见「当前范围与非目标」，机制见「决策通道」）。远程面不做。
 
 一句话：把**带类型的题面**交给某个决策模型，拿回**带概率的答案**。这一层不产出内容，也不决定答案怎么用。术语见 `CONTEXT.md` 的「决策模型接入」。
 
@@ -127,15 +127,22 @@
 
 接入层之上有一个子插件，把决策判断交给 agent：需要判断、选择或评分时调它，而不是让主模型自己拿主意。它按第三方 provider 的用法接注册表（`inject: ['systemOne']` 后注册），用哪个条目由它自己的配置回答——接入层不因此新增插件面，也不因此获得全局状态。
 
-**工具面只有一个 `ask`**：参数是 `state`（契约里必填，供判断的状态）与 `questions`（id → 题型内联，每题自带 `instructions`）。请求级的 `instructions`、`images`、`chatTemplateKwargs` **不暴露给模型**——`instructions` 是 vllm 独有、SGLang 会抛错，暴露它等于给模型一个会踩的坑；`images` 模型产不出来；`chatTemplateKwargs` 是部署参数。`signal` 从工具执行上下文透传；`timeoutMs` 若上下文给出 deadline 就转成它，否则不传（工具运行上下文的字段形状尚未核实，实现票里核一次）。`target` 不进工具参数。不按题型拆成多个工具，也不提供排序、判定这类契约里没有的复合操作——生态里「少而正交」是共识，而契约本来就是一次批量 `ask`。
+**工具面只有一个 `ask`**：参数是 `state`（契约里必填，供判断的状态）与 `questions`（id → 题型内联，每题自带 `instructions`）。请求级的 `instructions`、`images`、`chatTemplateKwargs` **不暴露给模型**——`instructions` 是 vllm 独有、SGLang 会抛错，暴露它等于给模型一个会踩的坑；`images` 模型产不出来；`chatTemplateKwargs` 是部署参数。`signal` 从工具执行上下文透传；**`timeoutMs` 不传**——运行上下文（`packages/core/tools/src/contracts.ts` 的 `ToolRunContext`）只有 `signal` 与派发账目，没有 deadline 字段，而服务也不自己实现超时。`target` 不进工具参数。不按题型拆成多个工具，也不提供排序、判定这类契约里没有的复合操作——生态里「少而正交」是共识，而契约本来就是一次批量 `ask`。
 
-**引导分两档，设置页切换，默认第一档**：第一档是工具描述 + 一个技能（工具描述就是给模型看的——DSH 会把每个工具的 guidance 段渲染进系统提示；技能登记进 DSH 的技能注册表，正文随包交付，写「什么时候该用、什么时候是类别错误」的细则）；第二档在第一档之上再经 `dsh-system-prompt` 的 `PromptSection` 注册表注入一句固定引导（该注册表存在，`section` 的签名尚未核实，实现票里先核）。技能注册表声明为**可选**依赖：profile 没组合技能子系统时插件照常加载，只是少一个技能。不做更强形态（拦截或替换主模型的判断）——那是编排层的事，且要动全局行为。
+**引导分两档，设置页切换，默认第一档**：第一档是工具描述 + 一个技能（工具描述就是给模型看的——DSH 会把每个工具的 guidance 段渲染进系统提示；技能登记进 DSH 的技能注册表，正文随包交付，写「什么时候该用、什么时候是类别错误」的细则）；第二档在第一档之上再经 `dsh-system-prompt` 的 `PromptSection` 注册表注入一句固定引导（`section({ name, order, text, interpolate? })` 返回 disposer，位次表 `SECTION_ORDERS` 是闭集、第三方只能给数字）。技能注册表声明为**可选**依赖：profile 没组合技能子系统时插件照常加载，只是少一个技能——cordis 的 `inject` 没有「可选」写法，落地用一条单独的 `ctx.inject(['skills'], …)` 纤维等它出现，缺席时那条纤维不激活。不做更强形态（拦截或替换主模型的判断）——那是编排层的事，且要动全局行为。
 
 **开关默认关闭，关掉即不注册工具**：工具不存在，它的 guidance 段也不存在。本仓先例是改 agent 行为的能力默认关闭；`ctx.tools.register` 返回 disposer，配合 `ctx.effect` 的动态注册有现成写法（`dsh-tool-subagent` 与 `dsh-experimental-tool-agent-team` 各一处）。
 
 **阈值默认不设，设置页可开可设**：开启后每题给一个确定性——是非题用 `|probability − 0.5| × 2`，choice/score 用 provider 自报的 `confidence`；低于阈值该题标 `abstain`，答案与概率仍原样交回。provider 没报可信度、分布也缺席时确定性算不出来，同样标 `abstain` 并写明原因——「判不出来」不等于「放行」。标记的形状是工具返回里新增的一层 `decisions: Record<题 id, { verdict: 'act' | 'abstain'; reason?: string }>`；阈值关闭时这一层不出现，`answers` 本体不变。阈值只进配置、不进工具参数（取值 0–1，越界按配置非法在加载期报错）：模型能自己放宽的闸门不是闸门。确定性公式是我们给的语义，而 provider 的 `confidence` 定义各不相同，同一阈值在不同 provider 上松紧不同——这一点要写进页面文案与 README，工具描述里也要说明 `decisions` 层的含义（`abstain` 是「低于你设的可信度门槛」，不是「答案错了」）。
 
 不采用生态里「由判定器决定要不要披露这个工具」的做法：mu 的实测记录是它在 Terminal-Bench 2.1 上被问了 162 次、从未生效，交互会话里问了 34 次、一个都没打开，还让每轮等待（p50 0.91 s / p90 8.9 s）。开关由使用者控制。
+
+落地时的四条口径（都进了 `packages/dsh-system-one-channel` 的判据）：
+
+- **`questions` 在工具参数里是数组，不是契约那张映射**：工具 schema 只能给每个属性一个定名形状，异构的映射值表达不出来，模型就只能靠描述猜每道题有哪些字段。每项自带 `id`，派发前把数组转成 `Record<id, Question>`；重复 id 直接报错点名（后一道会顶掉前一道，等于丢题）。
+- **技能跟着开关，不独立于工具**：关掉时工具、引导段、技能一起不注册。留一个指引模型去调不存在工具的技能，比不装技能更糟。
+- **`enabled` 不标 volatile，另外三个字段标**：后三项按每次调用／每次组装现读，所以设置页改完即生效；`enabled` 决定的是装载期注册什么，改它本来就该重挂载插件。
+- **引导句按档位现读**：第二档那句引导注册成一个 `text: () => …` 的段（第一档返回空串，渲染时空段被丢掉），所以切档位也不需要重载插件。
 
 **通道的页面**（客户端半）管三件事：选当前条目（选项跨命名空间读条目页那份 `entries`）、切引导档位、开/设阈值。跨命名空间只读不写——写没有先例。
 
@@ -170,7 +177,7 @@
 
 1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册，两个 provider 都已落地。`systemone` 按「字段与后端对照」与「provider 怎么区分两家的行为」做映射与拒绝规则——`instructions` 非空抛错、富 `levels` 按 `legend` 回显核对、`labelMass` 按响应字段读并在缺席时归一到 1.0、`legend` 长度校验、后端错误码与限额连原文包成 provider 级失败；`openai` 按「`openai` provider（OpenAI Decisions API）」那节接官方载荷。两者共用同一层 HTTP 与凭据：凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析（`ctx.get` 取可选服务，没装凭据子系统时用到才报错），以 `Authorization: Bearer` 放进请求。
 2. **接入层的条目页**（客户端半，已落地）：设置页里的「决策模型」页签，增删改条目，密钥写凭据域；口径见「条目配置与设置页」末四条。
-3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值，以及它自己的页面。
+3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值（宿主半已落地，在独立包里），以及它自己的页面（未开工）。
 
 不在第二步：远程面（不做）、mock、通用 HTTP、MCP 面、策略插件。其余非目标见上面「做什么、不做什么」。
 
@@ -182,7 +189,7 @@
 - 跨包声明合并：`tests/declaration-merge.spec.ts` 在临时目录里搭一个真实消费者包跑 `tsc`，fixture 带上可选字段，并带反向对照（不 import 本包时同一个用法必须编译失败）与插件面断言（`ctx.systemOne.providers()` 取不到）。
 - provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端 4xx/5xx 与限额原文、凭据解析与 `Bearer`。
 - `openai` provider：`tests/openai-provider.spec.ts` 覆盖三种题型的题面数组与答案映射、`state`／`instructions`／`images` 落成哪段 `input`、`chatTemplateKwargs` 与是非题 `optionDescriptions` 与非字符串 `Level` 的拒绝、具名拒答的缺席+警告与未具名拒答的整次失败、两个 kind 按 `target` 各自命中自己的端点；**未对真实端点实测**，接上真实端点后补一次。
-- 决策通道：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导、阈值语义（两种确定性公式、算不出时按 `abstain`）各有可跑用例。
+- 决策通道（宿主半在 `packages/dsh-system-one-channel/tests/`）：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导（第二档比第一档只多那一句）、阈值语义（两种确定性公式、算不出时按 `abstain`）、配置非法在装载期点名键名各有可跑用例；技能注册表的缺席由「不装它也能挂起来」那一条覆盖。
 - 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、协议下拉的两个取值等于 `Kind` 枚举、宿主拒绝／传输层失败／凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md`）。
 - 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——`pnpm pack` 进临时 profile、按 `dsh.profile.bundles` 组合出这一行、用真实 Loader 启动并跑启动审计，断言该行 ACTIVE 且 `ctx.systemOne` 注册假 provider 后 `ask` 成功；profile 里装不上本包时该 bundle 被跳过、原因点名本包（复核记录见 `.scratch/dsh-system-one/profile-load.md`）。bundle 加上通道行后**仍需**复验多行 patch。
 - 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。

@@ -1,0 +1,12 @@
+# 本包提供的行：决策通道子插件（一个 `systemone_ask` 工具、一个技能、两档引导、默认关闭的开关、可选阈值）。
+# 行 id 同时是它客户端半的配置命名空间；name 用包名，交 Node 解析到安装副本。
+# 默认关闭：先在接入层那一行配上条目，再打开这里的开关并用 `target` 指名用哪个条目。
+- insert:
+    - id: dsh-system-one-channel
+      name: '@dsh-clipclop/dsh-system-one-channel'
+      # 配置示例，去掉行首的 `# ` 即可用（`threshold` 是「开关 + 数值」，数值只在开启后读取）。
+      # config:
+      #   enabled: true
+      #   target: sglang_local
+      #   guidance: tool
+      #   threshold: { enabled: false, value: 0.5 }
