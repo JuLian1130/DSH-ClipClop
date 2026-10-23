@@ -36,9 +36,12 @@ export function decide(
   answers: Readonly<Record<string, Answer>>,
   threshold: number,
 ): Record<string, Decision> {
-  const decisions: Record<string, Decision> = {}
+  // 无原型：题 id 是模型给的，`__proto__` 这类键在普通对象上会改掉原型，该题的标记就被静默吞掉。
+  const decisions = Object.create(null) as Record<string, Decision>
   for (const id of Object.keys(questions)) {
-    const answer = answers[id]
+    // 用自有键判缺席：`answers` 是 provider 交回的对象，`constructor`／`toString` 这类 id 会读到继承来的值，
+    // 把「没答」误报成「没报 confidence」。
+    const answer = Object.hasOwn(answers, id) ? answers[id] : undefined
     if (answer === undefined) {
       decisions[id] = { verdict: 'abstain', reason: 'the decision model returned no answer for this question' }
       continue

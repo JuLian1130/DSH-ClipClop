@@ -177,6 +177,30 @@ describe('可信度门槛', () => {
     expect(result.answers).toEqual(answers)
   })
 
+  it('题 id 与对象原型上的键同名时，漏答照常报「没答」而不是「没报 confidence」', async () => {
+    const questions = [{ id: 'constructor', type: 'boolean', instructions: 'Is the build green?' }]
+    const { ctx } = await mount({
+      channel: { enabled: true, target: TARGET, threshold: { enabled: true, value: 0.6 } },
+    })
+    const result = valueOf(await callTool(ctx, { state: STATE, questions })) as {
+      decisions: Record<string, { verdict: string; reason?: string }>
+    }
+    expect(result.decisions['constructor']?.verdict).toBe('abstain')
+    expect(result.decisions['constructor']?.reason).toContain('no answer')
+  })
+
+  it('题 id 是 `__proto__` 这类键时标记照样出：它是模型给的不可信输入', async () => {
+    const questions = [{ id: '__proto__', type: 'boolean', instructions: 'Is the build green?' }]
+    const { ctx } = await mount({
+      channel: { enabled: true, target: TARGET, threshold: { enabled: true, value: 0.6 } },
+    })
+    const result = valueOf(await callTool(ctx, { state: STATE, questions })) as {
+      decisions: Record<string, { verdict: string }>
+    }
+    expect(Object.keys(result.decisions)).toEqual(['__proto__'])
+    expect(result.decisions['__proto__']?.verdict).toBe('abstain')
+  })
+
   it('确定性算不出来时同样标 abstain 并写明原因', async () => {
     const answers = { pick: { type: 'choice', choice: 'b' } } satisfies Readonly<Record<string, Answer>>
     const questions = [
