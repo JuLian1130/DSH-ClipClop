@@ -77,7 +77,7 @@ export type EntriesPageProps =
   & InjectFace<EntriesPageInjected>
 
 /**
- * 新条目的 id：`<名称的 slug>_<4 位十六进制>`。
+ * 新条目的 id：`<名称的 slug>_<序号>`。
  *
  * 字符集只取 `[A-Za-z0-9_]`：凭据引用名是 POSIX 环境变量名（`[A-Za-z_][A-Za-z0-9_]*`），而引用名的默认
  * 值就是这个 id，带连字符的 slug 写不进凭据域。名称是空的（刚点「新增」时）或全是非 ASCII 字符时退化成

@@ -309,16 +309,22 @@ describe('条目页：密钥与失败态', () => {
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(zh.saveFailed) })
   })
 
-  it('保存期间行内控件禁用：写回返回时不会用旧快照覆盖这期间敲进去的字', async () => {
+  it('保存期间行内控件全都禁用：写回返回时不会用旧快照覆盖这期间敲进去的字', async () => {
     const fixture = await mounted()
     let release = (): void => {}
     fixture.form.hold = new Promise<void>((resolve) => { release = () => { resolve() } })
-    renderPage(fixture, [{ id: 'e1', label: '旧名字', kind: 'systemone', baseUrl: 'http://127.0.0.1:1', model: 'm' }])
+    const { container } = renderPage(fixture, [{ id: 'e1', label: '旧名字', kind: 'systemone', baseUrl: 'http://127.0.0.1:1', model: 'm' }])
+
+    // 一行里六处手能碰到的地方：名称/地址/模型/密钥四个输入框、协议下拉、删除按钮。漏挂一处，
+    // 那处敲进去的字照样会被写回返回时的旧快照覆盖。
+    const rowControls = (): readonly HTMLInputElement[] =>
+      [...container.querySelectorAll<HTMLInputElement>('section input:not([readonly]), section select, section button')]
+    expect(rowControls()).toHaveLength(6)
 
     fireEvent.click(screen.getByText(zh.save))
-    await waitFor(() => { expect((field(zh.label) as HTMLInputElement).disabled).toBe(true) })
+    await waitFor(() => { expect(rowControls().every(control => control.disabled)).toBe(true) })
     release()
-    await waitFor(() => { expect((field(zh.label) as HTMLInputElement).disabled).toBe(false) })
+    await waitFor(() => { expect(rowControls().some(control => control.disabled)).toBe(false) })
     expect(savedEntries(fixture)[0]?.label).toBe('旧名字')
   })
 
