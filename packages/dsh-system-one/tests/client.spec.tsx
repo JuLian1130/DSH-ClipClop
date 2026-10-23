@@ -182,6 +182,24 @@ describe('条目页：增删改', () => {
     expect(saved.map(entry => entry.id)).toEqual([first!.value, second!.value])
   })
 
+  it('新增行填名称后换成可读 id；保存之后改名不再动摇它', async () => {
+    const fixture = await mounted()
+    const { container } = renderPage(fixture)
+
+    fireEvent.click(screen.getByText(zh.add))
+    fillRow({ label: 'Local SGLang' })
+    expect(idInputs(container)[0]!.value).toMatch(/^local_sglang_[0-9a-f]{4}$/)
+    fillRow({ model: 'm', baseUrl: 'http://127.0.0.1:1' })
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
+    const savedId = savedEntries(fixture)[0]!.id
+
+    fireEvent.change(field(zh.label), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect(fixture.form.mutations).toHaveLength(2) })
+    expect(savedEntries(fixture)[0]!.id).toBe(savedId)
+  })
+
   it('删除与修改：保存写回的是剩下的条目与改过的字段', async () => {
     const fixture = await mounted()
     const initial: readonly Entry[] = [
@@ -206,8 +224,7 @@ describe('条目页：增删改', () => {
     }])
   })
 
-  it('协议下拉只有两个选项，取值是 kind 枚举的两个值', async () => {
-    const fixture = await mounted()
+  it('协议下拉只有两个选项，取值是 kind 枚举的两个值', async () => {    const fixture = await mounted()
     const { container } = renderPage(fixture)
     fireEvent.click(screen.getByText(zh.add))
 
@@ -290,6 +307,33 @@ describe('条目页：密钥与失败态', () => {
     fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(zh.saveFailed) })
+  })
+
+  it('写回的传输层失败（mutate reject）同样报错，不静默', async () => {
+    const fixture = await mounted()
+    fixture.form.throwOnMutate = true
+    renderPage(fixture)
+
+    fireEvent.click(screen.getByText(zh.add))
+    fillRow({ label: 'x', model: 'm', baseUrl: 'http://127.0.0.1:1' })
+    fireEvent.click(screen.getByText(zh.save))
+
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(zh.saveFailed) })
+  })
+
+  it('不带密钥的条目保存两次：第二次也不会写上一个不存在的引用名', async () => {
+    const fixture = await mounted()
+    renderPage(fixture)
+
+    fireEvent.click(screen.getByText(zh.add))
+    fillRow({ label: '无密钥', model: 'm', baseUrl: 'http://127.0.0.1:1' })
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect(fixture.form.mutations).toHaveLength(2) })
+
+    expect(savedEntries(fixture)[0]?.apiKeyEnv).toBe('')
+    expect(fixture.credentials.writes).toEqual([])
   })
 })
 

@@ -118,7 +118,7 @@
 
 落地时的四条口径（都进了 `tests/client.spec.tsx` 的判据）：
 
-- **`id` 的字符集由凭据引用名决定**：引用名是 POSIX 环境变量名（`packages/credentials/credentials/src/index.ts` 的 `REF_PATTERN` = `^[A-Za-z_][A-Za-z0-9_]*$`），而引用名的默认值就是这个 `id`——带连字符的 slug（本文件上面举例的 `sglang-local-3f9c` 那种）在 `remote.credentials.set` 会被整次拒成 `gateway/bad-request`。所以页面生成的 `id` 只用 `[A-Za-z0-9_]`：`<名称的 ASCII slug>_<4 位十六进制>`，名称是中文或空时退化成 `entry_<hex>`；撞了已有 id 就换后缀。**手写 patch 时**若打算让密钥存在默认引用名下（`apiKeyEnv` 留空或等于 `id`），`id` 也必须落在这个字符集里；想用带连字符的 id，就显式给一个合法的 `apiKeyEnv`。
+- **`id` 的字符集由凭据引用名决定**：引用名是 POSIX 环境变量名（`packages/credentials/credentials/src/index.ts` 的 `REF_PATTERN` = `^[A-Za-z_][A-Za-z0-9_]*$`），而引用名的默认值就是这个 `id`——带连字符的 slug（本文件上面举例的 `sglang-local-3f9c` 那种）在 `remote.credentials.set` 会被整次拒成 `gateway/bad-request`。所以页面生成的 `id` 只用 `[A-Za-z0-9_]`：`<名称的 ASCII slug>_<4 位十六进制>`，名称是中文时退化成 `entry_<hex>`；撞了已有 id 就换后缀。**新增那一刻还没有名称**，所以先给 `entry_<hex>`，名称第一次填上时重算成 slug 那份，**保存之后固定**（下游配置里的 `target` 指着它）。**手写 patch 时**若打算让密钥存在默认引用名下（`apiKeyEnv` 等于 `id`），`id` 也必须落在这个字符集里；`apiKeyEnv` 留空表示这个条目不使用凭据（`wire.ts` 对空引用名不解析），想用带连字符的 id 就显式给一个合法的 `apiKeyEnv`。
 - **一次原子写回**：保存提交的是整份数组（`{ op: 'set', path: ['entries'] }`），本包没有第二个可写字段，所以写回路径上不会出现非 volatile 的写入（宿主对非 volatile 路径直接拒绝）。
 - **先写凭据、再写配置**：`apiKeyEnv` 只在「这次真写了密钥」或「条目本来就带引用名」时出现；空串在 schema 里就是「这个条目不使用凭据」，无条件写上会让不带密钥的条目在 `ask` 时报「凭据没配」。凭据写失败整次不保存，避免配置指向一个不存在的密钥。
 - **协议下拉的两个取值就是 `Kind` 的两个值**（`systemone`、`openai`），页面不翻译它们：用户必须照着服务方给的接口类型选。
@@ -183,6 +183,6 @@
 - provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端 4xx/5xx 与限额原文、凭据解析与 `Bearer`。
 - `openai` provider：`tests/openai-provider.spec.ts` 覆盖三种题型的题面数组与答案映射、`state`／`instructions`／`images` 落成哪段 `input`、`chatTemplateKwargs` 与是非题 `optionDescriptions` 与非字符串 `Level` 的拒绝、具名拒答的缺席+警告与未具名拒答的整次失败、两个 kind 按 `target` 各自命中自己的端点；**未对真实端点实测**，接上真实端点后补一次。
 - 决策通道：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导、阈值语义（两种确定性公式、算不出时按 `abstain`）各有可跑用例。
-- 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、协议下拉的两个取值等于 `Kind` 枚举、宿主拒绝与凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md`）。
+- 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、协议下拉的两个取值等于 `Kind` 枚举、宿主拒绝／传输层失败／凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md`）。
 - 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——`pnpm pack` 进临时 profile、按 `dsh.profile.bundles` 组合出这一行、用真实 Loader 启动并跑启动审计，断言该行 ACTIVE 且 `ctx.systemOne` 注册假 provider 后 `ask` 成功；profile 里装不上本包时该 bundle 被跳过、原因点名本包（复核记录见 `.scratch/dsh-system-one/profile-load.md`）。bundle 加上通道行后**仍需**复验多行 patch。
 - 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。

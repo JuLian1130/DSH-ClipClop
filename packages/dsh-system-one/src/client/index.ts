@@ -31,7 +31,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { Entry } from '../config.ts'
 import { en, zh, type SystemOneLocaleKey } from './locales.ts'
-import { EntriesPage, type EntryDraft, type SaveOutcome } from './page.tsx'
+import { EntriesPage, refOf, type EntryDraft, type SaveOutcome } from './page.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -57,7 +57,7 @@ interface Section {
   entries?: readonly Entry[]
 }
 
-/** 注册这一页所需的客户端服务；凭据域按命名空间单独 inject，写不进去时只让这一个动作失败。 */
+/** 注册这一页所需的客户端服务；凭据域缺席（profile 没装凭据子系统）时这一页根本不注册。 */
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.credentials']
 
 /**
@@ -69,14 +69,13 @@ export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.crede
  * @returns 配置里的条目（返回字面量的类型，才满足写回值 `JsonValue` 的索引签名要求）。
  */
 function toEntry(row: EntryDraft) {
-  const ref = row.apiKeyEnv !== '' ? row.apiKeyEnv : row.id
   return {
     id: row.id,
     label: row.label,
     kind: row.kind,
     baseUrl: row.baseUrl,
     model: row.model,
-    apiKeyEnv: row.key !== '' || row.apiKeyEnv !== '' ? ref : '',
+    apiKeyEnv: row.key !== '' || row.apiKeyEnv !== '' ? refOf(row) : '',
   } satisfies Entry
 }
 
@@ -95,6 +94,9 @@ export function apply(ctx: Context): void {
   }
   /**
    * 保存整份条目：密钥先进凭据域，再把数组写回配置。
+   *
+   * 写回的两种失败都落成结果码：宿主拒绝时 `mutate` resolve `false`，传输层失败时它 **reject**——后者若不
+   * 接住，页面上不会有任何提示，用户会以为已经保存。
    * @param rows - 页面上的全部行。
    * @returns 保存结果；不抛错（失败也是结果的一种）。
    */
@@ -102,12 +104,16 @@ export function apply(ctx: Context): void {
     for (const row of rows) {
       if (row.key === '') continue
       try {
-        await ctx.remote.credentials.set(row.apiKeyEnv !== '' ? row.apiKeyEnv : row.id, row.key)
+        await ctx.remote.credentials.set(refOf(row), row.key)
       } catch {
         return 'credential'
       }
     }
-    return await form.mutate([{ op: 'set', path: ['entries'], value: rows.map(toEntry) }]) ? 'saved' : 'refused'
+    try {
+      return await form.mutate([{ op: 'set', path: ['entries'], value: rows.map(toEntry) }]) ? 'saved' : 'refused'
+    } catch {
+      return 'refused'
+    }
   }
   ctx.effect(() => ctx.configForms.whileServed([PREFERENCE_NAMESPACE], () => ctx.slots.inject(
     'settings.plugins.tab',

@@ -23,7 +23,7 @@ dsh plugin --profile <name> add /tmp/dsh-system-one/dsh-clipclop-dsh-system-one-
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
-| `id` | 是 | 内部标识，**唯一**。`ask` 的 `target` 用它指名条目。页面新增条目时自动生成（`<名称的 slug>_<4 位十六进制>`，字符集只有 `[A-Za-z0-9_]`：密钥的引用名默认就是它，而引用名必须是 POSIX 环境变量名）；手写 patch 时自己给一个唯一值，若打算用默认引用名存密钥，同样只用这套字符。 |
+| `id` | 是 | 内部标识，**唯一**。`ask` 的 `target` 用它指名条目。页面新增条目时自动生成（先 `entry_<4 位十六进制>`，名称一填就换成 `<名称的 slug>_<4 位十六进制>`，保存后固定；字符集只有 `[A-Za-z0-9_]`：密钥的引用名默认就是它，而引用名必须是 POSIX 环境变量名）；手写 patch 时自己给一个唯一值，若打算用默认引用名存密钥，同样只用这套字符。 |
 | `label` | 是 | 显示名称，给人看。**可以不唯一**：两个条目都叫「本地 SGLang」是合法的。 |
 | `kind` | 是 | 协议，二选一：`systemone`（vllm／SGLang／TypeSafe 的 `/v1/systemone`）或 `openai`（OpenAI Decisions API）。 |
 | `baseUrl` | 是 | 端点地址。 |

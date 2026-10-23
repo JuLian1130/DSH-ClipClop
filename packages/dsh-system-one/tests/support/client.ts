@@ -13,7 +13,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { Entry } from '../../src/config.ts'
 import * as client from '../../src/client/index.ts'
-import { en, zh, type SystemOneLocaleKey } from '../../src/client/locales.ts'
+import { zh, type SystemOneLocaleKey } from '../../src/client/locales.ts'
 
 /** 本插件的 settings section 值。 */
 export interface StubSection {
@@ -32,8 +32,10 @@ export class StubForm {
   entries: readonly Entry[] = []
   /** 按顺序记下每一次原子写入：每个元素是一组 op（整份 `entries` 一次写入）。 */
   mutations: StubSettingOp[][] = []
-  /** 宿主是否接受写入；置为 false 即模拟业务拒绝。 */
+  /** 宿主是否接受写入；置为 false 即模拟业务拒绝（`mutate` resolve false）。 */
   accepted = true
+  /** 置为 true 即模拟传输层失败：`mutate` 直接 reject。 */
+  throwOnMutate = false
   private readonly listeners = new Set<() => void>()
 
   getSnapshot(): {
@@ -63,6 +65,7 @@ export class StubForm {
    */
   async mutate(ops: readonly StubSettingOp[]): Promise<boolean> {
     this.mutations.push(ops.map(op => ({ ...op, path: [...op.path] })))
+    if (this.throwOnMutate) throw new Error('fixture: settings.mutate transport failure')
     if (!this.accepted) return false
     for (const op of ops) {
       if (op.path[0] !== 'entries') throw new Error(`fixture: unexpected setting path ${op.path.join('.')}`)
@@ -98,7 +101,6 @@ export class StubCredentials {
 
 /** 一条被捕获的槽位注册。 */
 export interface CapturedEntry {
-  readonly slot: string
   readonly options: {
     readonly name: string
     readonly id?: string
@@ -113,17 +115,14 @@ export interface CapturedEntry {
 
 /** 装好的一份浏览器半夹具。 */
 export interface ClientFixture {
-  readonly ctx: Context
   readonly form: StubForm
   readonly credentials: StubCredentials
   /** 按顺序记下 `whileServed` 声明的命名空间。 */
   readonly served: readonly (readonly string[])[]
-  /** 当前语言下的文案读取器（照 `ctx.locale.bind(NS)` 的形状）。 */
+  /** 文案读取器（照 `ctx.locale.bind(NS)` 的形状）。 */
   readonly t: (key: SystemOneLocaleKey) => string
   /** 某一个槽位当前的注册条目。 */
   entries(slot: string): readonly CapturedEntry[]
-  /** 切到另一种语言。 */
-  setLocale(next: 'zh' | 'en'): void
   dispose(): Promise<void>
 }
 
@@ -136,19 +135,18 @@ export async function mountClient(): Promise<ClientFixture> {
   const credentials = new StubCredentials()
   const entries = new Map<string, CapturedEntry[]>()
   const served: Array<readonly string[]> = []
-  let active: 'zh' | 'en' = 'zh'
   const slots = {
     inject: (slot: string, register: () => () => void) => register(),
     register: (options: CapturedEntry['options'], component: unknown) => {
       const list = entries.get(options.name) ?? []
-      list.push({ slot: options.name, options, component })
+      list.push({ options, component })
       entries.set(options.name, list)
       return () => {}
     },
   }
   const locale = {
     register: () => () => {},
-    bind: () => (key: SystemOneLocaleKey) => (active === 'zh' ? zh : en)[key],
+    bind: () => (key: SystemOneLocaleKey) => zh[key],
   }
   const configForms = {
     get: () => form.asConfigForm(),
@@ -168,13 +166,11 @@ export async function mountClient(): Promise<ClientFixture> {
   ctx.reflect.provide('remote.credentials', credentials)
   await ctx.plugin({ inject: [...client.inject], apply: client.apply as (ctx: Context) => void })
   return {
-    ctx,
     form,
     credentials,
     served,
-    t: (key) => (active === 'zh' ? zh : en)[key],
+    t: (key) => zh[key],
     entries: (slot) => entries.get(slot) ?? [],
-    setLocale: (next) => { active = next },
     dispose: async () => { await ctx.fiber.dispose() },
   }
 }

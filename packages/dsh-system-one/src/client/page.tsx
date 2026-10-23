@@ -24,9 +24,15 @@ import type { Entry, Kind } from '../config.ts'
 /** 协议的两个取值：下拉的选项与 `Kind` 枚举逐一相等（`satisfies` 让 tsc 在枚举变化时报错）。 */
 const KINDS = ['systemone', 'openai'] as const satisfies readonly Kind[]
 
-/** 页面上的一行：配置里的五个字段，加一份不落盘的密钥草稿。 */
+/**
+ * 空列表的**稳定引用**：选择器的返回值会被 `useSyncExternalStore` 反复比较，每次 new 一个空数组会被判成
+ * 「快照变了」，进而无限重渲染。
+ */
+const NO_ENTRIES: readonly Entry[] = []
+
+/** 页面上的一行：配置里的五个字段，加两份不落盘的草稿（密钥与「还没保存过的行」）。 */
 export interface EntryDraft {
-  /** 内部标识：新增时由 {@link newEntryId} 生成，之后只读。 */
+  /** 内部标识：新增时由 {@link newEntryId} 生成，保存后只读。 */
   readonly id: string
   readonly label: string
   readonly kind: Kind
@@ -36,6 +42,19 @@ export interface EntryDraft {
   readonly apiKeyEnv: string
   /** 这次要写进凭据的密钥；空串＝不改。它**不进配置**。 */
   readonly key: string
+  /** 还没保存过的行：名称一变就重算 `id`（保存之后才固定，与票面「保存后固定」一致）。 */
+  readonly fresh: boolean
+}
+
+/**
+ * 一条草稿的凭据引用名：有引用名就照写的用，否则用这个条目的 `id`。
+ *
+ * 写配置与写凭据两处必须用同一个名字，否则密钥存在一个引用名下、请求去另一个引用名下找。
+ * @param row - 页面上的一行。
+ * @returns 引用名。
+ */
+export function refOf(row: EntryDraft): string {
+  return row.apiKeyEnv !== '' ? row.apiKeyEnv : row.id
 }
 
 /** 保存一次的结果；失败不抛错，页面按结果码显示对应的一句话。 */
@@ -75,7 +94,7 @@ export function newEntryId(label: string, taken: readonly string[]): string {
 }
 
 /**
- * 配置里的一条 → 页面上的一行；密钥草稿从空开始。
+ * 配置里的一条 → 页面上的一行；密钥草稿从空开始，且这不是「还没保存过的行」。
  * @param entry - 配置里的条目。
  * @returns 页面用的草稿行。
  */
@@ -88,6 +107,7 @@ function toDraft(entry: Entry): EntryDraft {
     model: entry.model,
     apiKeyEnv: entry.apiKeyEnv ?? '',
     key: '',
+    fresh: false,
   }
 }
 
@@ -160,7 +180,7 @@ const PAGE_STYLE = { padding: '8px 0 24px' } as const
  * @returns 条目列表、增删改的控件与保存结果。
  */
 export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
-  const stored = useEntries(section => section?.entries ?? [])
+  const stored = useEntries(section => section?.entries ?? NO_ENTRIES)
   // `draft` 为 null 表示"没动过"：这时照配置里的值显示，所以 Host 侧晚到的快照与保存后的新值都能直接看见。
   const [draft, setDraft] = useState<readonly EntryDraft[] | null>(null)
   const [busy, setBusy] = useState(false)
@@ -169,15 +189,23 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
 
   /**
    * 改一行里的若干项。
+   *
+   * 还没保存过的行在名称变化时把 `id` 一起重算——id 要「可读」，而新增那一刻还没有名称可读；保存之后就
+   * 固定下来，改名不再动摇它（下游配置里的 `target` 指着它）。
    * @param index - 行的下标。
    * @param patch - 要改的项。
    */
   const edit = (index: number, patch: Partial<EntryDraft>): void => {
     setFailure(null)
-    setDraft(rows.map((row, at) => at === index ? { ...row, ...patch } : row))
+    setDraft(rows.map((row, at) => {
+      if (at !== index) return row
+      if (patch.label === undefined || !row.fresh) return { ...row, ...patch }
+      const taken = rows.filter((_other, other) => other !== index).map(other => other.id)
+      return { ...row, ...patch, id: newEntryId(patch.label, taken) }
+    }))
   }
 
-  /** 在最下面加一行空条目；id 现在就生成，用户看不清名称之前也能看到它。 */
+  /** 在最下面加一行空条目；id 先按空名称生成一个，名称一填就换成可读的那个。 */
   const add = (): void => {
     setFailure(null)
     setDraft([...rows, {
@@ -188,6 +216,7 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
       model: '',
       apiKeyEnv: '',
       key: '',
+      fresh: true,
     }])
   }
 
@@ -200,7 +229,12 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
     setDraft(rows.filter((_row, at) => at !== index))
   }
 
-  /** 保存：写成功后清空密钥草稿，并把这次写进去的引用名显示成保存后的样子。 */
+  /**
+   * 保存：写成功后清空密钥草稿、把这批行标成已保存，并把这次真写进去的引用名显示成保存后的样子。
+   *
+   * `apiKeyEnv` 只在这次真写了密钥时才补默认引用名：没写密钥的行补上它，下一次保存会把一个**不存在**的
+   * 引用名写进配置，那个条目随后会在 `ask` 时报「凭据没配」。
+   */
   const save = async (): Promise<void> => {
     setBusy(true)
     setFailure(null)
@@ -210,7 +244,12 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
         setFailure(outcome === 'credential' ? 'credential' : 'save')
         return
       }
-      setDraft(rows.map(row => ({ ...row, apiKeyEnv: row.apiKeyEnv !== '' ? row.apiKeyEnv : row.id, key: '' })))
+      setDraft(rows.map(row => ({
+        ...row,
+        fresh: false,
+        apiKeyEnv: row.key !== '' ? refOf(row) : row.apiKeyEnv,
+        key: '',
+      })))
     } finally {
       setBusy(false)
     }
@@ -223,7 +262,8 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
       <p style={HINT_STYLE}>{t('reload')}</p>
       {rows.length === 0 && <p style={HINT_STYLE}>{t('empty')}</p>}
       {rows.map((row, index) => (
-        <section key={row.id} style={CARD_STYLE}>
+        // 按位置而不是按 id 作 key：新行的 id 会随名称改写，按 id 作 key 会在改名时重建整块表单、丢掉焦点。
+        <section key={index} style={CARD_STYLE}>
           <div style={HEADER_STYLE}>
             <div style={{ ...FIELD_STYLE, flex: 1 }}>
               <span style={LABEL_STYLE}>{t('id')}</span>
