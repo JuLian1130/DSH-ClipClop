@@ -21,8 +21,11 @@ import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { Entry, Kind } from '../config.ts'
 
-/** 协议的两个取值：下拉的选项与 `Kind` 枚举逐一相等（`satisfies` 让 tsc 在枚举变化时报错）。 */
-const KINDS = ['systemone', 'openai'] as const satisfies readonly Kind[]
+/**
+ * 协议的两个取值：`Record<Kind, …>` 让 tsc 兜住枚举的增删——`Kind` 多一个值，这里就缺一项，编译期报错；
+ * 普通数组 + `satisfies readonly Kind[]` 做不到这件事（少一项也是合法赋值）。
+ */
+const KIND_OPTIONS: Record<Kind, Kind> = { systemone: 'systemone', openai: 'openai' }
 
 /**
  * 空列表的**稳定引用**：选择器的返回值会被 `useSyncExternalStore` 反复比较，每次 new 一个空数组会被判成
@@ -78,7 +81,8 @@ export type EntriesPageProps =
  *
  * 字符集只取 `[A-Za-z0-9_]`：凭据引用名是 POSIX 环境变量名（`[A-Za-z_][A-Za-z0-9_]*`），而引用名的默认
  * 值就是这个 id，带连字符的 slug 写不进凭据域。名称是空的（刚点「新增」时）或全是非 ASCII 字符时退化成
- * `entry_<hex>`；与已有 id 撞了就换一个后缀，所以两个同名条目各有各的 id。
+ * `entry_<序号>`。序号取该前缀下第一个没被用掉的整数——**不用随机数**：随机后缀会在每次改名时变一次（只读框
+ * 里的 id 跟着跳），而且 `Math.random().toString(16)` 在极小值上会切出带 `-` 的指数形式。
  * @param label - 当前名称，用来取 slug。
  * @param taken - 已经在用的 id。
  * @returns 一个新 id。
@@ -87,8 +91,8 @@ export function newEntryId(label: string, taken: readonly string[]): string {
   const slug = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
   const base = slug === '' ? 'entry' : /^[0-9]/.test(slug) ? `entry_${slug}` : slug
   const used = new Set(taken)
-  for (;;) {
-    const id = `${base}_${Math.random().toString(16).slice(2, 6).padEnd(4, '0')}`
+  for (let index = 1; ; index += 1) {
+    const id = `${base}_${index}`
     if (!used.has(id)) return id
   }
 }
@@ -270,13 +274,14 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
               <input readOnly value={row.id} style={{ ...INPUT_STYLE, ...READONLY_STYLE }} />
               <span style={HINT_STYLE}>{t('idHint')}</span>
             </div>
-            <Button variant="outline" size="sm" onClick={() => { remove(index) }}>{t('delete')}</Button>
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => { remove(index) }}>{t('delete')}</Button>
           </div>
           <div style={PAIR_STYLE}>
             <label style={FIELD_STYLE}>
               <span style={LABEL_STYLE}>{t('label')}</span>
               <input
                 value={row.label}
+                disabled={busy}
                 style={INPUT_STYLE}
                 onChange={(event) => { edit(index, { label: event.target.value }) }}
               />
@@ -286,10 +291,11 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
               <span style={LABEL_STYLE}>{t('kind')}</span>
               <select
                 value={row.kind}
+                disabled={busy}
                 style={SELECT_STYLE}
                 onChange={(event) => { edit(index, { kind: event.target.value as Kind }) }}
               >
-                {KINDS.map(kind => <option key={kind} value={kind}>{kind}</option>)}
+                {Object.values(KIND_OPTIONS).map(kind => <option key={kind} value={kind}>{kind}</option>)}
               </select>
               <span style={HINT_STYLE}>{t('kindHint')}</span>
             </label>
@@ -299,6 +305,7 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
               <span style={LABEL_STYLE}>{t('baseUrl')}</span>
               <input
                 value={row.baseUrl}
+                disabled={busy}
                 style={INPUT_STYLE}
                 onChange={(event) => { edit(index, { baseUrl: event.target.value }) }}
               />
@@ -307,6 +314,7 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
               <span style={LABEL_STYLE}>{t('model')}</span>
               <input
                 value={row.model}
+                disabled={busy}
                 placeholder={t('modelPlaceholder')}
                 style={INPUT_STYLE}
                 onChange={(event) => { edit(index, { model: event.target.value }) }}
@@ -318,6 +326,7 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
             <input
               type="password"
               value={row.key}
+              disabled={busy}
               placeholder={t('keyPlaceholder')}
               style={INPUT_STYLE}
               onChange={(event) => { edit(index, { key: event.target.value }) }}

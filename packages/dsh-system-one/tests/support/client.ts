@@ -29,13 +29,15 @@ export interface StubSettingOp {
 
 /** settings section 的替身：记账写入、可切换「宿主是否接受」。 */
 export class StubForm {
-  entries: readonly Entry[] = []
+  entries: readonly Entry[] | undefined = []
   /** 按顺序记下每一次原子写入：每个元素是一组 op（整份 `entries` 一次写入）。 */
   mutations: StubSettingOp[][] = []
   /** 宿主是否接受写入；置为 false 即模拟业务拒绝（`mutate` resolve false）。 */
   accepted = true
   /** 置为 true 即模拟传输层失败：`mutate` 直接 reject。 */
   throwOnMutate = false
+  /** 置为一个未 settle 的 promise 即模拟慢写回：`mutate` 等它 resolve 后再返回。 */
+  hold: Promise<void> | null = null
   private readonly listeners = new Set<() => void>()
 
   getSnapshot(): {
@@ -65,6 +67,7 @@ export class StubForm {
    */
   async mutate(ops: readonly StubSettingOp[]): Promise<boolean> {
     this.mutations.push(ops.map(op => ({ ...op, path: [...op.path] })))
+    if (this.hold !== null) await this.hold
     if (this.throwOnMutate) throw new Error('fixture: settings.mutate transport failure')
     if (!this.accepted) return false
     for (const op of ops) {

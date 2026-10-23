@@ -188,7 +188,7 @@ describe('条目页：增删改', () => {
 
     fireEvent.click(screen.getByText(zh.add))
     fillRow({ label: 'Local SGLang' })
-    expect(idInputs(container)[0]!.value).toMatch(/^local_sglang_[0-9a-f]{4}$/)
+    expect(idInputs(container)[0]!.value).toMatch(/^local_sglang_[0-9]+$/)
     fillRow({ model: 'm', baseUrl: 'http://127.0.0.1:1' })
     fireEvent.click(screen.getByText(zh.save))
     await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
@@ -309,6 +309,29 @@ describe('条目页：密钥与失败态', () => {
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(zh.saveFailed) })
   })
 
+  it('保存期间行内控件禁用：写回返回时不会用旧快照覆盖这期间敲进去的字', async () => {
+    const fixture = await mounted()
+    let release = (): void => {}
+    fixture.form.hold = new Promise<void>((resolve) => { release = () => { resolve() } })
+    renderPage(fixture, [{ id: 'e1', label: '旧名字', kind: 'systemone', baseUrl: 'http://127.0.0.1:1', model: 'm' }])
+
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect((field(zh.label) as HTMLInputElement).disabled).toBe(true) })
+    release()
+    await waitFor(() => { expect((field(zh.label) as HTMLInputElement).disabled).toBe(false) })
+    expect(savedEntries(fixture)[0]?.label).toBe('旧名字')
+  })
+
+  it('快照还没到（entries 缺席）时按空列表显示，也能直接加一行', async () => {
+    const fixture = await mounted()
+    fixture.form.entries = undefined
+    const { container } = renderPage(fixture)
+    expect(screen.getByText(zh.empty)).toBeTruthy()
+
+    fireEvent.click(screen.getByText(zh.add))
+    expect(idInputs(container)).toHaveLength(1)
+  })
+
   it('写回的传输层失败（mutate reject）同样报错，不静默', async () => {
     const fixture = await mounted()
     fixture.form.throwOnMutate = true
@@ -348,8 +371,8 @@ describe('条目 id 生成', () => {
 
   it('按名称取可读前缀，与已用 id 不同', () => {
     const first = newEntryId('Local SGLang', [])
-    expect(first).toMatch(/^local_sglang_[0-9a-f]{4}$/)
+    expect(first).toMatch(/^local_sglang_[0-9]+$/)
     expect(newEntryId('Local SGLang', [first])).not.toBe(first)
-    expect(newEntryId('', [])).toMatch(/^entry_[0-9a-f]{4}$/)
+    expect(newEntryId('', [])).toMatch(/^entry_[0-9]+$/)
   })
 })
