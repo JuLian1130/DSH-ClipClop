@@ -63,8 +63,8 @@ export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.crede
 /**
  * 一条草稿 → 配置里的一条。
  *
- * `apiKeyEnv` 只在「这次真写了密钥」或「条目本来就带引用名」时给出：空串在 schema 里就是"这个条目不使用
- * 凭据"，带上它会把这个不带密钥的条目变成"要用凭据却找不到"。
+ * `apiKeyEnv` 只在「这次真写了密钥」或「条目本来就带引用名」时取到非空引用名，其余写空串：空串在 schema 里
+ * 就是"这个条目不使用凭据"，`wire.ts` 对空引用名不解析，这一行照常不带凭据。
  * @param row - 页面上的一行。
  * @returns 配置里的条目（返回字面量的类型，才满足写回值 `JsonValue` 的索引签名要求）。
  */

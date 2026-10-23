@@ -147,6 +147,7 @@ describe('条目页：增删改', () => {
     fireEvent.click(screen.getByText(zh.add))
     const [idInput] = idInputs(container)
     expect(idInput?.readOnly).toBe(true)
+    expect(idInput).toBe(screen.getByLabelText(zh.id))
     expect(idInput?.value).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/)
     fillRow({ label: '本地小模型', model: 'qwen3-4b', baseUrl: 'http://127.0.0.1:8000' })
     fireEvent.click(screen.getByText(zh.save))

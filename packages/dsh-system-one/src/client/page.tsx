@@ -271,7 +271,7 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
           <div style={HEADER_STYLE}>
             <div style={{ ...FIELD_STYLE, flex: 1 }}>
               <span style={LABEL_STYLE}>{t('id')}</span>
-              <input readOnly value={row.id} style={{ ...INPUT_STYLE, ...READONLY_STYLE }} />
+              <input readOnly aria-label={t('id')} value={row.id} style={{ ...INPUT_STYLE, ...READONLY_STYLE }} />
               <span style={HINT_STYLE}>{t('idHint')}</span>
             </div>
             <Button variant="outline" size="sm" disabled={busy} onClick={() => { remove(index) }}>{t('delete')}</Button>
