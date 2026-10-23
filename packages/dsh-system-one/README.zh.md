@@ -2,7 +2,7 @@
 
 决策模型的接入层：把带类型的题面（是非／单选／量表）交给一个条目，拿回带概率、可审计的答案。本包同时是 bundle 与接入层——它提供 `ctx.systemOne` 注册表，并把配置里的**条目**在装载时建好、注册进去。
 
-当前状态：契约、注册表、条目配置与两种协议的 provider 都已落地——`systemone`（vllm／SGLang 的 `/v1/systemone`）与 `openai`（OpenAI Decisions API 的 `/v1/decisions`）。`openai` 这一路**还没有对真实端点实测**，只按官方载荷写了夹具：接上真实端点后再核一次。
+当前状态：契约、注册表、条目配置、两种协议的 provider 与设置页里的条目页都已落地——`systemone`（vllm／SGLang 的 `/v1/systemone`）与 `openai`（OpenAI Decisions API 的 `/v1/decisions`）。`openai` 这一路**还没有对真实端点实测**，只按官方载荷写了夹具：接上真实端点后再核一次。
 
 ## 安装
 
@@ -23,7 +23,7 @@ dsh plugin --profile <name> add /tmp/dsh-system-one/dsh-clipclop-dsh-system-one-
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
-| `id` | 是 | 内部标识，**唯一**。`ask` 的 `target` 用它指名条目。由系统生成：页面新增条目时自动生成，手写 patch 时自己给一个唯一值（例如 `sglang-local`）。 |
+| `id` | 是 | 内部标识，**唯一**。`ask` 的 `target` 用它指名条目。页面新增条目时自动生成（`<名称的 slug>_<4 位十六进制>`，字符集只有 `[A-Za-z0-9_]`：密钥的引用名默认就是它，而引用名必须是 POSIX 环境变量名）；手写 patch 时自己给一个唯一值，若打算用默认引用名存密钥，同样只用这套字符。 |
 | `label` | 是 | 显示名称，给人看。**可以不唯一**：两个条目都叫「本地 SGLang」是合法的。 |
 | `kind` | 是 | 协议，二选一：`systemone`（vllm／SGLang／TypeSafe 的 `/v1/systemone`）或 `openai`（OpenAI Decisions API）。 |
 | `baseUrl` | 是 | 端点地址。 |
@@ -50,6 +50,15 @@ dsh plugin --profile <name> add /tmp/dsh-system-one/dsh-clipclop-dsh-system-one-
 `entries` 默认是空数组：不配条目时注册表为空，`ask` 点名任何条目都会报错并列出已注册的 id。配置非法一律在装载期报错并点出键名（`id` 缺失或重复、`kind` 不在两个取值里、`kind` 没有对应实现）。
 
 条目在 **profile 装载时**注册：改完条目（含地址、模型、凭据引用名）要重载 profile（重启 DSH）才会生效。
+
+## 设置页里怎么填
+
+装好后设置里多一个「决策模型」页签，一页管完全部条目：点「新增条目」加一行，填名称、模型、API 地址、协议、API 密钥，点「保存」；改已有条目、删条目都在同一页。
+
+- **名称**只给人看，可以重名；**协议**按服务方给出的接口类型选，选错会在调用时报错。
+- **条目 id** 在点「新增条目」时就生成好，之后只读：要用它的地方靠这个 id 指名（例如决策通道那一页选条目），复制过去即可。
+- **API 密钥**只写进本机的凭据文件，配置文件里只留一个引用名（默认就是条目 id）。留空表示这个条目不使用密钥；已经存过密钥时留空会保留原值，页面上也读不回密钥本身。
+- 保存后要**重载插件**（或重启 DSH）才有新条目：条目是装载时注册的，这一页只改配置。
 
 ## `systemone` 协议怎么接
 

@@ -1,6 +1,6 @@
 # dsh-system-one 设计
 
-状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置与两个 provider（`systemone`、`openai`）已落地，接入层的条目页、决策通道子插件与其页面仍未开工（范围见「当前范围与非目标」，机制见「决策通道」）。远程面不做。
+状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置、两个 provider（`systemone`、`openai`）与接入层的条目页都已落地，决策通道子插件与其页面仍未开工（范围见「当前范围与非目标」，机制见「决策通道」）。远程面不做。
 
 一句话：把**带类型的题面**交给某个决策模型，拿回**带概率的答案**。这一层不产出内容，也不决定答案怎么用。术语见 `CONTEXT.md` 的「决策模型接入」。
 
@@ -112,9 +112,16 @@
 
 **用扁平对象 + `kind` 枚举，不用判别联合**：两种协议（`systemone`、`openai`）共用同一组字段，字段不随 kind 变化；判别联合只在字段随 kind 变化时才需要，而通用 HTTP 不做，那个需求不存在。
 
-**`entries` 整字段 `.volatile()`**：设置页的写回路径只接受 volatile 路径；而 volatile 只能落在顶层固定字段路径（数组元素内部再放会被拒），所以标记打在整个 `entries` 上。**volatile 不等于「改完即生效」**：只改 volatile 字段时 loader 原地换引用、不重挂载插件（`vendor/loader/src/config/entry.ts` 的 `_commitVolatile`），而条目是装载期注册的——所以改完条目要重载 profile 才换上。要不要让条目跟着引用重建（监听 `loader/volatile-update`）留给条目页落地时定：那时才有设置页写回的夹具。
+**`entries` 整字段 `.volatile()`**：设置页的写回路径只接受 volatile 路径；而 volatile 只能落在顶层固定字段路径（数组元素内部再放会被拒），所以标记打在整个 `entries` 上。**volatile 不等于「改完即生效」**：只改 volatile 字段时 loader 原地换引用、不重挂载插件（`vendor/loader/src/config/entry.ts` 的 `_commitVolatile`），而条目是装载期注册的——所以改完条目要重载 profile 才换上。**条目页落地时的裁决：不监听 `loader/volatile-update` 重建条目**——重建要把 provider 注册从 `apply` 里改成「先建好一批、再换掉旧的一批」（换的时候不能先撤后建，否则新条目非法时会把注册表清空），还要给 host 半加一条对 loader 事件的类型依赖，而票面的验收只要求「保存后出现在配置里」。这条代价写在页面上的一句话（「保存后要重载插件（或重启 DSH）才用得上新条目」）与 README 里；真有人按着不重载用，再按 loader 事件的既有写法（`packages/llm/llm-deepseek/src/host.ts:57` 那一处）补。
 
-**条目页**（客户端半）做增删改：名称、模型、API 地址、协议（下拉两种）、API 密钥（可选）。内部 `id` 不由用户输入——新增时生成、之后只读显示（供复制到消费者的配置里）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。**引用名的默认值 = 条目 `id`**（新增时自动填）；高级用法仍可在 patch 里把 `apiKeyEnv` 覆盖成自己的环境变量名。
+**条目页**（客户端半，`src/client/`）做增删改：名称、模型、API 地址、协议（下拉两种）、API 密钥（可选）。内部 `id` 不由用户输入——新增时生成、之后只读显示（供复制到消费者的配置里）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。**引用名的默认值 = 条目 `id`**（新增时自动填）；高级用法仍可在 patch 里把 `apiKeyEnv` 覆盖成自己的环境变量名。
+
+落地时的四条口径（都进了 `tests/client.spec.tsx` 的判据）：
+
+- **`id` 的字符集由凭据引用名决定**：引用名是 POSIX 环境变量名（`packages/credentials/credentials/src/index.ts` 的 `REF_PATTERN` = `^[A-Za-z_][A-Za-z0-9_]*$`），而引用名的默认值就是这个 `id`——带连字符的 slug（本文件上面举例的 `sglang-local-3f9c` 那种）在 `remote.credentials.set` 会被整次拒成 `gateway/bad-request`。所以页面生成的 `id` 只用 `[A-Za-z0-9_]`：`<名称的 ASCII slug>_<4 位十六进制>`，名称是中文或空时退化成 `entry_<hex>`；撞了已有 id 就换后缀。**手写 patch 时**若打算让密钥存在默认引用名下（`apiKeyEnv` 留空或等于 `id`），`id` 也必须落在这个字符集里；想用带连字符的 id，就显式给一个合法的 `apiKeyEnv`。
+- **一次原子写回**：保存提交的是整份数组（`{ op: 'set', path: ['entries'] }`），本包没有第二个可写字段，所以写回路径上不会出现非 volatile 的写入（宿主对非 volatile 路径直接拒绝）。
+- **先写凭据、再写配置**：`apiKeyEnv` 只在「这次真写了密钥」或「条目本来就带引用名」时出现；空串在 schema 里就是「这个条目不使用凭据」，无条件写上会让不带密钥的条目在 `ask` 时报「凭据没配」。凭据写失败整次不保存，避免配置指向一个不存在的密钥。
+- **协议下拉的两个取值就是 `Kind` 的两个值**（`systemone`、`openai`），页面不翻译它们：用户必须照着服务方给的接口类型选。
 
 ## 决策通道（第二步）
 
@@ -162,7 +169,7 @@
 第一步交付契约与注册表。第二步交付三件事，需求已厘清：
 
 1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册，两个 provider 都已落地。`systemone` 按「字段与后端对照」与「provider 怎么区分两家的行为」做映射与拒绝规则——`instructions` 非空抛错、富 `levels` 按 `legend` 回显核对、`labelMass` 按响应字段读并在缺席时归一到 1.0、`legend` 长度校验、后端错误码与限额连原文包成 provider 级失败；`openai` 按「`openai` provider（OpenAI Decisions API）」那节接官方载荷。两者共用同一层 HTTP 与凭据：凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析（`ctx.get` 取可选服务，没装凭据子系统时用到才报错），以 `Authorization: Bearer` 放进请求。
-2. **接入层的条目页**（客户端半）：增删改条目，密钥写凭据域。
+2. **接入层的条目页**（客户端半，已落地）：设置页里的「决策模型」页签，增删改条目，密钥写凭据域；口径见「条目配置与设置页」末四条。
 3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值，以及它自己的页面。
 
 不在第二步：远程面（不做）、mock、通用 HTTP、MCP 面、策略插件。其余非目标见上面「做什么、不做什么」。
@@ -176,5 +183,6 @@
 - provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端 4xx/5xx 与限额原文、凭据解析与 `Bearer`。
 - `openai` provider：`tests/openai-provider.spec.ts` 覆盖三种题型的题面数组与答案映射、`state`／`instructions`／`images` 落成哪段 `input`、`chatTemplateKwargs` 与是非题 `optionDescriptions` 与非字符串 `Level` 的拒绝、具名拒答的缺席+警告与未具名拒答的整次失败、两个 kind 按 `target` 各自命中自己的端点；**未对真实端点实测**，接上真实端点后补一次。
 - 决策通道：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导、阈值语义（两种确定性公式、算不出时按 `abstain`）各有可跑用例。
+- 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、协议下拉的两个取值等于 `Kind` 枚举、宿主拒绝与凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md`）。
 - 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——`pnpm pack` 进临时 profile、按 `dsh.profile.bundles` 组合出这一行、用真实 Loader 启动并跑启动审计，断言该行 ACTIVE 且 `ctx.systemOne` 注册假 provider 后 `ask` 成功；profile 里装不上本包时该 bundle 被跳过、原因点名本包（复核记录见 `.scratch/dsh-system-one/profile-load.md`）。bundle 加上通道行后**仍需**复验多行 patch。
 - 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。

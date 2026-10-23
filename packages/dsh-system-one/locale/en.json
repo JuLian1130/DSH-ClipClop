@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Decision Model Access",
+    "description": "Send typed questions to a decision model and get answers with probabilities. Register model entries in Settings; keys stay in this machine's credential store."
+  }
+}
