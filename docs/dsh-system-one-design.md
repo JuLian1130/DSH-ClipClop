@@ -157,5 +157,5 @@
 - provider 的映射与拒绝规则按 vllm/SGLang 源码核对的夹具测：三种题型的映射、可选字段的拒绝（SGLang 的 `instructions`、vllm 的富 `levels`）、SGLang 缺 `x_label_mass` 时的归一化、`legend` 长度校验、后端错误码。
 - `openai` provider：按官方载荷的夹具与拒绝规则验收；**未对真实端点实测**，接上真实端点后补一次。
 - 决策通道：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导、阈值语义（两种确定性公式、算不出时按 `abstain`）各有可跑用例。
-- **尚未实测**：按真实 profile 装载这条 bundle 行——第一步的测试都用 `new Context()`，装载路径不在任何门禁里。第二步的第一张票先补一次真实装载；bundle 加上通道行后再复验多行 patch。
+- 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——`pnpm pack` 进临时 profile、按 `dsh.profile.bundles` 组合出这一行、用真实 Loader 启动并跑启动审计，断言该行 ACTIVE 且 `ctx.systemOne` 注册假 provider 后 `ask` 成功；profile 里装不上本包时该 bundle 被跳过、原因点名本包（复核记录见 `.scratch/dsh-system-one/profile-load.md`）。bundle 加上通道行后**仍需**复验多行 patch。
 - 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。
