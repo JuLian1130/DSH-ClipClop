@@ -1,5 +1,9 @@
-# 本包提供的行：装载决策模型注册表（`ctx.systemOne`）。
+# 本包提供的行：装载决策模型注册表（`ctx.systemOne`），并把配置里的条目注册进去。
 # id 供后续层按名覆盖或禁用；name 用包名，交 Node 解析到安装副本。
+# 条目的六个字段、两个 kind 与凭据引用名的写法见 README.zh.md。
 - insert:
     - id: dsh-system-one
       name: '@dsh-clipclop/dsh-system-one'
+      # 配置示例，去掉行首的 `# ` 即可用。
+      # config:
+      #   entries: []

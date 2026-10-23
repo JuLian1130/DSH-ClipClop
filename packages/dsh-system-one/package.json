@@ -28,6 +28,9 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit"
   },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.4"
   },

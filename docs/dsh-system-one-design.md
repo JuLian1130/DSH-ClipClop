@@ -94,7 +94,7 @@
 
 **用扁平对象 + `kind` 枚举，不用判别联合**：两种协议（`systemone`、`openai`）共用同一组字段，字段不随 kind 变化；判别联合只在字段随 kind 变化时才需要，而通用 HTTP 不做，那个需求不存在。
 
-**`entries` 整字段 `.volatile()`**：设置页的写回路径只接受 volatile 路径；而 volatile 只能落在顶层固定字段路径（数组元素内部再放会被拒），所以标记打在整个 `entries` 上。
+**`entries` 整字段 `.volatile()`**：设置页的写回路径只接受 volatile 路径；而 volatile 只能落在顶层固定字段路径（数组元素内部再放会被拒），所以标记打在整个 `entries` 上。**volatile 不等于「改完即生效」**：只改 volatile 字段时 loader 原地换引用、不重挂载插件（`vendor/loader/src/config/entry.ts` 的 `_commitVolatile`），而条目是装载期注册的——所以改完条目要重载 profile 才换上。要不要让条目跟着引用重建（监听 `loader/volatile-update`）留给条目页落地时定：那时才有能注册成功的工厂与设置页写回的夹具。
 
 **条目页**（客户端半）做增删改：名称、模型、API 地址、协议（下拉两种）、API 密钥（可选）。内部 `id` 不由用户输入——新增时生成、之后只读显示（供复制到消费者的配置里）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。**引用名的默认值 = 条目 `id`**（新增时自动填）；高级用法仍可在 patch 里把 `apiKeyEnv` 覆盖成自己的环境变量名。
 
@@ -153,6 +153,7 @@
 
 - `pnpm --dir packages/dsh-system-one run typecheck` 同时覆盖 `src` 与 `tests`；`build` 在 `tsc` 之外多一条客户端产物（条目页），`tests/declaration-merge.spec.ts` 继续读构建产物。
 - 第一步的 8 条行为测试继续通过（`ask` 交回答案与耗时、漏答的题从 `answers` 缺席且 `warnings` 原样交回、未注册 `target` 的报错点名 id、同名注册抛错、`providers()` 顺序、注册随注册方 fiber 释放、可选请求字段原样透传且 `target` 不进入 provider 请求、可信度信号与 `legend` 原样交回）。
+- 条目配置：`tests/entries-config.spec.ts` 把配置契约纳入门禁——示例 patch 的键集合与 `Config` 字段逐一相等、`label` 不唯一、`id` 重复或缺失与 `kind` 越界/无实现在装载期报错并点出键名、`entries` 是整字段 volatile（宿主写回门禁读的 `schema.meta.volatile`）。工厂表为空时配了条目装不上是预期状态。
 - 跨包声明合并：`tests/declaration-merge.spec.ts` 在临时目录里搭一个真实消费者包跑 `tsc`，fixture 带上可选字段，并带反向对照（不 import 本包时同一个用法必须编译失败）与插件面断言（`ctx.systemOne.providers()` 取不到）。
 - provider 的映射与拒绝规则按 vllm/SGLang 源码核对的夹具测：三种题型的映射、可选字段的拒绝（SGLang 的 `instructions`、vllm 的富 `levels`）、SGLang 缺 `x_label_mass` 时的归一化、`legend` 长度校验、后端错误码。
 - `openai` provider：按官方载荷的夹具与拒绝规则验收；**未对真实端点实测**，接上真实端点后补一次。
