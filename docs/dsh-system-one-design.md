@@ -14,7 +14,7 @@
 
 ## 服务名与装载
 
-服务名 `ctx.systemOne`，由 `declare module '@deepseek-ai/cordis'` 合并而来。本包同时是这个 bundle 与接入层：它自己占一行，决策通道子插件是同一份 `cordis.patch.yml` 里的第二行，每行各有 id，可按名覆盖或禁用（`dsh-base` 是纯容器形态的先例——`lib/index.js` 只有 `export {}`、`dependencies` 列出它插入的每一行；本包选择合体，因为搬家的收益只是概念整齐，代价是改包名、改引用、改测试）。**子包必须列为本包的 `dependency`**：那一行的模块名要在 profile 的 `node_modules` 里解析得到，`dsh-base` 逐行列 `dependencies` 就是这个原因。
+服务名 `ctx.systemOne`，由 `declare module '@deepseek-ai/cordis'` 合并而来。本包同时是这个 bundle 与接入层：它自己占一行（行 id `dsh-system-one`），决策通道子插件是同一份 `cordis.patch.yml` 里的第二行（行 id `dsh-system-one-channel`），每行各有 id，可按名覆盖或禁用（`dsh-base` 是纯容器形态的先例——`lib/index.js` 只有 `export {}`、`dependencies` 列出它插入的每一行；本包选择合体，因为搬家的收益只是概念整齐，代价是改包名、改引用、改测试）。两个行 id 同时是各自客户端半的配置命名空间，**必须与客户端半里写死的常量一致**：命名空间没被 compose 时那一页根本不显示（`dsh-reasoning-pruner` 的客户端注释与 `whileServed` 就是这个机制）。**子包必须列为本包的 `dependency`**：那一行的模块名要在 profile 的 `node_modules` 里解析得到，`dsh-base` 逐行列 `dependencies` 就是这个原因。
 
 第三方 provider 在自己的插件里 `inject: ['systemOne']` 之后调 `ctx.systemOne.register(id, provider)`。注册的生命周期跟着注册方所在的 fiber，卸载即释放；同一个 id 注册两次抛错——两个条目同名会让 `ask` 指向不确定的实现，不能静默覆盖。
 
@@ -102,7 +102,7 @@
 
 接入层之上有一个子插件，把决策判断交给 agent：需要判断、选择或评分时调它，而不是让主模型自己拿主意。它按第三方 provider 的用法接注册表（`inject: ['systemOne']` 后注册），用哪个条目由它自己的配置回答——接入层不因此新增插件面，也不因此获得全局状态。
 
-**工具面只有一个 `ask`**：参数是 `state`（契约里必填，供判断的状态）与 `questions`（id → 题型内联，每题自带 `instructions`）。请求级的 `instructions`、`images`、`chatTemplateKwargs` **不暴露给模型**——`instructions` 是 vllm 独有、SGLang 会抛错，暴露它等于给模型一个会踩的坑；`images` 模型产不出来；`chatTemplateKwargs` 是部署参数。`signal`/`timeoutMs` 从工具执行上下文原样透传。`target` 不进工具参数。不按题型拆成多个工具，也不提供排序、判定这类契约里没有的复合操作——生态里「少而正交」是共识，而契约本来就是一次批量 `ask`。
+**工具面只有一个 `ask`**：参数是 `state`（契约里必填，供判断的状态）与 `questions`（id → 题型内联，每题自带 `instructions`）。请求级的 `instructions`、`images`、`chatTemplateKwargs` **不暴露给模型**——`instructions` 是 vllm 独有、SGLang 会抛错，暴露它等于给模型一个会踩的坑；`images` 模型产不出来；`chatTemplateKwargs` 是部署参数。`signal` 从工具执行上下文透传；`timeoutMs` 若上下文给出 deadline 就转成它，否则不传（工具运行上下文的字段形状尚未核实，实现票里核一次）。`target` 不进工具参数。不按题型拆成多个工具，也不提供排序、判定这类契约里没有的复合操作——生态里「少而正交」是共识，而契约本来就是一次批量 `ask`。
 
 **引导分两档，设置页切换，默认第一档**：第一档是工具描述 + 一个技能（工具描述就是给模型看的——DSH 会把每个工具的 guidance 段渲染进系统提示；技能登记进 DSH 的技能注册表，正文随包交付，写「什么时候该用、什么时候是类别错误」的细则）；第二档在第一档之上再经 `dsh-system-prompt` 的 `PromptSection` 注册表注入一句固定引导（该注册表存在，`section` 的签名尚未核实，实现票里先核）。技能注册表声明为**可选**依赖：profile 没组合技能子系统时插件照常加载，只是少一个技能。不做更强形态（拦截或替换主模型的判断）——那是编排层的事，且要动全局行为。
 
