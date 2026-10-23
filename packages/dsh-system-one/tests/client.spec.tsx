@@ -17,7 +17,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useSyncExternalStore } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { Entry } from '../src/config.ts'
-import { PREFERENCE_NAMESPACE } from '../src/client/index.ts'
+import { inject as pageInject, PREFERENCE_NAMESPACE } from '../src/client/index.ts'
 import { EntriesPage, newEntryId, type EntriesPageInjected, type EntriesPageProps } from '../src/client/page.tsx'
 import { zh } from '../src/client/locales.ts'
 import { mountClient, type ClientFixture } from './support/client.ts'
@@ -124,6 +124,9 @@ describe('条目页：注册面', () => {
     // 写回与 `whileServed` 用的是同一个键：patch 行的 id（也是 host 半的入口 name）。
     expect(PREFERENCE_NAMESPACE).toBe('dsh-system-one')
     expect(fixture.served).toEqual([['dsh-system-one']])
+    // 注入清单本身就是契约：`remote.credentials` 少一项，凭据域缺席的部署里这一页会照常出现、
+    // 而保存密钥永远失败（提示还会说「密钥没写进凭据」，指错原因）。
+    expect(pageInject).toEqual(['slots', 'locale', 'configForms', 'remote', 'remote.credentials'])
   })
 
   it('空配置时页面说「还没有条目」，并给出新增入口', async () => {
@@ -180,6 +183,9 @@ describe('条目页：增删改', () => {
     const saved = savedEntries(fixture)
     expect(saved.map(entry => entry.label)).toEqual(['本地 SGLang', '本地 SGLang'])
     expect(saved.map(entry => entry.id)).toEqual([first!.value, second!.value])
+    // id 撞车的唯一时机是「两行改成同一个名称之后」，避让靠 `edit` 把其它行已用的 id 传进 `newEntryId`；
+    // 上面那两行只比「显示 == 写回」，两行拿到同一个 id 也成立，所以这里单独钉一次。
+    expect(saved[0]!.id).not.toBe(saved[1]!.id)
   })
 
   it('新增行填名称后换成可读 id；保存之后改名不再动摇它', async () => {
@@ -224,7 +230,8 @@ describe('条目页：增删改', () => {
     }])
   })
 
-  it('协议下拉只有两个选项，取值是 kind 枚举的两个值', async () => {    const fixture = await mounted()
+  it('协议下拉只有两个选项，取值是 kind 枚举的两个值', async () => {
+    const fixture = await mounted()
     const { container } = renderPage(fixture)
     fireEvent.click(screen.getByText(zh.add))
 

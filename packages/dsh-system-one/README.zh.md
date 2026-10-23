@@ -34,7 +34,7 @@ dsh plugin --profile <name> add /tmp/dsh-system-one/dsh-clipclop-dsh-system-one-
 - id: dsh-system-one
   config:
     entries:
-      - id: sglang-local
+      - id: sglang_local
         label: 本地 SGLang
         kind: systemone
         baseUrl: http://127.0.0.1:30000

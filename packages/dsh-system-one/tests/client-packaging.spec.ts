@@ -2,9 +2,9 @@
 /**
  * 票据 04「两面构建」：**双面包**的装载契约。
  *
- * 观察面写死：读包内 `package.json` 的 `dsh.client` / `exports["./client"]` / `exports["./locale/*.json"]`，对
- * 解析结果做 `existsSync`——**不在测试期构建**。装载器在找不到浏览器产物时同步抛出，所以产物缺失必须是
- * 一条红，不是一次跳过。
+ * 观察面写死：读包内 `package.json` 的 `dsh.client` / `exports["./client"]` / `exports["./locale/*.json"]`，
+ * 用 `require.resolve` 落到包内文件的真实路径（解析不到就直接抛错）——**不在测试期构建**。装载器在找不到浏览器
+ * 产物时同步抛出，所以产物缺失必须是一条红，不是一次跳过。
  *
  * 产物的形态是第二条判据：在 jsdom 里用一个**记录的** `__ModuleLoader__` 桩加 `new Function` 求值，断言
  * `load` 恰被调用一次、`registration.id` 逐字符等于包名、`factory(require)` 返回带 `inject` 与 `apply` 的
@@ -21,6 +21,7 @@ import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { name as pluginName } from '../src/index.ts'
+import { inject as pageInject } from '../src/client/index.ts'
 
 const nodeRequire = createRequire(import.meta.url)
 
@@ -55,14 +56,13 @@ interface Registration {
 describe('两面构建第 1 条：双面包的声明与产物', () => {
   it('package.json 有 dsh.client（platform 为 web）与 exports["./client"]', () => {
     expect(manifest.dsh?.client?.platform).toBe('web')
-    expect(manifest.exports['./client']).toBeDefined()
     expect(clientExport(manifest.exports['./client'])).toMatch(/^\.\//)
   })
 
-  it('exports["./client"] 解析出的文件**已经存在**（不在测试期构建）', () => {
+  it('exports["./client"] 解析出的就是包内那个文件（不在测试期构建）', () => {
+    // `require.resolve` 在文件缺失时自己就抛错，所以这一条的判据只有「解析到了哪个路径」。
     const resolved = nodeRequire.resolve(`${manifest.name}/client`)
     expect(resolved).toBe(join(packageRoot, clientExport(manifest.exports['./client']).replace(/^\.\//, '')))
-    expect(existsSync(resolved)).toBe(true)
   })
 
   it('随包的 locale 文案与 bundle patch 都在，且 patch 的行 id 与插件入口一致', async () => {
@@ -117,7 +117,8 @@ describe('两面构建第 2 条：产物是闭包工厂注册', () => {
     })
     // 同一模块被 require 多次是正常的（模块缓存由装载器持有），所以按去重后的集合比对。
     expect([...new Set(requested)].sort()).toEqual(['@deepseek-ai/dsh-client-ui-primitives', 'react', 'react/jsx-runtime'])
-    expect(Array.isArray(exported.inject)).toBe(true)
+    // 注入清单是契约的一部分（凭据域缺席时整页不注册），所以与源码逐项相等比「是个数组」有用。
+    expect(exported.inject).toEqual(pageInject)
     expect(typeof exported.apply).toBe('function')
   })
 })
