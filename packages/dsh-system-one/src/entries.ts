@@ -10,20 +10,21 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Entry, Kind } from './config.ts'
 import type { SystemOneProvider } from './provider.ts'
+import { systemone } from './providers/systemone.ts'
 
 /**
  * 一个条目怎么变成 provider。
  *
- * `ctx` 是给实现取装载期依赖用的（凭据要经 `ctx.credentials` 解析），不是给实现注册东西的。
+ * `ctx` 是给实现取装载期依赖用的（凭据要经 `ctx.get('credentials')` 解析），不是给实现注册东西的。
  */
 export type ProviderFactory = (entry: Entry, ctx: Context) => SystemOneProvider
 
 /**
  * `kind` → provider 工厂。
  *
- * 现在是空表，所以配了条目也只会在装载期报错点名 `kind`；`systemone` 由 02b 填、`openai` 由 03 填。
+ * `openai` 还没有实现（03 填），所以配了那种条目会在装载期报错点名 `kind`。
  */
-export const FACTORIES: Partial<Record<Kind, ProviderFactory>> = {}
+export const FACTORIES: Partial<Record<Kind, ProviderFactory>> = { systemone }
 
 /**
  * 校验条目并建出 provider。

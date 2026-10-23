@@ -1,6 +1,6 @@
 # dsh-system-one 设计
 
-状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装，契约已按 vllm 与 SGLang 的 `/v1/systemone` 补齐可选字段与可信度信号；第二步（provider 实现、接入层的条目页、决策通道子插件与其页面）需求已厘清、未开工，范围见「当前范围与非目标」，机制见「决策通道」。远程面不做。
+状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置与 `systemone` provider 已落地，`openai` provider、接入层的条目页、决策通道子插件与其页面仍未开工（范围见「当前范围与非目标」，机制见「决策通道」）。远程面不做。
 
 一句话：把**带类型的题面**交给某个决策模型，拿回**带概率的答案**。这一层不产出内容，也不决定答案怎么用。术语见 `CONTEXT.md` 的「决策模型接入」。
 
@@ -50,7 +50,7 @@
 
 题面里的可选输入：
 
-- `instructions`（整次请求）：放在所有题之前的一段共享上下文；目前只有 vllm 的 `/v1/systemone` 有它（固定 prompt 的模型会 400），SGLang 没有。发给 SGLang 的 provider 收到非空值必须抛错——SGLang 会静默忽略未知顶层字段，不能让它悄悄丢掉。
+- `instructions`（整次请求）：放在所有题之前的一段共享上下文；目前只有 vllm 的 `/v1/systemone` 有它（固定 prompt 的模型会 400），SGLang 没有。发给 SGLang 的 provider 收到非空值必须抛错——SGLang 会静默忽略未知顶层字段，不能让它悄悄丢掉。`systemone` provider 的落法见下面「provider 怎么区分两家的行为」：响应里没有它的回显，所以非空即抛错。
 - `optionDescriptions`（是非题与单选）：把两侧/各选项的含义单列出来；缺席表示含义写在 `instructions` 里。两边都支持，且都按字符串忠实渲染。是非题的 key 用 `true`/`false`，与答案的 `probability` 对齐，不用后端的 `yes`/`no`。
 - `levels`（量表）：每档是 `Level`（字符串或 JSON 对象/数组）。字符串是两边的公共集；富值只有 SGLang 原样保留，vllm 会 `str()` 化，所以 vllm provider 必须拒绝非字符串档位。
 - `images`（整次请求）：图片 URL 或 data URL；两边都收字符串。模型不支持图片时由后端报错。
@@ -67,7 +67,7 @@
 
 **不支持的可选字段必须抛错，不得静默忽略**：请求字段（`instructions`、富 `levels` 等）在某个 provider 上无法如实表达时，provider 要报错并点名字段；响应字段（`labelMass`、`argmaxIsLabel`、`legend`）是 optional，缺席有明确含义，不是某个默认值。
 
-`state` 是**必填**字段，但不是每个后端都能表达任意 JSON：SGLang 只收字符串/对象/数组。provider 遇到 `null` 或标量时同样抛错并点名字段——不字符串化、不包成对象。把它悄悄改写成另一种形状等于换掉判断依据，比报错更糟。
+`state` 是**必填**字段，但不是每个后端都能表达任意 JSON：SGLang 只收字符串/对象/数组。provider 遇到 `null` 或标量时同样抛错并点名字段——不字符串化、不包成对象。把它悄悄改写成另一种形状等于换掉判断依据，比报错更糟。`systemone` provider 对 `state` **原样透传**：拒绝由后端发出（SGLang 回 422，`loc` 里点着该字段），provider 连原文包成 provider 级失败——客户端不预先猜后端是哪一家。
 
 ### 字段与后端对照
 
@@ -82,9 +82,15 @@
 | `chatTemplateKwargs` | `chat_template_kwargs`；固定 prompt 模型可能忽略 | `chat_template_kwargs`；Clef 拒绝非空 | 后端 400；标注 best-effort |
 | `legend` | score 答案的 `legend`（字符串） | score 答案的 `legend`（可为 JSON） | 长度不符时 provider 抛错 |
 
-后端限额与边界由 provider 校验，契约不承诺统一：题数（vllm 64；SGLang 无文档上限）、choice 选项（vllm 26，d3 255；SGLang 1–255，>26 需 tokenizer 支持双字母 label）、score 档位（vllm 2–10；SGLang 1–10）、`state`（vllm 任意 JSON；SGLang 只收字符串/对象/数组，`null`/标量 422）、question id（vllm 非空；SGLang 允许空）、`model`（vllm 可选；SGLang 必填）。
+后端限额与边界由**后端**校验（provider 不抄一份到客户端：那是两家的分叉点，抄一份就必然过时或误判），provider 把 4xx/5xx 连后端原文包成 provider 级失败，契约不承诺统一：题数（vllm 64；SGLang 无文档上限）、choice 选项（vllm 26，d3 255；SGLang 1–255，>26 需 tokenizer 支持双字母 label）、score 档位（vllm 2–10；SGLang 1–10）、`state`（vllm 任意 JSON；SGLang 只收字符串/对象/数组，`null`/标量 422）、question id（vllm 非空；SGLang 允许空）、`model`（vllm 可选；SGLang 必填）。
 
 以上限额与边界按 2026-10-20 的 vllm 与 SGLang 源码核对；接新版本时以实际源码为准。
+
+**provider 怎么区分两家的行为（不认技术栈）**：端点常常不是自己部署的，问「对方是哪一家」既拿不到也不稳，所以 `systemone` provider 不探测后端身份，按「分叉怎么被发现」分三类：
+
+- **后端会大声拒绝的**（`state` 的 `null`/标量、上面的限额、模型不收的图片）：原样发，拒绝由后端发出，provider 连原文包成 provider 级失败——后端的报错本来就点着字段。
+- **响应里留着可核对痕迹的**：`labelMass` 读 `answers[qid].x_label_mass`（SGLang）或 `diagnostics[qid].label_mass`（vllm），都没有时按 1.0 归一；量表答案的 `legend` 必须与请求的 `levels` 逐项一致，不一致就抛错点 `levels`——把档位串化的后端（vllm 的 `str()`）因此被抓住，同样不需要知道它是谁。
+- **响应证不了的**：请求级 `instructions` 只有 vllm 认、SGLang 静默忽略，而响应里没有它的痕迹，所以非空即抛错并点名该字段（不可证实即不支持）。等真有消费方需要它，再加条目级开关——那时才知道字段名与默认值该给谁。
 
 ## 条目配置与设置页
 
@@ -143,7 +149,7 @@
 
 第一步交付契约与注册表。第二步交付三件事，需求已厘清：
 
-1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册；`systemone` provider 按上面的字段对照与限额做映射与拒绝规则（SGLang 的 `instructions` 抛错、vllm 的富 `levels` 抛错、SGLang 缺 `x_label_mass` 时按 1.0 归一化、`legend` 长度校验、后端错误码），`state` 在 SGLang 上无法表达时抛错（见「题面与答案」）；`openai` provider 接 OpenAI Decisions API 的载荷。凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析。
+1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册；`systemone` provider 已落地，按「字段与后端对照」与「provider 怎么区分两家的行为」做映射与拒绝规则——`instructions` 非空抛错、富 `levels` 按 `legend` 回显核对、`labelMass` 按响应字段读并在缺席时归一到 1.0、`legend` 长度校验、后端错误码与限额连原文包成 provider 级失败；`openai` provider 接 OpenAI Decisions API 的载荷。凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析（`ctx.get` 取可选服务，没装凭据子系统时用到才报错），以 `Authorization: Bearer` 放进请求。
 2. **接入层的条目页**（客户端半）：增删改条目，密钥写凭据域。
 3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值，以及它自己的页面。
 
@@ -153,9 +159,9 @@
 
 - `pnpm --dir packages/dsh-system-one run typecheck` 同时覆盖 `src` 与 `tests`；`build` 在 `tsc` 之外多一条客户端产物（条目页），`tests/declaration-merge.spec.ts` 继续读构建产物。
 - 第一步的 8 条行为测试继续通过（`ask` 交回答案与耗时、漏答的题从 `answers` 缺席且 `warnings` 原样交回、未注册 `target` 的报错点名 id、同名注册抛错、`providers()` 顺序、注册随注册方 fiber 释放、可选请求字段原样透传且 `target` 不进入 provider 请求、可信度信号与 `legend` 原样交回）。
-- 条目配置：`tests/entries-config.spec.ts` 把配置契约纳入门禁——示例 patch 的键集合与 `Config` 字段逐一相等、`label` 不唯一、`id` 重复或缺失与 `kind` 越界/无实现在装载期报错并点出键名、`entries` 是整字段 volatile（宿主写回门禁读的 `schema.meta.volatile`）。工厂表为空时配了条目装不上是预期状态。
+- 条目配置：`tests/entries-config.spec.ts` 把配置契约纳入门禁——示例 patch 的键集合与 `Config` 字段逐一相等、`label` 不唯一、`id` 重复或缺失与 `kind` 越界/无实现在装载期报错并点出键名、`entries` 是整字段 volatile（宿主写回门禁读的 `schema.meta.volatile`）。`openai` 还没有工厂时配了那种条目装不上是预期状态。
 - 跨包声明合并：`tests/declaration-merge.spec.ts` 在临时目录里搭一个真实消费者包跑 `tsc`，fixture 带上可选字段，并带反向对照（不 import 本包时同一个用法必须编译失败）与插件面断言（`ctx.systemOne.providers()` 取不到）。
-- provider 的映射与拒绝规则按 vllm/SGLang 源码核对的夹具测：三种题型的映射、可选字段的拒绝（SGLang 的 `instructions`、vllm 的富 `levels`）、SGLang 缺 `x_label_mass` 时的归一化、`legend` 长度校验、后端错误码。
+- provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端 4xx/5xx 与限额原文、凭据解析与 `Bearer`。
 - `openai` provider：按官方载荷的夹具与拒绝规则验收；**未对真实端点实测**，接上真实端点后补一次。
 - 决策通道：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导、阈值语义（两种确定性公式、算不出时按 `abstain`）各有可跑用例。
 - 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——`pnpm pack` 进临时 profile、按 `dsh.profile.bundles` 组合出这一行、用真实 Loader 启动并跑启动审计，断言该行 ACTIVE 且 `ctx.systemOne` 注册假 provider 后 `ask` 成功；profile 里装不上本包时该 bundle 被跳过、原因点名本包（复核记录见 `.scratch/dsh-system-one/profile-load.md`）。bundle 加上通道行后**仍需**复验多行 patch。

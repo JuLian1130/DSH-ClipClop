@@ -2,8 +2,8 @@
  * 票据 02a：条目配置与注册。
  *
  * 判据分三层：schema（键名、kind 枚举、label 不唯一）、装载期（id 重复、kind 没有工厂）、配置面
- * （`entries` 整字段 volatile）。工厂表在本票是**空**的，所以「配了条目就装不上」是预期状态：
- * 真正的注册成功由 02b 用 `systemone` 的工厂验。
+ * （`entries` 整字段 volatile）。本票写的时候工厂表还是空的；`systemone` 的实现落地后（02b），
+ * 「配了条目就装不上」只剩 `openai` 这一种 kind 成立。
  */
 
 import { readFileSync } from 'node:fs'
@@ -73,17 +73,15 @@ describe('条目配置', () => {
   })
 
   it('label 可以不唯一：两个同名、id 不同的条目通过配置校验并存', async () => {
-    const { fiber, error } = await mount({
+    const { ctx, error } = await mount({
       entries: [
         { ...ENTRY, id: 'a', label: '本地 SGLang' },
-        { ...ENTRY, id: 'b', label: '本地 SGLang', kind: 'openai' },
+        { ...ENTRY, id: 'b', label: '本地 SGLang' },
       ],
     })
 
-    // 配置校验过了：失败原因只有一个——工厂表在上一条 kind 上还没有分支。
-    expect(error).not.toBeInstanceOf(ValidationError)
-    expect((error as Error).message).toBe('system-one: no provider factory for kind "systemone" (entry "a")')
-    expect(resolvedEntries(fiber)).toHaveLength(2)
+    expect(error).toBeUndefined()
+    expect(providerIds(ctx)).toEqual(['a', 'b'])
   })
 
   it('id 重复时抛错', async () => {
