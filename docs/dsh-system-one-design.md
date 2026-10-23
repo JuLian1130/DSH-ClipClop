@@ -67,6 +67,8 @@
 
 **不支持的可选字段必须抛错，不得静默忽略**：请求字段（`instructions`、富 `levels` 等）在某个 provider 上无法如实表达时，provider 要报错并点名字段；响应字段（`labelMass`、`argmaxIsLabel`、`legend`）是 optional，缺席有明确含义，不是某个默认值。
 
+`state` 是**必填**字段，但不是每个后端都能表达任意 JSON：SGLang 只收字符串/对象/数组。provider 遇到 `null` 或标量时同样抛错并点名字段——不字符串化、不包成对象。把它悄悄改写成另一种形状等于换掉判断依据，比报错更糟。
+
 ### 字段与后端对照
 
 | 契约字段 | vllm `/v1/systemone` | SGLang `/v1/systemone` | 不支持时 |
@@ -86,7 +88,7 @@
 
 ## 条目配置与设置页
 
-`entries` 是本包唯一的配置项：一个扁平对象数组，每项是 `{ id, label, kind, baseUrl, model, apiKeyEnv? }`。`id` 是内部标识，唯一、由系统生成（页面新增条目时生成一个可读 slug，例如 `sglang-local-3f9c`；手写 patch 时自己给一个唯一值），消费者按它指名条目；`label` 是给人看的名称，**可以不唯一**（两个条目都叫「本地 SGLang」是合法的）。默认空数组，示例只以注释形式出现在 `cordis.patch.yml`，不指向任何真实部署。装载时按数组建条目并注册；重复 `id` 仍按既有规则抛错。
+`entries` 是本包唯一的配置项：一个扁平对象数组，每项是 `{ id, label, kind, baseUrl, model, apiKeyEnv? }`。`id` 是内部标识，唯一、由系统生成（页面新增条目时生成一个可读 slug，例如 `sglang-local-3f9c`；手写 patch 时自己给一个唯一值），消费者按它指名条目；`label` 是给人看的名称，**可以不唯一**（两个条目都叫「本地 SGLang」是合法的）。默认空数组，示例只以注释形式出现在 `cordis.patch.yml`，不指向任何真实部署。装载时按数组建条目并注册——`kind` 经**工厂表**映射到 provider 实现，枚举内有值但没有工厂时在加载期报错并点出 `kind`（不能让一个没有实现的条目注册成功、到 `ask` 时才炸）；重复 `id` 仍按既有规则抛错。
 
 **为什么 id 不能由用户填**：供应商名、模型、地址、协议这四项都不唯一，把其中任何一个当键，都会出现两个条目同名、`ask` 指向不确定实现的局面——这正是第一步「同名注册抛错」要防的事，所以在源头就给它一个系统生成的唯一 id。
 
@@ -141,7 +143,7 @@
 
 第一步交付契约与注册表。第二步交付三件事，需求已厘清：
 
-1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册；`systemone` provider 按上面的字段对照与限额做映射与拒绝规则（SGLang 的 `instructions` 抛错、vllm 的富 `levels` 抛错、SGLang 缺 `x_label_mass` 时按 1.0 归一化、`legend` 长度校验、后端错误码），并按后端处理 state 归一化；`openai` provider 接 OpenAI Decisions API 的载荷。凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析。
+1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册；`systemone` provider 按上面的字段对照与限额做映射与拒绝规则（SGLang 的 `instructions` 抛错、vllm 的富 `levels` 抛错、SGLang 缺 `x_label_mass` 时按 1.0 归一化、`legend` 长度校验、后端错误码），`state` 在 SGLang 上无法表达时抛错（见「题面与答案」）；`openai` provider 接 OpenAI Decisions API 的载荷。凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析。
 2. **接入层的条目页**（客户端半）：增删改条目，密钥写凭据域。
 3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值，以及它自己的页面。
 
