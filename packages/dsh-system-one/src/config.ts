@@ -10,7 +10,7 @@
 import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
-/** 条目的协议。枚举外的值在装载期报错；枚举内有值但没有工厂时同样报错并点出 `kind`。 */
+/** 条目的协议。枚举外的值在装载期报错；枚举里的每个值都有实现（工厂表是穷尽的）。 */
 export type Kind = 'systemone' | 'openai'
 
 /** 一个决策模型条目。 */

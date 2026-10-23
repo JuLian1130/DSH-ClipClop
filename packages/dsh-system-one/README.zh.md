@@ -2,7 +2,7 @@
 
 决策模型的接入层：把带类型的题面（是非／单选／量表）交给一个条目，拿回带概率、可审计的答案。本包同时是 bundle 与接入层——它提供 `ctx.systemOne` 注册表，并把配置里的**条目**在装载时建好、注册进去。
 
-当前状态：契约、注册表、条目配置与 `systemone` 协议（vllm／SGLang 的 `/v1/systemone`）的 provider 已落地。`openai` 协议还没有实现，所以配了那种条目会在装载期报「这个 kind 没有实现」——这是预期状态，不是配置写错了。
+当前状态：契约、注册表、条目配置与两种协议的 provider 都已落地——`systemone`（vllm／SGLang 的 `/v1/systemone`）与 `openai`（OpenAI Decisions API 的 `/v1/decisions`）。`openai` 这一路**还没有对真实端点实测**，只按官方载荷写了夹具：接上真实端点后再核一次。
 
 ## 安装
 
@@ -59,3 +59,13 @@ dsh plugin --profile <name> add /tmp/dsh-system-one/dsh-clipclop-dsh-system-one-
 - **请求级 `instructions` 不支持**：传了非空值直接报错。vllm 认它、SGLang 会静默忽略，两边没法都如实表达，所以按「不证实即不支持」处理。
 - **量表档位只有字符串在两边都被忠实支持**：provider 拿回读的档位值（`legend`）与请求的档位逐项核对，后端若把富档位串化成字符串（vllm 会），就报错并点出 `levels`。
 - **`state` 原样透传**：SGLang 只收字符串、对象、数组，`null` 或标量会被它拒绝（422），provider 把那次调用判失败并带原文。
+
+## `openai` 协议怎么接
+
+- **端点**是 `baseUrl` + `/v1/decisions`。`baseUrl` 填服务根地址（例如 `https://api.openai.com`），不要带 `/v1`。
+- **凭据**与 `systemone` 同一套：`apiKeyEnv` 非空时每次调用经凭据服务重新解析，以 `Authorization: Bearer <值>` 带上。
+- **`state` 进共享证据**：字符串原样当文字，对象/数组当结构化数据；`null` 与数字/布尔在这个端点没有对应形状，调用直接失败并点名 `state`（不会替你字符串化）。
+- **请求级 `instructions`** 作为共享证据里前置的一段文字发出去；空串不发。**`images`** 作为图片内容块附在共享证据里。
+- **三样东西这个端点没有位置**，带了内容就报错并点名字段：请求级 `chatTemplateKwargs`、是非题的 `optionDescriptions`（`predicate` 只有题干）、非字符串的量表档位（线上档位只有一个字符串标签）。前两样的空值等于没传，放行。
+- **拒答**：模型拒绝回答某一题时，该题不在 `answers` 里，`warnings` 里多一条带该题 `questionId` 的说明；整次拒答（没点名哪一题）算这次调用失败。
+- **未对真实端点实测**：以上按官方指南实现，接上真实端点后补一次核对。

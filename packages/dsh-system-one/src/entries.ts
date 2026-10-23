@@ -1,8 +1,8 @@
 /**
  * 条目构建：把配置里的每一条建成 provider，并交给注册表。
  *
- * `kind` 到实现的映射是一张**工厂表**。枚举里有值但没有对应工厂时在装载期报错——不能让一个没有实现的
- * 条目注册成功、到 `ask` 时才炸。
+ * `kind` 到实现的映射是一张**穷尽的**工厂表：枚举里加一个 `kind` 而不实现它，`tsc` 就报错——
+ * 不会出现一条没有实现的条目注册成功、到 `ask` 时才炸。
  *
  * @module
  */
@@ -10,6 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Entry, Kind } from './config.ts'
 import type { SystemOneProvider } from './provider.ts'
+import { openai } from './providers/openai.ts'
 import { systemone } from './providers/systemone.ts'
 
 /**
@@ -19,19 +20,15 @@ import { systemone } from './providers/systemone.ts'
  */
 export type ProviderFactory = (entry: Entry, ctx: Context) => SystemOneProvider
 
-/**
- * `kind` → provider 工厂。
- *
- * `openai` 还没有实现（03 填），所以配了那种条目会在装载期报错点名 `kind`。
- */
-export const FACTORIES: Partial<Record<Kind, ProviderFactory>> = { systemone }
+/** `kind` → provider 工厂。 */
+export const FACTORIES: Record<Kind, ProviderFactory> = { systemone, openai }
 
 /**
  * 校验条目并建出 provider。
  * @param ctx - 插件的 context，转交给工厂。
  * @param entries - 配置里的条目。
  * @returns id 与 provider，按配置顺序。
- * @throws `id` 重复（两个条目同名会让 `ask` 指向不确定的实现）；`kind` 没有对应工厂。
+ * @throws `id` 重复：两个条目同名会让 `ask` 指向不确定的实现。
  */
 export function buildEntries(ctx: Context, entries: readonly Entry[]): Array<[string, SystemOneProvider]> {
   const seen = new Set<string>()
@@ -39,11 +36,5 @@ export function buildEntries(ctx: Context, entries: readonly Entry[]): Array<[st
     if (seen.has(entry.id)) throw new Error(`system-one: entry id "${entry.id}" is used twice`)
     seen.add(entry.id)
   }
-  return entries.map((entry) => {
-    const factory = FACTORIES[entry.kind]
-    if (factory === undefined) {
-      throw new Error(`system-one: no provider factory for kind "${entry.kind}" (entry "${entry.id}")`)
-    }
-    return [entry.id, factory(entry, ctx)]
-  })
+  return entries.map((entry) => [entry.id, FACTORIES[entry.kind](entry, ctx)])
 }

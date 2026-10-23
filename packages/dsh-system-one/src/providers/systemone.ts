@@ -19,16 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Entry } from '../config.ts'
 import { SystemOneProvider, type ProviderRequest } from '../provider.ts'
 import type { Answer, Level, ProviderResponse, Question } from '../types.ts'
-
-/**
- * 凭据服务上 provider 用到的那一半：`ctx.credentials.resolve(ref)`。
- *
- * 用结构类型而不是依赖 `@deepseek-ai/dsh-credentials`：这里只调一个方法，加一条依赖不值得；
- * 服务没装载时按 provider 级失败报错，也不会静默当成「没有凭据」。
- */
-interface CredentialResolver {
-  resolve(ref: string): Promise<{ value: string } | undefined>
-}
+import { asNumber, at, postJson, requiredNumber, requiredString } from './wire.ts'
 
 /** 线上题面：两家的题型名与 `criteria` 形状一致，差别只在各自支持的字段上。 */
 interface WireQuestion {
@@ -80,9 +71,7 @@ class SystemOneHttpProvider extends SystemOneProvider {
     // 响应里没有 `instructions` 的回显，也就没有可核对的痕迹：vllm 认它、SGLang 静默忽略。
     // 空串不改变任何后端的输入，所以只拒绝非空值。
     if (request.instructions) {
-      throw new Error(
-        `system-one: entry "${this.entry.id}": instructions cannot be honored by every systemone backend`,
-      )
+      throw new Error(`${at(this.entry)}: instructions cannot be honored by every systemone backend`)
     }
     const response = await this.post(request)
     const usage = response.usage
@@ -96,12 +85,8 @@ class SystemOneHttpProvider extends SystemOneProvider {
     }
   }
 
-  /** 发出请求并读回响应体；HTTP 非 2xx 与网络失败都按 provider 级失败抛错。 */
+  /** 发出请求并读回响应体；失败口径见 `postJson`。 */
   private async post(request: ProviderRequest): Promise<WireResponse> {
-    const url = `${this.entry.baseUrl.replace(/\/+$/, '')}/v1/systemone`
-    const headers: Record<string, string> = { 'content-type': 'application/json' }
-    const apiKey = await this.apiKey()
-    if (apiKey !== undefined) headers.authorization = `Bearer ${apiKey}`
     const body: WireRequest = {
       model: this.entry.model,
       state: request.state,
@@ -109,46 +94,7 @@ class SystemOneHttpProvider extends SystemOneProvider {
       ...(request.images === undefined ? {} : { images: request.images }),
       ...(request.chatTemplateKwargs === undefined ? {} : { chat_template_kwargs: request.chatTemplateKwargs }),
     }
-
-    let response: Response
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: requestSignal(request),
-      })
-    } catch (error) {
-      throw new Error(`system-one: entry "${this.entry.id}": ${(error as Error).message}`)
-    }
-    const text = await response.text()
-    if (!response.ok) {
-      throw new Error(`system-one: entry "${this.entry.id}": HTTP ${response.status} from ${url}: ${text}`)
-    }
-    try {
-      return JSON.parse(text) as WireResponse
-    } catch {
-      throw new Error(`system-one: entry "${this.entry.id}": ${url} answered with non-JSON: ${text}`)
-    }
-  }
-
-  /** 解析 `apiKeyEnv` 指名的凭据：为空＝不带凭据；解析不到按 provider 级失败抛错。 */
-  private async apiKey(): Promise<string | undefined> {
-    const ref = this.entry.apiKeyEnv
-    if (!ref) return undefined
-    const at = `system-one: entry "${this.entry.id}": apiKeyEnv "${ref}"`
-    // `ctx.get` 取的是**可选**服务：没装凭据子系统的 profile 照常装载，只是真用到凭据时报错，
-    // 而不是静默当成「没有凭据」。
-    const credentials = this.ctx.get('credentials') as CredentialResolver | undefined
-    if (credentials === undefined) throw new Error(`${at} needs the credentials service, which this profile does not load`)
-    let resolved: { value: string } | undefined
-    try {
-      resolved = await credentials.resolve(ref)
-    } catch (error) {
-      throw new Error(`${at}: ${(error as Error).message}`)
-    }
-    if (resolved === undefined) throw new Error(`${at} is not configured`)
-    return resolved.value
+    return (await postJson(this.entry, this.ctx, '/v1/systemone', body, request)) as WireResponse
   }
 
   /** 按请求逐题取回答案；响应里没有的题就是缺席，不补答案、不合成警告。 */
@@ -165,12 +111,12 @@ class SystemOneHttpProvider extends SystemOneProvider {
     const signals = confidenceSignals(wire, diagnostics)
     switch (question.type) {
       case 'boolean':
-        return { type: 'boolean', probability: this.requiredNumber(wire.noul, id, 'noul'), ...signals }
+        return { type: 'boolean', probability: requiredNumber(this.entry, wire.noul, id, 'noul'), ...signals }
       case 'choice': {
         const probabilities = this.probabilities(wire.probabilities, question.options, id)
         return {
           type: 'choice',
-          choice: this.requiredString(wire.choice, id, 'choice'),
+          choice: requiredString(this.entry, wire.choice, id, 'choice'),
           ...(probabilities === undefined ? {} : { probabilities }),
           ...signals,
         }
@@ -180,7 +126,7 @@ class SystemOneHttpProvider extends SystemOneProvider {
         const legend = this.legend(question.levels, wire.legend, id)
         return {
           type: 'score',
-          score: this.requiredNumber(wire.score, id, 'score'),
+          score: requiredNumber(this.entry, wire.score, id, 'score'),
           ...(probabilities === undefined ? {} : { probabilities }),
           ...(legend === undefined ? {} : { legend }),
           ...signals,
@@ -193,48 +139,34 @@ class SystemOneHttpProvider extends SystemOneProvider {
   private probabilities(value: unknown, names: readonly string[], id: string): number[] | undefined {
     if (value === undefined) return undefined
     if (typeof value !== 'object' || value === null) {
-      throw new Error(`system-one: entry "${this.entry.id}": question "${id}": probabilities is not an object`)
+      throw new Error(`${at(this.entry)}: question "${id}": probabilities is not an object`)
     }
     const byName = value as Record<string, unknown>
-    return names.map((name) => this.requiredNumber(byName[name], id, `probabilities["${name}"]`))
+    return names.map((name) => requiredNumber(this.entry, byName[name], id, `probabilities["${name}"]`))
   }
 
   /** 量表答案的档位回显：转成与 `levels` 同序的数组，并要求后端回的就是请求里那些值。 */
   private legend(levels: readonly Level[], value: unknown, id: string): readonly Level[] | undefined {
     if (value === undefined) return undefined
     if (typeof value !== 'object' || value === null) {
-      throw new Error(`system-one: entry "${this.entry.id}": question "${id}": legend is not an object`)
+      throw new Error(`${at(this.entry)}: question "${id}": legend is not an object`)
     }
     const echoed = value as Record<string, unknown>
     const returned = Object.keys(echoed).length
     if (returned !== levels.length) {
       throw new Error(
-        `system-one: entry "${this.entry.id}": question "${id}": legend has ${returned} values for ${levels.length} levels`,
+        `${at(this.entry)}: question "${id}": legend has ${returned} values for ${levels.length} levels`,
       )
     }
     // shortcut: 逐字节比较 JSON 文本，键顺序不同的同值会被误判为不一致；等到有后端重排键再换深比较。
     levels.forEach((level, index) => {
       if (JSON.stringify(echoed[String(index)]) !== JSON.stringify(level)) {
         throw new Error(
-          `system-one: entry "${this.entry.id}": question "${id}": levels[${index}] cannot be echoed faithfully (server returned ${JSON.stringify(echoed[String(index)])})`,
+          `${at(this.entry)}: question "${id}": levels[${index}] cannot be echoed faithfully (server returned ${JSON.stringify(echoed[String(index)])})`,
         )
       }
     })
     return levels
-  }
-
-  private requiredNumber(value: unknown, id: string, field: string): number {
-    if (typeof value !== 'number') {
-      throw new Error(`system-one: entry "${this.entry.id}": question "${id}": the response has no ${field}`)
-    }
-    return value
-  }
-
-  private requiredString(value: unknown, id: string, field: string): string {
-    if (typeof value !== 'string') {
-      throw new Error(`system-one: entry "${this.entry.id}": question "${id}": the response has no ${field}`)
-    }
-    return value
   }
 }
 
@@ -287,15 +219,4 @@ function confidenceSignals(
     labelMass: asNumber(wire.x_label_mass) ?? asNumber(diagnostics?.label_mass) ?? 1,
     ...(typeof argmaxIsLabel === 'boolean' ? { argmaxIsLabel } : {}),
   }
-}
-
-/** 调用方的取消信号与 deadline 合成一个给 `fetch` 的信号。 */
-function requestSignal(request: ProviderRequest): AbortSignal | undefined {
-  const timeout = request.timeoutMs === undefined ? undefined : AbortSignal.timeout(request.timeoutMs)
-  if (request.signal === undefined) return timeout
-  return timeout === undefined ? request.signal : AbortSignal.any([request.signal, timeout])
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' ? value : undefined
 }

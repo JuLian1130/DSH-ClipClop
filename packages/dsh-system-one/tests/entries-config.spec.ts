@@ -1,9 +1,9 @@
 /**
  * 票据 02a：条目配置与注册。
  *
- * 判据分三层：schema（键名、kind 枚举、label 不唯一）、装载期（id 重复、kind 没有工厂）、配置面
- * （`entries` 整字段 volatile）。本票写的时候工厂表还是空的；`systemone` 的实现落地后（02b），
- * 「配了条目就装不上」只剩 `openai` 这一种 kind 成立。
+ * 判据分三层：schema（键名、kind 枚举、label 不唯一）、装载期（id 重复、两个 kind 都能建出条目）、
+ * 配置面（`entries` 整字段 volatile）。工厂表在 02b/03 填满后是穷尽的：枚举外与「枚举内没实现」
+ * 两种失败都不会走到装载期——前者被 schema 拦下，后者在 `tsc` 就报错。
  */
 
 import { readFileSync } from 'node:fs'
@@ -105,12 +105,13 @@ describe('条目配置', () => {
     expect((error as Error).message).toContain('entries.0.kind')
   })
 
-  it('kind 在枚举内但没有工厂时装载期报错并点出 kind', async () => {
-    const { ctx, error } = await mount({ entries: [{ ...ENTRY, kind: 'openai' }] })
+  it('两个 kind 的条目同时装载：各自注册、按配置顺序', async () => {
+    const { ctx, error } = await mount({
+      entries: [ENTRY, { ...ENTRY, id: 'openai-decisions', label: 'OpenAI Decisions', kind: 'openai', baseUrl: 'https://api.openai.com' }],
+    })
 
-    expect((error as Error).message).toBe('system-one: no provider factory for kind "openai" (entry "sglang-local")')
-    // 装载失败不留半个服务：fiber 回滚，注册表也没了。
-    expect((ctx as { systemOne?: unknown }).systemOne).toBeUndefined()
+    expect(error).toBeUndefined()
+    expect(providerIds(ctx)).toEqual(['sglang-local', 'openai-decisions'])
   })
 
   it('entries 是整字段 volatile：解析出稳定引用，schema 上打了标记', async () => {
