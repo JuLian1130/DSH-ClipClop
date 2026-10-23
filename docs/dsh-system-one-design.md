@@ -1,6 +1,6 @@
 # dsh-system-one 设计
 
-状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装，契约已按 vllm 与 SGLang 的 `/v1/systemone` 补齐可选字段与可信度信号；第二步（provider 实现、设置页与远程面）未开工。
+状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装，契约已按 vllm 与 SGLang 的 `/v1/systemone` 补齐可选字段与可信度信号；第二步（provider 实现、接入层的条目页、决策通道子插件与其页面）需求已厘清、未开工，范围见「当前范围与非目标」，机制见「决策通道」。远程面不做。
 
 一句话：把**带类型的题面**交给某个决策模型，拿回**带概率的答案**。这一层不产出内容，也不决定答案怎么用。术语见 `CONTEXT.md` 的「决策模型接入」。
 
@@ -14,7 +14,7 @@
 
 ## 服务名与装载
 
-服务名 `ctx.systemOne`，由 `declare module '@deepseek-ai/cordis'` 合并而来。一个包、一个装载行（`cordis.patch.yml`）。
+服务名 `ctx.systemOne`，由 `declare module '@deepseek-ai/cordis'` 合并而来。本包同时是这个 bundle 与接入层：它自己占一行，决策通道子插件是同一份 `cordis.patch.yml` 里的第二行，每行各有 id，可按名覆盖或禁用（`dsh-base` 是纯容器形态的先例——`lib/index.js` 只有 `export {}`、`dependencies` 列出它插入的每一行；本包选择合体，因为搬家的收益只是概念整齐，代价是改包名、改引用、改测试）。
 
 第三方 provider 在自己的插件里 `inject: ['systemOne']` 之后调 `ctx.systemOne.register(id, provider)`。注册的生命周期跟着注册方所在的 fiber，卸载即释放；同一个 id 注册两次抛错——两个条目同名会让 `ask` 指向不确定的实现，不能静默覆盖。
 
@@ -29,11 +29,11 @@
 
 `providers()` **不在插件面上**，尽管它是服务类上的公开方法。它一旦在插件面上可见，最省事的写法就是「拿列表挑一个」（列表长度为 1 时更顺手），那正好把「用哪个条目」变回隐式默认。约束落在类型上（`Pick<SystemOneService, 'register' | 'ask'>`），但要说清它是**名义**约束：服务类本身是导出的，一次转型就能绕过（本包的测试正是这么读它的）。它挡的是顺手用法，不是刻意绕过。
 
-### 远程面（未交付，随第二步）
+### 远程面（不做）
 
-设计上只应有这一个远程例外：浏览器经 `ctx.remote.systemOne.providers()` 读到条目 id，用它的是设置页；`ask` 不在远程面上，业务插件的判断在本进程里做。
+原计划随第二步交付一个远程例外：浏览器经 `ctx.remote.systemOne.providers()` 读到条目 id，供设置页使用。**现在不做。** 设置页的数据源是配置而不是注册表：条目页读写自己那一行的 `entries`，决策通道的页面跨命名空间只读同一份 `entries`（先例：`dsh-reasoning-pruner` 的客户端读 pi-ai 的命名空间）。注册表因此不需要任何远程面，`providers()` 保持为服务类上的公开方法，用处仍是 `ask()` 报错时说明现状与测试断言注册顺序。
 
-**第一步不交付它。** 只打 `@Remote` 标记是半个面：typert 的远程面要求随包交付生成产物（宿主面的 `./typert` 与客户端面的 `./remote`，本仓的 build 也就得从纯 `tsc` 换成带生成器的流水线），而消费它的客户端半属于第二步。标记单独存在时买不到任何东西，却要价一份测试期装饰器转译——所以标记、产物与转译一起在第二步落地。在那之前 `providers()` 只是服务类上的公开方法，用处是 `ask()` 报错时说明现状与测试断言注册顺序。
+只打 `@Remote` 标记买不到东西，却要价一整条生成器流水线（宿主面 `./typert`、客户端面 `./remote`，build 从纯 `tsc` 换成带生成器）。这是它一直推迟、现在直接砍掉的原因。
 
 ### provider 作者面
 
@@ -84,13 +84,39 @@
 
 以上限额与边界按 2026-10-20 的 vllm 与 SGLang 源码核对；接新版本时以实际源码为准。
 
+## 条目配置与设置页
+
+`entries` 是本包唯一的配置项：一个扁平对象数组，每项是 `{ id, kind, baseUrl, model, apiKeyEnv? }`——正好对应 `CONTEXT.md` 里 provider 条目的五要素（id、协议、端点、模型、凭据引用），不新增「显示名」这类字段。默认空数组，示例只以注释形式出现在 `cordis.patch.yml`，不指向任何真实部署。装载时按数组建条目并注册；同名 id 仍按既有规则抛错。
+
+**用扁平对象 + `kind` 枚举，不用判别联合**：两种协议（`systemone`、`openai`）共用同一组字段，字段不随 kind 变化；判别联合只在字段随 kind 变化时才需要，而通用 HTTP 不做，那个需求不存在。
+
+**`entries` 整字段 `.volatile()`**：设置页的写回路径只接受 volatile 路径；而 volatile 只能落在顶层固定字段路径（数组元素内部再放会被拒），所以标记打在整个 `entries` 上。
+
+**条目页**（客户端半）做增删改：供应商 id、模型、API 地址、协议（下拉只有两种）、API 密钥（可选）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。
+
+## 决策通道（第二步）
+
+接入层之上有一个子插件，把决策判断交给 agent：需要判断、选择或评分时调它，而不是让主模型自己拿主意。它按第三方 provider 的用法接注册表（`inject: ['systemOne']` 后注册），用哪个条目由它自己的配置回答——接入层不因此新增插件面，也不因此获得全局状态。
+
+**工具面只有一个 `ask`**：参数就是题面（`questions` 映射，三种题型内联），与 `ctx.systemOne.ask` 一一对应；`target` 不进工具参数。不按题型拆成多个工具，也不提供排序、判定这类契约里没有的复合操作——生态里「少而正交」是共识，而契约本来就是一次批量 `ask`。
+
+**引导分两档，设置页切换，默认第一档**：第一档是工具描述 + 一个技能（工具描述就是给模型看的——DSH 会把每个工具的 guidance 段渲染进系统提示；技能承载「什么时候该用、什么时候是类别错误」的细则）；第二档在第一档之上再往 agent 上下文注入一句固定引导。不做更强形态（拦截或替换主模型的判断）——那是编排层的事，且要动全局行为。
+
+**开关默认关闭，关掉即不注册工具**：工具不存在，它的 guidance 段也不存在。本仓先例是改 agent 行为的能力默认关闭；`ctx.tools.register` 返回 disposer，配合 `ctx.effect` 的动态注册有现成写法（`dsh-tool-subagent` 与 `dsh-experimental-tool-agent-team` 各一处）。
+
+**阈值默认不设，设置页可开可设**：开启后每题给一个确定性——是非题用 `|probability − 0.5| × 2`，choice/score 用 provider 自报的 `confidence`；低于阈值该题标 `abstain`，答案与概率仍原样交回。provider 没报可信度、分布也缺席时确定性算不出来，同样标 `abstain` 并写明原因——「判不出来」不等于「放行」。阈值只进配置、不进工具参数：模型能自己放宽的闸门不是闸门。确定性公式是我们给的语义，而 provider 的 `confidence` 定义各不相同，同一阈值在不同 provider 上松紧不同——这一点要写进页面文案与 README。
+
+不采用生态里「由判定器决定要不要披露这个工具」的做法：mu 的实测记录是它在 Terminal-Bench 2.1 上被问了 162 次、从未生效，交互会话里问了 34 次、一个都没打开，还让每轮等待（p50 0.91 s / p90 8.9 s）。开关由使用者控制。
+
+**通道的页面**（客户端半）管三件事：选当前条目（选项跨命名空间读条目页那份 `entries`）、切引导档位、开/设阈值。跨命名空间只读不写——写没有先例。
+
 ## 已裁决的取舍
 
-- **远程面推迟到第二步**（理由见上）：`@Remote` 标记、typert 的生成产物、以及为装饰器付出的测试期转译，一起在客户端半落地时再进来。第一步因此没有装饰器，也就没有测试期的转译配置。
+- **远程面不做**（理由见上）：设置页改从配置命名空间读，注册表不需要远程面，`@Remote` 标记、typert 的生成产物与带生成器的流水线因此都不进来。
 - **不提供「按题型取答案」的类型映射**：没有消费者需要，需要时再按实际用法加。
 - **服务不合成警告**：`warnings` 是 provider 的自报项，服务只透传。漏答的保证只有「该题不在 `answers` 里」这一条；为漏答补写一条服务自造的警告，要在契约里新增一个警告类型，而 provider 自己已解释过原因时还会与它并存，换到的只是「消费者不必自己 diff」。
 - **保留可选 `confidence`，另加 `labelMass`/`argmaxIsLabel`**：三者都是可信度信号，业务插件可能按它们设阈值。定义随 provider 而变、不可跨 provider 比较，契约只透传，不用它们做任何判断。
-- **第二步的 `mock`** 会是一种 provider 类型（第一步的 provider 面只有 `evaluate`，还没有 `kind` 这个配置字段），不出现在默认条目列表里。
+- **`mock` 不做**：生态里的 mock 解决的是「无网络无凭据也能断言精确值」，本仓这个角色由测试期的进程内假 provider 承担（第一步的 8 条行为测试已经这么用）。
 - **8 个可选字段进契约**：`labelMass`、`argmaxIsLabel`、`images`、`instructions`、`optionDescriptions`、富 `levels`、`chatTemplateKwargs`、`legend`。`cacheSalt`、`priority`、`requestId` 只记录用途，不进契约（等真实的运维/追踪需求）；`audio`/`videos` 也不进，只加 `images`。
 - **provider-specific 字段进同一契约，靠“不支持就抛错”兜住**：请求字段在某个 provider 上无法如实表达时抛错并点名字段（尤其 SGLang 的 `instructions`、vllm 的富 `levels`）；响应字段 optional，缺席有明确语义。这样既不丢有场景的能力，也不会静默换掉答案依据。
 - **`labelMass` 归一化**：SGLang 在 Clef/joint schema 与 decision checkpoint 上省略 `x_label_mass`；`systemone` provider 按 1.0 归一化，与 vllm 在这些模型上的 `label_mass=1` 对齐。这是一条依赖 SGLang 文档的假设，接新 checkpoint 时复核。
@@ -104,15 +130,28 @@
 - **`OpenAI decisions` 指 OpenAI 的 Decisions API**（`POST /v1/decisions`，题型 `predicate`／`choice`／`score`），不是 SGLang 的同名端点：两家路径相同而载荷互不兼容——题目标识 `name` 对 `id`、答案数组对映射、概率 `[{value, probability}]` 对 `{名字: float}`。SGLang 那个不做，所以「当前范围」的 provider 列表里不会有同名项。
 - **拒答（refusal）走 `Warning`，不新增答案类型**：有的规范（如 OpenAI Decisions API）会让某一题返回 `type: "refusal"`——模型拒绝回答这一题，没有判断结果，也不带 `probability`／`choice`／`score`／`confidence`。它按我们的口径落成两件事：该题从 `answers` 缺席，provider 另报一条带 `questionId` 的 `Warning`；未具名的整次拒答算 provider 级失败、抛错。契约因此不需要新增答案类型——`Warning.questionId` 就是为这种情况留的。拒答只有 provider 看得到（响应里那一项写着 refusal），服务拿不到，所以它只能由 provider 自报，这正是「服务不合成警告」那条的用例。
 
+- **`kind` 只有两种**：`systemone`（vllm、SGLang、TypeSafe、OpenCode Zen 的 `/v1/systemone`）与 `openai`（OpenAI Decisions API）。后者**未对真实端点实测**，验收只到按官方载荷的夹具，接上真实端点后补一次。
+- **通用 HTTP 不做**：`systemone` 换 `baseUrl` 已覆盖同类端点；要「通用」就得引入请求/响应映射配置，而契约要求「不支持的可选字段必须抛错」，通用映射无法保证这条。等出现一个 `systemone` 表达不了的具体端点再做。
+- **页面分两张**：接入层的客户端半管条目的增删改（写自己的命名空间）；通道子插件的客户端半管「选当前条目 + 引导档位 + 阈值」（写自己的命名空间，跨命名空间只读条目 id）。跨命名空间写没有先例，不做。页面上的「当前应用的决策模型」只对通道这一层有意义——它不是全局开关，注册表按设计可以有多条，多个业务插件各自指名自己的条目。
+- **MCP 面与策略插件不在第二步**：MCP 面是同一批工具的第二种交付，需要一个独立进程与框架无关的核心（DSH 只有 MCP 客户端，没有 MCP server 能力）；「决策模型如何在 Agent 中被使用」的策略插件要按真实场景定，否则就是替使用者预设用法。两者与通道同属这个 bundle，记为后续。
+
 ## 当前范围与非目标
 
-第一步交付契约与注册表，契约已补齐 vllm/SGLang 的可选字段与可信度信号。provider 实现（`systemone`、通用 HTTP、OpenAI decisions、mock）、设置页与远程面仍未开工；`systemone` provider 要按上面的字段对照与限额实现映射与拒绝规则，并按后端处理 state 归一化。其余非目标见上面「做什么、不做什么」。
+第一步交付契约与注册表。第二步交付三件事，需求已厘清：
+
+1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册；`systemone` provider 按上面的字段对照与限额做映射与拒绝规则（SGLang 的 `instructions` 抛错、vllm 的富 `levels` 抛错、SGLang 缺 `x_label_mass` 时按 1.0 归一化、`legend` 长度校验、后端错误码），并按后端处理 state 归一化；`openai` provider 接 OpenAI Decisions API 的载荷。凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析。
+2. **接入层的条目页**（客户端半）：增删改条目，密钥写凭据域。
+3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值，以及它自己的页面。
+
+不在第二步：远程面（不做）、mock、通用 HTTP、MCP 面、策略插件。其余非目标见上面「做什么、不做什么」。
 
 ## 验收要点
 
-- `pnpm --dir packages/dsh-system-one run typecheck` 同时覆盖 `src` 与 `tests`。
-- 8 条行为测试：`ask` 交回答案与耗时、provider 漏答的题从 `answers` 缺席且 `warnings` 原样交回、未注册 `target` 的报错点名 id、同名注册抛错、`providers()` 顺序、注册随注册方 fiber 释放、可选请求字段原样透传且 `target` 不进入 provider 请求、可信度信号与 `legend` 原样交回。
-- `pnpm --dir packages/dsh-system-one run build` 刷新 `lib/`；`tests/declaration-merge.spec.ts` 读构建产物。
+- `pnpm --dir packages/dsh-system-one run typecheck` 同时覆盖 `src` 与 `tests`；`build` 在 `tsc` 之外多一条客户端产物（条目页），`tests/declaration-merge.spec.ts` 继续读构建产物。
+- 第一步的 8 条行为测试继续通过（`ask` 交回答案与耗时、漏答的题从 `answers` 缺席且 `warnings` 原样交回、未注册 `target` 的报错点名 id、同名注册抛错、`providers()` 顺序、注册随注册方 fiber 释放、可选请求字段原样透传且 `target` 不进入 provider 请求、可信度信号与 `legend` 原样交回）。
 - 跨包声明合并：`tests/declaration-merge.spec.ts` 在临时目录里搭一个真实消费者包跑 `tsc`，fixture 带上可选字段，并带反向对照（不 import 本包时同一个用法必须编译失败）与插件面断言（`ctx.systemOne.providers()` 取不到）。
-- **尚未实测**：按真实 profile 装载这条 bundle 行——第一步的测试都用 `new Context()`，装载路径不在任何门禁里。第二步开工前补一次真实装载。
-- **第二步补**：`systemone` provider 对 vllm/SGLang 的字段映射、拒绝规则（SGLang 的 `instructions`、vllm 的富 `levels`）与后端错误码的验收测试。
+- provider 的映射与拒绝规则按 vllm/SGLang 源码核对的夹具测：三种题型的映射、可选字段的拒绝（SGLang 的 `instructions`、vllm 的富 `levels`）、SGLang 缺 `x_label_mass` 时的归一化、`legend` 长度校验、后端错误码。
+- `openai` provider：按官方载荷的夹具与拒绝规则验收；**未对真实端点实测**，接上真实端点后补一次。
+- 决策通道：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导、阈值语义（两种确定性公式、算不出时按 `abstain`）各有可跑用例。
+- **尚未实测**：按真实 profile 装载这条 bundle 行——第一步的测试都用 `new Context()`，装载路径不在任何门禁里。第二步的第一张票先补一次真实装载；bundle 加上通道行后再复验多行 patch。
+- 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。
