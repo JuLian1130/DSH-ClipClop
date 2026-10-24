@@ -1,6 +1,6 @@
 /**
- * dsh-system-one-channel 的浏览器半：设置页里注册一个「决策通道」页签（`settings.plugins.tab`），管三件事——
- * 选当前条目、切引导档位、开/设可信度门槛。
+ * dsh-system-one-channel 的浏览器半：设置页里注册一个「决策通道」页签（`settings.plugins.tab`），管四件事——
+ * 总开关、选当前条目、切引导档位、开/设可信度门槛。
  *
  * **两个命名空间都写死，不做推导**：写回的是本行 patch 的 id `dsh-system-one-channel`（也是宿主半的入口
  * `name`）；「当前条目」的选项跨命名空间**只读**接入层那一行 `dsh-system-one` 的 `entries`（先例是
@@ -9,7 +9,7 @@
  * 页面只在**本行被 serve 之后**注册：本行没装时没有写入目标，页就是死页。接入层没装时选项为空、页面照常
  * 可用——另两项与它无关，而不是整页消失。
  *
- * 写入只有一条路：三项都是 volatile 字段，由页面合成一次 `mutate`（宿主对非 volatile 路径直接拒绝，所以
+ * 写入只有一条路：四项都是 volatile 字段，由页面合成一次 `mutate`（宿主对非 volatile 路径直接拒绝，所以
  * 页面上不会有第二种写入）。
  *
  * @module
@@ -85,6 +85,7 @@ export function apply(ctx: Context): void {
    */
   const save = async (patch: ChannelPatch): Promise<boolean> => {
     const ops: SettingsPathOpView[] = []
+    if (patch.enabled !== undefined) ops.push({ op: 'set', path: ['enabled'], value: patch.enabled })
     if (patch.target !== undefined) ops.push({ op: 'set', path: ['target'], value: patch.target })
     if (patch.guidance !== undefined) ops.push({ op: 'set', path: ['guidance'], value: patch.guidance })
     if (patch.threshold !== undefined) {

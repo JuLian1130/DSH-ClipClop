@@ -13,6 +13,7 @@ import SystemPrompt, { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolRuntime, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { SystemOneProvider, type ProviderRequest, type ProviderResponse } from '@dsh-clipclop/dsh-system-one'
 import * as SystemOne from '@dsh-clipclop/dsh-system-one'
+import type { Guidance, Threshold } from '../../src/config.ts'
 import * as Channel from '../../src/index.ts'
 
 /** 一个条目 id；通道配置的 `target` 指它。 */
@@ -43,11 +44,11 @@ export interface MountOptions {
 }
 
 /**
- * 装齐接缝、注册假 provider、再装通道插件。
+ * 装齐接缝并注册假 provider（不含通道插件）：两条装载路径共用。
  * @param options - 装载选项。
- * @returns context、通道的 fiber、装载失败的原因（成功时为 `undefined`）与假 provider。
+ * @returns context 与假 provider。
  */
-export async function mount(options: MountOptions = {}) {
+async function services(options: MountOptions): Promise<{ ctx: Context, provider: StubProvider }> {
   const ctx = new Context()
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(SystemPrompt)
@@ -55,9 +56,65 @@ export async function mount(options: MountOptions = {}) {
   await ctx.plugin(SystemOne)
   const provider = new StubProvider(options.respond)
   ctx.systemOne.register(TARGET, provider)
+  return { ctx, provider }
+}
+
+/**
+ * 装齐接缝、注册假 provider、再装通道插件。
+ * @param options - 装载选项。
+ * @returns context、通道的 fiber、装载失败的原因（成功时为 `undefined`）与假 provider。
+ */
+export async function mount(options: MountOptions = {}) {
+  const { ctx, provider } = await services(options)
   const fiber = ctx.plugin(Channel, options.channel as never)
   const error = await fiber.then(() => undefined, (reason: unknown) => reason)
   return { ctx, fiber, error, provider }
+}
+
+/** 热切换用例的初始配置：四项都是普通值，改的是快照。 */
+export interface SwitchConfig {
+  enabled: boolean
+  target: string
+  guidance: Guidance
+  threshold: Threshold
+}
+
+/**
+ * 装通道插件，并留一个改配置的入口。
+ *
+ * 真实 loader 把 volatile 新值提交进运行中的 fiber 后只派发 `loader/volatile-update`，这里用 `{ get }` 替身
+ * 加同一个事件模拟那条路径（与接入层 `tests/system-one.spec.ts` 的热更新用例同一个做法）。
+ * @param options - 初始配置（缺项按 schema 默认值）与装载选项。
+ * @returns context、假 provider 与改配置的入口。
+ */
+export async function mountSwitch(options: MountOptions & { config?: Partial<SwitchConfig> } = {}) {
+  const { ctx, provider } = await services(options)
+  const current: SwitchConfig = {
+    enabled: false,
+    target: '',
+    guidance: 'tool',
+    threshold: { enabled: false, value: 0.5 },
+    ...options.config,
+  }
+  // 四个字段的形状就是 `Volatile<T>` 的读法：用例只用到 `get`。
+  Channel.apply(ctx, {
+    enabled: { get: () => current.enabled },
+    target: { get: () => current.target },
+    guidance: { get: () => current.guidance },
+    threshold: { get: () => current.threshold },
+  } as never)
+  return {
+    ctx,
+    provider,
+    /**
+     * 换掉若干字段，再按 loader 的形状派发事件（值先提交、再派发）。
+     * @param patch - 这次改的字段。
+     */
+    update(patch: Partial<SwitchConfig>): void {
+      Object.assign(current, patch)
+      ctx.emit('loader/volatile-update', Object.keys(patch).map(key => [key]))
+    },
+  }
 }
 
 /** 技能注册表；没组合技能子系统时为空。 */

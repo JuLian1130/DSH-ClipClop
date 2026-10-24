@@ -1,9 +1,9 @@
 /**
  * 决策通道子插件的配置契约。
  *
- * 四个字段里三个是 `.volatile()`：设置页的写回路径只接受 volatile 路径（理由同接入层的 `entries`），
- * 且这三项都按**每次调用现读**用——改完即生效，不需要重载插件。`enabled` **不是** volatile：它决定
- * 工具与引导注册不注册（装载期注册），改它本来就该重挂载插件，把装载期决定伪装成热更新没有好处。
+ * 四个字段都是 `.volatile()`：设置页的写回路径只接受 volatile 路径（理由同接入层的 `entries`），且这四项
+ * 都按**每次现读**用——改完即生效，不需要重载插件。开关决定注册哪一批（工具、引导段、技能），换开关由插件
+ * 自己在 `loader/volatile-update` 里整批换，机制见设计文档「决策通道」。
  *
  * 配置非法一律在装载期报错并点出键名：开关打开却没选条目、阈值越界。
  *
@@ -34,8 +34,8 @@ export interface Threshold {
 
 /** 插件配置。 */
 export interface Config {
-  /** 工具与引导的总开关。默认关闭；关掉时工具、引导段与技能都不注册。 */
-  enabled?: boolean
+  /** 总开关，设置页可改。默认关闭；关掉时工具、引导段与技能都不注册。 */
+  enabled?: Volatile<boolean>
   /** 当前条目：接入层里那条决策模型的 `id`。开关打开时必填，否则装载期报错。 */
   target?: Volatile<string>
   /** 引导档位，默认第一档。 */
@@ -47,14 +47,14 @@ export interface Config {
 /**
  * 配置 schema。
  *
- * 注解的两个类型参数是**读入**与**读出**的形状：三个字段在 patch 里是普通值，装载后是 volatile 引用；
+ * 注解的两个类型参数是**读入**与**读出**的形状：四个字段在 patch 里是普通值，装载后是 volatile 引用；
  * 注解本身也是必需的，与接入层的 `Config` 同一个理由（`d.ts` 产出会因此报 TS2883）。
  */
 export const Config: z<
   { enabled?: boolean; target?: string; guidance?: Guidance; threshold?: Threshold },
   Required<Config>
 > = z.object({
-  enabled: z.boolean().default(false),
+  enabled: z.boolean().default(false).volatile(),
   target: z.string().default('').volatile(),
   guidance: z.union([z.const('tool'), z.const('context')]).default('tool').volatile(),
   threshold: z

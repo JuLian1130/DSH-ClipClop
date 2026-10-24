@@ -9,7 +9,7 @@ import SkillRegistry from '@deepseek-ai/dsh-skill'
 import { describe, expect, it } from 'vitest'
 import type { Answer, ProviderResponse } from '@dsh-clipclop/dsh-system-one'
 import * as Channel from '../src/index.ts'
-import { BOOLEAN_QUESTION, STATE, TARGET, callTool, mount, prompt, skills, tool } from './support/channel.ts'
+import { BOOLEAN_QUESTION, STATE, TARGET, callTool, mount, mountSwitch, prompt, skills, tool } from './support/channel.ts'
 
 /** 一题是非题的回应：0.9 的确定性正好给是非题公式用。 */
 const BOOLEAN_RESPONSE = { answers: { ok: { type: 'boolean', probability: 0.9 } } } satisfies ProviderResponse
@@ -104,8 +104,76 @@ describe('工具面', () => {
   })
 })
 
-describe('两档引导与技能', () => {
-  it('第一档注册技能、不含那句；第二档含且只含那一句', async () => {
+describe('总开关热切换', () => {
+  it('同一会话里关掉：工具、引导段与技能一起消失；再打开都回来', async () => {
+    const { ctx, update } = await mountSwitch({
+      config: { enabled: true, target: TARGET, guidance: 'context' },
+      skills: true,
+    })
+    expect(tool(ctx)).toBeDefined()
+    expect(await prompt(ctx)).toContain(Channel.CONTEXT_GUIDANCE)
+    expect((await skills(ctx).list()).map(skill => skill.name)).toEqual(['systemone'])
+
+    update({ enabled: false })
+
+    expect(tool(ctx)).toBeUndefined()
+    expect(await prompt(ctx)).not.toContain(Channel.CONTEXT_GUIDANCE)
+    expect(await skills(ctx).list()).toEqual([])
+
+    update({ enabled: true })
+
+    expect(tool(ctx)).toBeDefined()
+    expect(await prompt(ctx)).toContain(Channel.CONTEXT_GUIDANCE)
+    expect((await skills(ctx).list()).map(skill => skill.name)).toEqual(['systemone'])
+  })
+
+  it('开-关-开之后工具与引导段各恰好一份，技能不重复注册', async () => {
+    const { ctx, update } = await mountSwitch({ config: { target: TARGET, guidance: 'context' }, skills: true })
+    expect(tool(ctx)).toBeUndefined()
+
+    update({ enabled: true })
+    update({ enabled: false })
+    update({ enabled: true })
+    update({ enabled: false })
+    update({ enabled: true })
+
+    expect(tool(ctx)).toBeDefined()
+    // 引导段按名字注册：重复注册会撞名，段落重复则这句会出现两遍。
+    expect((await prompt(ctx)).split(Channel.CONTEXT_GUIDANCE)).toHaveLength(2)
+    expect((await skills(ctx).list()).map(skill => skill.name)).toEqual(['systemone'])
+  })
+
+  it('技能子系统缺席：照样能开关，只是没有技能', async () => {
+    const { ctx, update } = await mountSwitch({ config: { target: TARGET } })
+    expect(ctx.get('skills')).toBeUndefined()
+
+    update({ enabled: true })
+    expect(tool(ctx)).toBeDefined()
+
+    update({ enabled: false })
+    expect(tool(ctx)).toBeUndefined()
+  })
+
+  it('运行时被改成「开却没选条目」：保持关闭；补上条目后按新配置打开', async () => {
+    const { ctx, update } = await mountSwitch()
+
+    update({ enabled: true })
+    expect(tool(ctx)).toBeUndefined()
+
+    update({ target: TARGET })
+    expect(tool(ctx)).toBeDefined()
+  })
+
+  it('target 指向已删条目：配置照旧保留（调用期才报错），开关仍能关掉', async () => {
+    const { ctx, update } = await mountSwitch({ config: { enabled: true, target: 'gone' } })
+    expect(tool(ctx)).toBeDefined()
+
+    update({ enabled: false })
+    expect(tool(ctx)).toBeUndefined()
+  })
+})
+
+describe('两档引导与技能', () => {  it('第一档注册技能、不含那句；第二档含且只含那一句', async () => {
     const first = await mount({ channel: { enabled: true, target: TARGET, guidance: 'tool' }, skills: true })
     const second = await mount({ channel: { enabled: true, target: TARGET, guidance: 'context' }, skills: true })
     const firstPrompt = await prompt(first.ctx)

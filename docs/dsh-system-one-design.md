@@ -148,7 +148,7 @@
 
 **引导分两档，设置页切换，默认第一档**：第一档是工具描述 + 一个技能（工具描述就是给模型看的——DSH 会把每个工具的 guidance 段渲染进系统提示；技能登记进 DSH 的技能注册表，正文随包交付，写「什么时候该用、什么时候是类别错误」的细则）；第二档在第一档之上再经 `dsh-system-prompt` 的 `PromptSection` 注册表注入一句固定引导（`section({ name, order, text, interpolate? })` 返回 disposer，位次表 `SECTION_ORDERS` 是闭集、第三方只能给数字）。技能注册表声明为**可选**依赖：profile 没组合技能子系统时插件照常加载，只是少一个技能——cordis 的 `inject` 没有「可选」写法，落地用一条单独的 `ctx.inject(['skills'], …)` 纤维等它出现，缺席时那条纤维不激活。不做更强形态（拦截或替换主模型的判断）——那是编排层的事，且要动全局行为。
 
-**开关默认关闭，关掉即不注册工具**：工具不存在，它的 guidance 段也不存在。本仓先例是改 agent 行为的能力默认关闭；`ctx.tools.register` 返回 disposer，配合 `ctx.effect` 的动态注册有现成写法（`dsh-tool-subagent` 与 `dsh-experimental-tool-agent-team` 各一处）。
+**开关默认关闭、在通道自己的设置页上**：关掉即工具不存在，它的 guidance 段与技能也不存在。`enabled` 与另外三个字段一样标 volatile，页面因此能直接写它；改完由插件自己整批换注册（机制见下面「总开关怎样即时生效」）。本仓先例是改 agent 行为的能力默认关闭；`ctx.tools.register` 与 `systemPrompt.section` 都返回 disposer，`ctx.inject(['skills'], …)` 返回一条纤维，换开关时这三样一起 dispose（`dsh-tool-subagent` 与 `dsh-experimental-tool-agent-team` 各有一处动态注册）。
 
 **阈值默认不设，设置页可开可设**：开启后每题给一个确定性——是非题用 `|probability − 0.5| × 2 × labelMass`（`labelMass` 缺席按 1），choice/score 用 provider 自报的 `confidence`；低于阈值该题标 `abstain`，答案与概率仍原样交回。provider 没报可信度、分布也缺席时确定性算不出来，同样标 `abstain` 并写明原因——「判不出来」不等于「放行」。标记的形状是工具返回里新增的一层 `decisions: Record<题 id, { verdict: 'act' | 'abstain'; reason?: string }>`；阈值关闭时这一层不出现，`answers` 本体不变。阈值只进配置、不进工具参数（取值 0–1，越界按配置非法在加载期报错）：模型能自己放宽的闸门不是闸门。确定性公式是我们给的语义，而 provider 的 `confidence` 定义各不相同，同一阈值在不同 provider 上松紧不同——这一点要写进页面文案与 README，工具描述里也要说明 `decisions` 层的含义（`abstain` 是「低于你设的可信度门槛」，不是「答案错了」）。
 
@@ -158,18 +158,26 @@
 
 - **`questions` 在工具参数里是数组，不是契约那张映射**：工具 schema 只能给每个属性一个定名形状，异构的映射值表达不出来，模型就只能靠描述猜每道题有哪些字段。每项自带 `id`，派发前把数组转成 `Record<id, Question>`；重复 id 直接报错点名（后一道会顶掉前一道，等于丢题）。
 - **技能跟着开关，不独立于工具**：关掉时工具、引导段、技能一起不注册。留一个指引模型去调不存在工具的技能，比不装技能更糟。
-- **`enabled` 不标 volatile，另外三个字段标**：后三项按每次调用／每次组装现读，所以设置页改完即生效；`enabled` 决定的是装载期注册什么，改它本来就该重挂载插件。
+- **四个字段都标 volatile，开关按事件整批换注册**：`enabled` 也标 volatile，设置页才能写它；它决定的是注册哪一批，而 volatile 更新不重挂载，所以由插件自己监听 `loader/volatile-update` 换注册（见下一节）。
 - **引导句按档位现读**：第二档那句引导注册成一个 `text: () => …` 的段（第一档返回空串，渲染时空段被丢掉），所以切档位也不需要重载插件。
 
-**通道的页面**（客户端半）管三件事：选当前条目（选项跨命名空间读条目页那份 `entries`）、切引导档位、开/设阈值。跨命名空间只读不写——写没有先例。页面没有保存按钮：改哪项就写哪项；阈值关闭时数值设置整组不显示。
+### 总开关怎样即时生效
+
+- **触发**：`apply` 监听 `ctx.on('loader/volatile-update')`，只在路径里有 `enabled` 或 `target` 时重算。`target` 也算，因为「开着却没选条目」要在运行时收起来、补上后再打开。事件由 loader 把 volatile 新值提交进运行中的 fiber **之后**派发（`vendor/loader/src/config/entry.ts` 的 `_commitVolatile`）；监听器抛错只被宿主记日志，写入不回滚。
+- **换注册**：一批注册放进数组——`ctx.tools.register`、`ctx.systemPrompt.section`、`ctx.inject(['skills'], …)` 各是／返回一个 disposer；换开关时先整批 dispose 再按新状态建，`apply` 本身不重跑。已经开着时换 `target` 不重建这一批（工具体每次调用现读 `target`）。
+- **技能纤维**：技能注册表是可选依赖，注册放在独立的 `ctx.inject(['skills'], …)` 纤维里；这条纤维属于那一批注册，关掉时随之 dispose、技能从注册表消失，再打开时重建。重复创建会撞技能名（注册表 warn 并忽略），所以必须真的释放旧纤维。
+- **运行时「开着却没选条目」**：装载期这条组合按规格抛错；运行时它只可能来自手改配置（页面不允许从关翻到开），值已经提交进 fiber、抛不回去，所以插件保持关闭并记一条日志，等下一次改动。`target` 指向已删条目不算这一类：配置保留，调用期点名 id 报错。
+- **验证状态**：`channel.spec.ts` 的「总开关热切换」用 `{ get }` 替身加手发事件，覆盖开→关、关→开、连开关后各恰好一份、技能子系统缺席、运行时空条目、已删条目仍能关。真实 loader 的 volatile 提交语义由宿主 `scripts/loader-volatile-update.spec.ts` 覆盖，本仓接入层的 `tests/system-one.spec.ts`、`tests/volatile-update.spec.ts` 是同一条通路的先例。真实 profile 里的外观与同会话生效按人工核对（`.scratch/dsh-system-one/manual-check-09.md`）。
+
+**通道的页面**（客户端半）管四件事：总开关、选当前条目（选项跨命名空间读条目页那份 `entries`）、切引导档位、开/设阈值。跨命名空间只读不写——写没有先例。页面没有保存按钮：改哪项就写哪项；阈值关闭时数值设置整组不显示。
 
 落地时的五条口径（`packages/dsh-system-one-channel/tests/client.spec.tsx` 覆盖行为面）：
 
 - **改哪项写哪项、没有保存按钮**：每次交互只提交这一项（门槛的开关与数值是同一个字段，一起写），不碰没动过的项——最要紧的局面是条目被删掉之后下拉里没有能匹配当前值的选项，整份回写会把一项使用者没碰过的设置清空。当前值不在选项里时，页面把它原样补成一项显示出来，不补造空值；「条目被删掉、只改引导」与「快照还没到时、只改引导」各有一条用例钉住这条。
 - **阈值关闭时数值设置整组不显示；数值留原始文本、失焦或停顿后写回**：数字输入框按 `Number()` 收值的话，敲下 `0.` 那一瞬会被当成 `0` 写回控件、小数点再也打不进去（输入框对这类中间态报空串，React 只在值与目标不等时才改 DOM）。文本合法时停止输入 400ms 后写回；失焦/回车时立刻判定，越界或为空报一句话、一条都不写。关闭阈值时按草稿里的有效数值（无效则用配置里的原值）写回 `{ enabled: false, value }`，数值不丢、输入框收起。
-- **下拉的值是条目 `id`、显示文本可以重复**：重名的显示文本追加 `id` 后四位（「本地 SGLang（3f9c）」）；一条条目都没有时给出「先到条目页登记」的那句话，而不是一个空白下拉。总开关 `enabled` 不在页面上：宿主只接受 volatile 路径的写入，它也不是按次现读的字段。
+- **下拉的值是条目 `id`、显示文本可以重复**：重名的显示文本追加 `id` 后四位（「本地 SGLang（3f9c）」）；一条条目都没有时给出「先到条目页登记」的那句话，而不是一个空白下拉。
 - **写入按交互顺序排队**：页面把每次改动接到上一条写入后面，慢链路上连点两下开关或连续改两项时，后一次不会先落地；控件不做整组禁用，失败只报一句话，下一次交互继续写。用例把在途写入挂住，断言第二笔在前一笔返回前不进入写入面、放行后两笔按交互顺序落地。
-- **页面写明通道本身要先启用**：`enabled` 默认关闭，而这一页只跟 volatile 字段走——不写这一句的话，默认态下改完三项、什么都不发生，读起来像插件坏了。所以 `live` 那句（改动马上生效、不用重载）之外还有一句「通道本身要先在插件配置里启用，那一步要重载插件」。这句不解释控件放哪，只说前提。
+- **总开关的两条正交禁用规则**：开→关永远可写；关→开只在「当前条目非空且仍在条目列表里」时可写。否则条目一删，整行卡在开启态、只能手改文件。提示分两种：一个条目都没有时说「先到条目页登记」，有条目但没选（或当前值已不在列表里）时说「先选一个当前应用的决策模型」。开关默认关闭，所以页面不再需要「先启用插件」那句前提说明。
 
 ## 已裁决的取舍
 
@@ -193,7 +201,7 @@
 
 - **`kind` 有三种**：`systemone`（vllm、SGLang、TypeSafe、OpenCode Zen 的 `/v1/systemone`）、`openai`（OpenAI Decisions API，**未对真实端点实测**，验收只到按官方载荷的夹具）与 `deepseek`（DeepSeek 官方 `POST /chat/completions`；provider 自己渲染题面、把选项折成单 token 标识符、读 top-20，见下面「`deepseek` provider」）。
 - **通用 HTTP 不做**：`systemone` 换 `baseUrl` 已覆盖同类端点；要「通用」就得引入请求/响应映射配置，而契约要求「不支持的可选字段必须抛错」，通用映射无法保证这条。等出现一个 `systemone` 表达不了的具体端点再做。
-- **页面分两张**：接入层的客户端半管条目的增删改（写自己的命名空间）；通道子插件的客户端半管「选当前条目 + 引导档位 + 阈值」（写自己的命名空间，跨命名空间只读条目 id）。跨命名空间写没有先例，不做。页面上的「当前应用的决策模型」只对通道这一层有意义——它不是全局开关，注册表按设计可以有多条，多个业务插件各自指名自己的条目。
+- **页面分两张**：接入层的客户端半管条目的增删改（写自己的命名空间）；通道子插件的客户端半管「总开关 + 选当前条目 + 引导档位 + 阈值」（写自己的命名空间，跨命名空间只读条目 id）。跨命名空间写没有先例，不做。页面上的「当前应用的决策模型」只对通道这一层有意义——它不是全局开关，注册表按设计可以有多条，多个业务插件各自指名自己的条目。
 - **MCP 面与策略插件不在第二步**：MCP 面是同一批工具的第二种交付，需要一个独立进程与框架无关的核心（DSH 只有 MCP 客户端，没有 MCP server 能力）；「决策模型如何在 Agent 中被使用」的策略插件要按真实场景定，否则就是替使用者预设用法。两者与通道同属这个 bundle，记为后续。
 
 ## 当前范围与非目标
@@ -215,8 +223,8 @@
 - provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端非 2xx 连原文（当前用例以 400 与 422 为例；限额由后端校验、provider 只转述，未单设夹具）、凭据解析与 `Bearer`。
 - `openai` provider：`tests/openai-provider.spec.ts` 覆盖三种题型的题面数组与答案映射、`state`／`instructions`／`images` 落成哪段 `input`、`chatTemplateKwargs` 与是非题 `optionDescriptions` 与非字符串 `Level` 的拒绝、具名拒答的缺席+警告与未具名拒答的整次失败、两个 kind 按 `target` 各自命中自己的端点；**未对真实端点实测**，接上真实端点后补一次。
 - `deepseek` provider：`tests/deepseek-provider.spec.ts` 覆盖三种题型的题面与请求体（含 messages）、`labelMass`／`confidence`／`argmaxIsLabel` 的读出、标识符部分缺失时省略 `probabilities` 并报 `coverage`、`argmaxIsLabel=false` 仍取域内 argmax、`temperature 0` 症状与缺 `logprobs` 的 provider 级失败、没有标识符命中时的缺席+警告、选项/档位上限与 `chatTemplateKwargs` 拒绝、`usage`／`requests`／`modelId` 与单题 HTTP 隔离；真实端点只做 20 + 20 pilot（读数见「`deepseek` provider」一节），**不进验收门禁**。
-- 决策通道（宿主半在 `packages/dsh-system-one-channel/tests/`）：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导（第二档比第一档只多那一句）、阈值语义（两种确定性公式、算不出时按 `abstain`）、配置非法在装载期点名键名各有可跑用例；技能注册表的缺席由「不装它也能挂起来」那一条覆盖。
+- 决策通道（宿主半在 `packages/dsh-system-one-channel/tests/`）：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失；同一会话里开→关、关→开、连开关后工具与引导段各恰好一份、技能子系统缺席照样开关、运行时「开却没选条目」保持关、`target` 指向已删条目仍能关）、两档引导（第二档比第一档只多那一句）、阈值语义（两种确定性公式、算不出时按 `abstain`）、配置非法在装载期点名键名各有可跑用例；技能注册表的缺席由「不装它也能挂起来」那一条覆盖。
 - 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、已有条目默认折叠点「编辑」展开（保存后收起）、保存后条目的增删改热生效（`tests/system-one.spec.ts` 的「条目配置热生效」一组与 `tests/volatile-update.spec.ts` 的真实 Loader 链路）、协议下拉的三个取值等于 `Kind` 枚举、宿主拒绝／传输层失败／凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md` 与 `manual-check-02c.md`）。
 - 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——两个包 `pnpm pack` 进临时 profile（profile 由真实的 `initProfile` 初始化，`nodeLinker: hoisted`）、按 `dsh.profile.bundles` 组合出两行、用真实 Loader 启动并跑启动审计，断言**两行都 ACTIVE**、接入层的 `ctx.systemOne` 与通道的 `systemone_ask` 同时可用（经工具面调一次走完接入层，并断言题面真的进了 provider）、两行都从 profile 的安装副本解析；按 id 只禁用通道那一行时接入层照常、工具不存在，只禁用接入层那一行时通道行不激活且审计点名它在等 `systemOne`，用重新组合把那一行放开后恢复；profile 里装不上本包时该 bundle 被跳过、原因点名本包。示例 patch 的键集合与各自 schema 逐一相等由 `tests/entries-config.spec.ts`（`entries` 与条目的六个字段）与子包 `tests/channel-config.spec.ts`（通道那一行的四个字段加门槛里两个内层键，bundle 那份与子包自己那份都查）覆盖。复核记录见 `.scratch/dsh-system-one/profile-load.md`（单行）与 `.scratch/dsh-system-one/profile-load-07.md`（多行、真实 `dsh`）。
-- 通道页（客户端半，在 `packages/dsh-system-one-channel/tests/`）：`client.spec.tsx` 与 `client-packaging.spec.ts` 把它纳入门禁——写回命名空间等于本行 patch 的 id `dsh-system-one-channel`（与宿主半的 `name` 同一个字符串）、只读命名空间等于接入层那一行的 id、页签注册在 `settings.plugins.tab` 且 `whileServed` 只跟自己的命名空间走、下拉的值是条目 `id`（重名追加后四位、空列表给出去哪登记的提示）、三件事各写回自己的命名空间且整个装配里没有一笔写到另一个命名空间（负向断言）、门槛关闭时数值设置整组不显示、越界在失焦时报错且一条都不写、改动即写没有保存按钮、写入按交互顺序排队、宿主拒绝与传输层失败各报一句话、页面文案不出现参数名与机制名；产物是装载器认的闭包工厂。**真实 profile 里的视觉与文案核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-06.md`）。
+- 通道页（客户端半，在 `packages/dsh-system-one-channel/tests/`）：`client.spec.tsx` 与 `client-packaging.spec.ts` 把它纳入门禁——写回命名空间等于本行 patch 的 id `dsh-system-one-channel`（与宿主半的 `name` 同一个字符串）、只读命名空间等于接入层那一行的 id、页签注册在 `settings.plugins.tab` 且 `whileServed` 只跟自己的命名空间走、下拉的值是条目 `id`（重名追加后四位、空列表给出去哪登记的提示）、四项各写回自己的命名空间且整个装配里没有一笔写到另一个命名空间（负向断言）、总开关四态（默认关、无条目不可开、有条目未选不可开、开着时条目被删仍可关）、门槛关闭时数值设置整组不显示、越界在失焦时报错且一条都不写、改动即写没有保存按钮、写入按交互顺序排队、宿主拒绝与传输层失败各报一句话、页面文案不出现参数名与机制名；产物是装载器认的闭包工厂。**真实 profile 里的视觉与文案核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-06.md`）。
 - 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。

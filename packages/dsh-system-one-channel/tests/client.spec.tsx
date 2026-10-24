@@ -3,8 +3,8 @@
  * 票据 06：通道页。
  *
  * 观察面分两层：注册层断言页签的键与两个命名空间常量（写回用本行的 patch 行 id、只读用接入层那一行的 id），
- * 控件层把注册面注入的业务面按渲染机的形状绑到组件上，断言「选条目／切档位／开阈值都写回自己的命名空间」
- * 「跨命名空间只有读」「改动即写、没有保存按钮」「阈值关闭时数值设置整组不显示」。
+ * 控件层把注册面注入的业务面按渲染机的形状绑到组件上，断言「总开关／选条目／切档位／开阈值都写回自己的
+ * 命名空间」「跨命名空间只有读」「改动即写、没有保存按钮」「阈值关闭时数值设置整组不显示」。
  *
  * 命名空间是判据的一部分：写入替身按命名空间记账，所以「不存在写另一个命名空间的调用」是一条直接观察，
  * 而不是「代码里没写」的推断。
@@ -83,6 +83,11 @@ function thresholdInput(): HTMLInputElement {
   return screen.getAllByLabelText(new RegExp(`^${zh.thresholdValue}`))[0] as HTMLInputElement
 }
 
+/** 页面上的总开关。 */
+function masterSwitch(): HTMLInputElement {
+  return screen.getByLabelText(zh.switchOn) as HTMLInputElement
+}
+
 /** 最近一次写入。 */
 function lastWrite(fixture: ClientFixture): StubWrite {
   const write = fixture.forms.writes.at(-1)
@@ -124,6 +129,9 @@ describe('通道页：注册面', () => {
 
     expect(targetSelect().value).toBe('')
     expect(targetSelect().options[0]?.textContent).toBe(zh.unset)
+    // 默认关闭；没有条目可选，所以连点都点不了。
+    expect(masterSwitch().checked).toBe(false)
+    expect(masterSwitch().disabled).toBe(true)
     expect((screen.getByLabelText(zh.guidanceTool) as HTMLInputElement).checked).toBe(true)
     expect((screen.getByLabelText(zh.thresholdOn) as HTMLInputElement).checked).toBe(false)
     expect(screen.queryByLabelText(new RegExp(`^${zh.thresholdValue}`))).toBeNull()
@@ -157,7 +165,8 @@ describe('通道页：当前条目', () => {
 
     // 下拉不能是空白的：当前配的是哪个要看得见（这里它已经不在条目列表里）。
     expect([...targetSelect().options].map(option => option.value)).toEqual(['gone_1'])
-    expect(screen.getByText(zh.noEntries)).toBeTruthy()
+    // 总开关那一组也给出同一句「先去登记」：没有可选条目时它也不可点。
+    expect(screen.getAllByText(zh.noEntries).length).toBeGreaterThan(0)
     // 页面不会替使用者写这一项：没有交互就不落盘。
     expect(fixture.forms.writes).toHaveLength(0)
   })
@@ -324,20 +333,71 @@ describe('通道页：可信度门槛', () => {
   })
 })
 
+describe('通道页：总开关', () => {
+  it('有条目但还没选：关着且不可打开，提示先选一个', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: {}, entries: SAME_LABEL })
+
+    expect(masterSwitch().checked).toBe(false)
+    expect(masterSwitch().disabled).toBe(true)
+    expect(screen.getByText(zh.switchPick)).toBeTruthy()
+    // 页面不替使用者开：没有交互就不落盘。
+    expect(fixture.forms.writes).toHaveLength(0)
+  })
+
+  it('选了条目：可以打开，点一下只写开关这一项', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: { target: 'remote_1' }, entries: SAME_LABEL })
+
+    expect(masterSwitch().disabled).toBe(false)
+    fireEvent.click(masterSwitch())
+
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+    expect(lastWrite(fixture).namespace).toBe(PREFERENCE_NAMESPACE)
+    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: true }])
+  })
+
+  it('开着时条目已被删：照样能关；列表为空或还有别的条目都一样', async () => {
+    for (const entries of [[], SAME_LABEL]) {
+      cleanup()
+      const fixture = await mounted()
+      renderPage(fixture, { settings: { enabled: true, target: 'gone_1' }, entries })
+
+      expect(masterSwitch().checked).toBe(true)
+      expect(masterSwitch().disabled).toBe(false)
+
+      fireEvent.click(masterSwitch())
+      await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+      expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: false }])
+    }
+  })
+
+  it('开着时当前条目不在列表里：不能再点成「开」，但能关', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: { enabled: true, target: 'gone_1' }, entries: SAME_LABEL })
+
+    // 关→开只要求入口非空且在列表里；开→关永远可写。
+    expect(masterSwitch().disabled).toBe(false)
+    expect(screen.queryByText(zh.switchPick)).toBeNull()
+  })
+})
+
 describe('通道页：写回面', () => {
-  it('三项各改一次：各写一项，没有任何一笔写到另一个命名空间', async () => {
+  it('四项各改一次：各写一项，没有任何一笔写到另一个命名空间', async () => {
     const fixture = await mounted()
     renderPage(fixture, {
       settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: false, value: 0.5 } },
       entries: SAME_LABEL,
     })
 
+    fireEvent.click(masterSwitch())
     fireEvent.change(targetSelect(), { target: { value: 'sglang_local_a1b2' } })
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
     fireEvent.click(screen.getByLabelText(zh.thresholdOn))
 
-    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(3) })
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(4) })
     expect(fixture.forms.writes.map(write => write.ops)).toEqual([
+      [{ op: 'set', path: ['enabled'], value: true }],
       [{ op: 'set', path: ['target'], value: 'sglang_local_a1b2' }],
       [{ op: 'set', path: ['guidance'], value: 'context' }],
       [{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.5 } }],
@@ -391,14 +451,17 @@ describe('通道页：文案', () => {
   it('阈值那句点名不可跨模型比较；当前条目那句说清只对这一层有效', async () => {
     const fixture = await mounted()
     // 阈值整组只在开启后显示，所以这里先把它打开。
-    renderPage(fixture, { settings: { threshold: { enabled: true, value: 0.5 } }, entries: SAME_LABEL })
+    renderPage(fixture, {
+      settings: { target: 'remote_1', threshold: { enabled: true, value: 0.5 } },
+      entries: SAME_LABEL,
+    })
 
     expect(zh.thresholdHint).toContain('松紧不同')
     expect(zh.thresholdHint).toContain('换一个模型')
     expect(zh.targetHint).toContain('只对决策通道这一层有效')
     expect(zh.targetHint).toContain('不是全局开关')
     // 这几句都要真的在页面上，而不只是字典里有。
-    for (const text of [zh.thresholdHint, zh.targetHint, zh.switch]) {
+    for (const text of [zh.thresholdHint, zh.targetHint, zh.switchHint]) {
       expect(screen.getByText(text)).toBeTruthy()
     }
   })

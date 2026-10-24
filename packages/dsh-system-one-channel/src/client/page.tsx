@@ -1,5 +1,5 @@
 /**
- * 设置页里的「决策通道」页签：选当前条目、切引导档位、开/设可信度门槛，三项都写回本插件自己那一行。
+ * 设置页里的「决策通道」页签：总开关、选当前条目、切引导档位、开/设可信度门槛，四项都写回本插件自己那一行。
  *
  * 「当前条目」的选项来自接入层那一行（跨命名空间**只读**，见 `index.ts`）：页面只消费它的 `id` 与 `label`。
  *
@@ -30,8 +30,9 @@ export interface EntriesSection {
   readonly entries?: readonly EntryOption[]
 }
 
-/** 本插件自己那一行里页面读写的三项。`enabled` 不是 volatile，不会出现在这里。 */
+/** 本插件自己那一行里页面读写的四项；四项都是 volatile，所以都能从这里写回。 */
 export interface ChannelSettings {
+  readonly enabled?: boolean
   readonly target?: string
   readonly guidance?: Guidance
   readonly threshold?: Threshold
@@ -39,6 +40,7 @@ export interface ChannelSettings {
 
 /** 这次要写回的字段：只含草稿与当前配置不同的项。 */
 export interface ChannelPatch {
+  enabled?: boolean
   target?: string
   guidance?: Guidance
   threshold?: Threshold
@@ -87,19 +89,21 @@ function parseThreshold(text: string): number | null {
  * 门槛的数值按原始文本存（理由见模块注释），保存时才解析。
  */
 interface Draft {
+  readonly enabled: boolean
   readonly target: string
   readonly guidance: Guidance
   readonly threshold: { readonly enabled: boolean, readonly valueText: string }
 }
 
 /**
- * 配置里的三项 → 页面上的一份草稿；缺席的项按 schema 默认值。
+ * 配置里的四项 → 页面上的一份草稿；缺席的项按 schema 默认值。
  * @param settings - 本插件那一行的当前值；快照还没到时是 `undefined`。
  * @returns 页面用的草稿。
  */
 function toDraft(settings: ChannelSettings | undefined): Draft {
   const threshold = settings?.threshold ?? DEFAULT_THRESHOLD
   return {
+    enabled: settings?.enabled ?? false,
     target: settings?.target ?? '',
     guidance: settings?.guidance ?? 'tool',
     threshold: { enabled: threshold.enabled, valueText: String(threshold.value) },
@@ -182,7 +186,7 @@ const PAGE_STYLE = { padding: '8px 0 24px' } as const
 /**
  * 渲染这一页。
  * @param props - 文案、两项读数与写入路径。
- * @returns 三组设置与写入失败提示。
+ * @returns 四组设置与写入失败提示。
  */
 export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPageProps) {
   const settings = useSettings(section => section)
@@ -198,6 +202,12 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
   // 当前值不在选项里（还没选、条目被删、接入层没装）时补一项把它显示出来：否则下拉是空白的，使用者看不出
   // 现在配的是哪个。
   const unlisted = !options.some(option => option.value === current.target)
+  // 关→开要求当前条目非空且仍在条目列表里；开→关永远可写（否则条目一删就关不掉了）。
+  const canEnable = current.target !== '' && !unlisted
+  /** 总开关旁边那句话：不能打开时说原因，其余时候说关掉与打开各是什么。 */
+  const switchNote = current.enabled || canEnable
+    ? t('switchHint')
+    : options.length === 0 ? t('noEntries') : t('switchPick')
   /** 配置里当前的数值：开关关掉、或草稿文本不合法时用它兜底。 */
   const storedValue = (): number => Number(toDraft(settings).threshold.valueText)
 
@@ -222,6 +232,12 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
   const edit = (patch: Partial<Draft>): void => {
     setFailure(null)
     setDraft({ ...current, ...patch })
+  }
+
+  /** 总开关：只写 `enabled`。 */
+  const toggleEnabled = (enabled: boolean): void => {
+    edit({ enabled })
+    commit({ enabled })
   }
 
   /** 选条目：只写 `target`。 */
@@ -279,7 +295,19 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
       <h2 style={TITLE_STYLE}>{t('title')}</h2>
       <p style={HINT_STYLE}>{t('intro')}</p>
       <p style={HINT_STYLE}>{t('live')}</p>
-      <p style={HINT_STYLE}>{t('switch')}</p>
+        <section style={GROUP_STYLE}>
+          <span style={LABEL_STYLE}>{t('enable')}</span>
+          <label style={ROW_STYLE}>
+            <input
+              type="checkbox"
+              checked={current.enabled}
+              disabled={!current.enabled && !canEnable}
+              onChange={(event) => { toggleEnabled(event.target.checked) }}
+            />
+            {t('switchOn')}
+          </label>
+          <span style={HINT_STYLE}>{switchNote}</span>
+        </section>
         <section style={GROUP_STYLE}>
           <label style={FIELD_STYLE}>
             <span style={LABEL_STYLE}>{t('target')}</span>

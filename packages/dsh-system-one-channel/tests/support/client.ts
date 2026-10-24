@@ -3,8 +3,8 @@
  * 它注入的业务面留给用例。
  *
  * `configForms` 的替身按**命名空间**记账：每个命名空间各有一份值与一条写入路径，写入连同命名空间一起记下——
- * 「三件事写回自己的命名空间」「跨命名空间只读」这两条判据因此在这一层直接观察得到。写非 volatile 的字段
- * （`enabled`）会在这里就报错，而不是等到真宿主拒绝。
+ * 「四项写回自己的命名空间」「跨命名空间只读」这两条判据因此在这一层直接观察得到。写表外的字段会在这里就
+ * 报错，而不是等到真宿主拒绝。
  *
  * @module
  */
@@ -27,8 +27,8 @@ export interface StubWrite {
   readonly ops: readonly StubSettingOp[]
 }
 
-/** 本页能写的三个字段；写别的（`enabled` 就不是 volatile）在这里直接报错。 */
-const WRITABLE = new Set(['target', 'guidance', 'threshold'])
+/** 本页能写的四个字段（四个都是 volatile）；写别的在这里直接报错。 */
+const WRITABLE = new Set(['enabled', 'target', 'guidance', 'threshold'])
 
 /** `configForms` 的替身：按命名空间存值、记账写入，可切换「宿主是否接受」与传输层失败。 */
 export class StubForms {

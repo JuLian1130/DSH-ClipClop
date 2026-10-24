@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Decision channel",
-    "description": "Hand judgements, choices and scores to a decision model and get answers with probabilities. Pick the decision model, the guidance level and a confidence cut-off on the settings page."
+    "description": "Hand judgements, choices and scores to a decision model and get answers with probabilities. Switch the channel on, then pick the decision model, the guidance level and a confidence cut-off on the settings page."
   }
 }

@@ -10,7 +10,9 @@
  * @module
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Disposable } from '@deepseek-ai/cordis'
+// 类型专用：`loader/volatile-update` 的事件声明（运行时由宿主派发，不 import 它的实现）。
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-skill'
 import { defineTool, type InferArgs, type InferValue, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { AskResult, Question } from '@dsh-clipclop/dsh-system-one'
@@ -153,34 +155,59 @@ type ToolQuestion = InferArgs<typeof PARAMETERS>['questions'][number]
 
 /**
  * 插件入口：校验配置，然后按开关注册工具、引导段与技能。
+ *
+ * 开关是 volatile：页面写回后 loader 只把新值提交进这条 fiber、再派发 `loader/volatile-update`，不重挂载。
+ * 所以注册面由本插件自己跟着那个事件整批换——工具、引导段与技能一起出现或一起消失。
  * @param ctx - 插件的 context；三个注入服务都已就绪。
- * @param config - 解析后的配置；三个 volatile 字段在装载期取到引用，之后按次现读。
+ * @param config - 解析后的配置；四个 volatile 字段在装载期取到引用，之后按次现读。
  * @throws 开关打开却没选条目：注册一个每次调用都报错的工具没有意义，装载期就大声失败。
  */
 export function apply(ctx: Context, config: Required<ChannelConfig>): void {
-  if (config.enabled && config.target.get() === '') {
+  if (config.enabled.get() && config.target.get() === '') {
     throw new Error('dsh-system-one-channel: config "target" names no entry; set "target" to an entry id from the system-one row, or turn "enabled" off')
   }
-  // 关掉即什么都不注册：工具、它的引导段、技能。技能跟着工具走——指引模型去调一个不存在的工具，
-  // 比不装技能更糟。
-  if (!config.enabled) return
-  ctx.tools.register(askTool(ctx, config))
-  // 档位按每次组装现读，所以设置页切档不需要重载插件：第一档让这一段是空串（渲染时空段被丢掉）。
-  ctx.systemPrompt.section({
-    name: `tool:${TOOL_NAME}`,
-    order: SECTION_ORDER,
-    interpolate: false,
-    text: () => config.guidance.get() === 'context' ? CONTEXT_GUIDANCE : '',
-  })
-  // 技能注册表是可选依赖：单独一条 inject 纤维等它出现，没有它时这条纤维不激活，插件照常加载。
-  ctx.inject(['skills'], (scoped) => {
-    scoped.skills.register({
-      name: SKILL_NAME,
-      description: SKILL_DESCRIPTION,
-      content: SKILL_CONTENT,
-      source: 'bundled',
+  /** 开着的那一批注册；空数组即「关着」。技能跟着工具走——指引模型去调一个不存在的工具，比不装技能更糟。 */
+  let registered: Disposable[] = []
+  const stop = (): void => {
+    for (const dispose of registered.splice(0)) void dispose()
+  }
+  /**
+   * 按当前开关换注册。
+   *
+   * `target` 也走这里：开着却把条目清空时先收起，补回来再打开；只是换一个条目则不用换注册（工具体每次现读）。
+   */
+  const sync = (): void => {
+    if (!config.enabled.get()) { stop(); return }
+    if (config.target.get() === '') {
+      // 装载期那条错误在这里抛不出去（新值已经提交进 fiber）：保持关闭并留日志，等下一次改动。
+      ctx.logger.warn('dsh-system-one-channel: config "target" is empty; the channel stays off until a decision model is named')
+      stop()
+      return
+    }
+    if (registered.length > 0) return
+    const tool = ctx.tools.register(askTool(ctx, config))
+    // 档位按每次组装现读，所以设置页切档不需要重载插件：第一档让这一段是空串（渲染时空段被丢掉）。
+    const section = ctx.systemPrompt.section({
+      name: `tool:${TOOL_NAME}`,
+      order: SECTION_ORDER,
+      interpolate: false,
+      text: () => config.guidance.get() === 'context' ? CONTEXT_GUIDANCE : '',
     })
+    // 技能注册表是可选依赖：这条 inject 纤维等它出现，缺席时不激活、插件照常加载。换开关时连同它一起换。
+    const skillFiber = ctx.inject(['skills'], (scoped) => {
+      scoped.skills.register({
+        name: SKILL_NAME,
+        description: SKILL_DESCRIPTION,
+        content: SKILL_CONTENT,
+        source: 'bundled',
+      })
+    })
+    registered = [tool, section, () => { void skillFiber.dispose() }]
+  }
+  ctx.on('loader/volatile-update', (paths) => {
+    if (paths.some(path => path[0] === 'enabled' || path[0] === 'target')) sync()
   })
+  sync()
 }
 
 /**
