@@ -31,8 +31,13 @@ function exampleKeys(source: string): string[] {
   expect(start).toBeGreaterThanOrEqual(0)
   const config = lines.findIndex((line, index) => index > start && line.trim() === '# config:')
   expect(config).toBeGreaterThan(start)
-  return lines.slice(config + 1)
-    .map(line => /^\s*#\s+([\w-]+):/.exec(line)?.[1])
+  // 示例是连续的一段注释：去掉前缀后第一个空行就是块的结尾（与接入层那份夹具同一个口径）。
+  const block = lines.slice(config + 1).map(line => /^\s*# ?(.*)$/.exec(line)?.[1] ?? '')
+  const example = block.slice(0, block.indexOf('')).filter(line => line.trim() !== '')
+  const base = Math.min(...example.map(line => line.search(/\S/)))
+  return example
+    .filter(line => line.search(/\S/) === base)
+    .map(line => /^\s*([\w-]+):/.exec(line)?.[1])
     .filter((key): key is string => key !== undefined)
 }
 

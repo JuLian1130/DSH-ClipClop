@@ -219,7 +219,7 @@ beforeAll(() => {
  * 任何位置取，于是从工作副本装载同样是 ACTIVE（假绿）。基点显式给 profile 的 `node_modules`，
  * 那两行的模块只能从安装副本里来。
  * @param overrides - 追加在最后（= `--patch` 那样的启动器层）的 patch：按 id 覆盖或禁用某一行。
- * @returns 已结算的根 context、审计 warning 与该 profile 的组合结果。
+ * @returns 已结算的根 context、审计 warning、这次用的完整 patch 列表与该 profile 的组合结果。
  */
 async function mountProfile(overrides: RowPatch[] = []) {
   const profile = loadProfileDirectory(BIN_NAME, profileDir, join(profileDir, 'package.json'))
@@ -241,7 +241,7 @@ async function mountProfile(overrides: RowPatch[] = []) {
   )
   await ctx.get('loader')?.await()
   await auditStartupEntries(ctx, BIN_NAME, line => warnings.push(line))
-  return { ctx, warnings, profile }
+  return { ctx, warnings, profile, patches }
 }
 
 /** 装载树里某一行的 entry：被禁用时 entry 还在，但没有 fiber。 */
@@ -335,7 +335,10 @@ describe('真实 profile 装载', () => {
   it('只禁用通道那一行：接入层照常，工具不存在', async () => {
     const { ctx, warnings } = await mountProfile([{ id: CHANNEL_ROW_ID, disabled: true }])
     try {
-      expect(row(ctx, CHANNEL_ROW_ID)?.fiber).toBeUndefined()
+      const channel = row(ctx, CHANNEL_ROW_ID)
+      // entry 还在（被禁用不是没插进来）：没有 fiber，也没有工具。
+      expect(channel).toBeDefined()
+      expect(channel?.fiber).toBeUndefined()
       expect(row(ctx, ROW_ID)?.fiber?.state).toBe(ACTIVE)
       expect(ctx.tools.get(TOOL_NAME)).toBeUndefined()
       // 被禁用不是「没激活」：启动审计不该为此报警。
@@ -351,31 +354,31 @@ describe('真实 profile 装载', () => {
     }
   }, 60_000)
 
-  it('只禁用接入层那一行：通道行不激活、工具不存在，不静默降级', async () => {
-    const { ctx, warnings } = await mountProfile([{ id: ROW_ID, disabled: true }])
+  it('只禁用接入层那一行：通道行不激活、工具不存在；重新启用后恢复', async () => {
+    const disabled = await mountProfile([{ id: ROW_ID, disabled: true }])
     try {
-      expect(row(ctx, ROW_ID)?.fiber).toBeUndefined()
-      const channel = row(ctx, CHANNEL_ROW_ID)
+      expect(row(disabled.ctx, ROW_ID)?.fiber).toBeUndefined()
+      const channel = row(disabled.ctx, CHANNEL_ROW_ID)
       // 没有被禁用，只是依赖的服务不在：不是 active，也没有留下半注册的工具。
       expect(channel?.disabled).toBe(false)
       expect(channel?.fiber?.state).not.toBe(ACTIVE)
-      expect(ctx.tools.get(TOOL_NAME)).toBeUndefined()
+      expect(disabled.ctx.tools.get(TOOL_NAME)).toBeUndefined()
       // 不静默：启动审计点名这一行在等接入层的服务。
-      expect(warnings.join('\n')).toContain(CHANNEL_ROW_ID)
-      expect(warnings.join('\n')).toContain('systemOne')
+      expect(disabled.warnings.join('\n')).toContain(CHANNEL_ROW_ID)
+      expect(disabled.warnings.join('\n')).toContain('systemOne')
     } finally {
-      await ctx.fiber.dispose()
+      await disabled.ctx.fiber.dispose()
     }
-  }, 60_000)
 
-  it('重新启用接入层那一行后，通道行恢复 ACTIVE、工具重新出现', async () => {
-    const { ctx, warnings } = await mountProfile()
+    // 重新启用 = 去掉那条 overlay 再组合一次（重启路径）。活树上的 patch 重载不会把被禁用过的行
+    // 重新拉起：`reconcileProfilePatches` 之后那一行仍是 disabled——热重载不在本票范围内。
+    const restored = await mountProfile()
     try {
-      expect(row(ctx, CHANNEL_ROW_ID)?.fiber?.state).toBe(ACTIVE)
-      expect(ctx.tools.get(TOOL_NAME)).toBeDefined()
-      expect(warnings).toEqual([])
+      expect(row(restored.ctx, CHANNEL_ROW_ID)?.fiber?.state).toBe(ACTIVE)
+      expect(restored.ctx.tools.get(TOOL_NAME)).toBeDefined()
+      expect(restored.warnings).toEqual([])
     } finally {
-      await ctx.fiber.dispose()
+      await restored.ctx.fiber.dispose()
     }
   }, 60_000)
 
