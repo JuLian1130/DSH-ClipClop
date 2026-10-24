@@ -1,5 +1,5 @@
 /**
- * 决策通道子插件的宿主半：一个 `systemone_ask` 工具、一个技能、两档引导、默认关闭的开关与可选阈值。
+ * 决策通道子插件的宿主半：一个 `systemone_ask` 工具、一个技能、两档引导、默认开启的开关与可选阈值。
  *
  * 它按第三方 provider 的用法接接入层（`inject: ['systemOne']`），用哪个条目由自己这一行的配置回答；
  * 接入层因此不需要新增插件面，也不需要「当前 provider」这类全局状态。
@@ -156,34 +156,25 @@ type ToolQuestion = InferArgs<typeof PARAMETERS>['questions'][number]
 /**
  * 插件入口：校验配置，然后按开关注册工具、引导段与技能。
  *
+ * 开关默认开启，但没选条目时什么也不注册——装上插件本身不改变 agent 的行为，选好条目后才有工具。
  * 开关是 volatile：页面写回后 loader 只把新值提交进这条 fiber、再派发 `loader/volatile-update`，不重挂载。
  * 所以注册面由本插件自己跟着那个事件整批换——工具、引导段与技能一起出现或一起消失。
  * @param ctx - 插件的 context；三个注入服务都已就绪。
  * @param config - 解析后的配置；四个 volatile 字段在装载期取到引用，之后按次现读。
- * @throws 开关打开却没选条目：注册一个每次调用都报错的工具没有意义，装载期就大声失败。
  */
 export function apply(ctx: Context, config: Required<ChannelConfig>): void {
-  if (config.enabled.get() && config.target.get() === '') {
-    throw new Error('dsh-system-one-channel: config "target" names no entry; set "target" to an entry id from the system-one row, or turn "enabled" off')
-  }
   /** 开着的那一批注册；空数组即「关着」。技能跟着工具走——指引模型去调一个不存在的工具，比不装技能更糟。 */
   let registered: Disposable[] = []
   const stop = (): void => {
     for (const dispose of registered.splice(0)) void dispose()
   }
   /**
-   * 按当前开关换注册。
+   * 按当前开关换注册：开关关着、或开着但还没选条目，都是「什么都不注册」的同一批。
    *
-   * `target` 也走这里：开着却把条目清空时先收起，补回来再打开；只是换一个条目则不用换注册（工具体每次现读）。
+   * `target` 也走这里：选上条目就注册、清空条目就收起；只是换一个条目则不用换注册（工具体每次现读）。
    */
   const sync = (): void => {
-    if (!config.enabled.get()) { stop(); return }
-    if (config.target.get() === '') {
-      // 装载期那条错误在这里抛不出去（新值已经提交进 fiber）：保持关闭并留日志，等下一次改动。
-      ctx.logger.warn('dsh-system-one-channel: config "target" is empty; the channel stays off until a decision model is named')
-      stop()
-      return
-    }
+    if (!config.enabled.get() || config.target.get() === '') { stop(); return }
     if (registered.length > 0) return
     const tool = ctx.tools.register(askTool(ctx, config))
     // 档位按每次组装现读，所以设置页切档不需要重载插件：第一档让这一段是空串（渲染时空段被丢掉）。

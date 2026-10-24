@@ -90,7 +90,7 @@ export interface SwitchConfig {
 export async function mountSwitch(options: MountOptions & { config?: Partial<SwitchConfig> } = {}) {
   const { ctx, provider } = await services(options)
   const current: SwitchConfig = {
-    enabled: false,
+    enabled: true,
     target: '',
     guidance: 'tool',
     threshold: { enabled: false, value: 0.5 },

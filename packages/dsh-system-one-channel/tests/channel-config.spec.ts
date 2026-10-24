@@ -75,17 +75,21 @@ describe('配置契约', () => {
     expect(fields.threshold?.meta?.volatile).toBe(true)
   })
 
-  it('默认关闭：不配任何字段时插件照常加载，工具不注册', async () => {
+  it('默认开启：不配 enabled 时读出 true', () => {
+    const resolved = (Config as unknown as (value: object) => { enabled: { get(): boolean } })({})
+    expect(resolved.enabled.get()).toBe(true)
+  })
+
+  it('默认开启但没有条目：插件照常加载，工具不注册', async () => {
     const { ctx, error } = await mount()
     expect(error).toBeUndefined()
     expect(tool(ctx)).toBeUndefined()
   })
 
-  it('开关打开但 target 为空：装载期报错并点出键名', async () => {
-    const { error } = await mount({ channel: { enabled: true } })
-    const message = (error as Error).message
-    expect(message).toContain('"target"')
-    expect(message).toContain('"enabled"')
+  it('开关打开但 target 为空：不报错，也不注册工具（选好条目后才有东西可注册）', async () => {
+    const { ctx, error } = await mount({ channel: { enabled: true } })
+    expect(error).toBeUndefined()
+    expect(tool(ctx)).toBeUndefined()
   })
 
   it('阈值越界：装载期报错并点出键名', async () => {

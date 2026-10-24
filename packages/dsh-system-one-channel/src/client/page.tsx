@@ -1,5 +1,6 @@
 /**
  * 设置页里的「决策通道」页签：总开关、选当前条目、切引导档位、开/设可信度门槛，四项都写回本插件自己那一行。
+ * 总开关默认勾选；关掉时另外三组设置整组收起（它们关掉后本来也不起作用）。
  *
  * 「当前条目」的选项来自接入层那一行（跨命名空间**只读**，见 `index.ts`）：页面只消费它的 `id` 与 `label`。
  *
@@ -103,7 +104,7 @@ interface Draft {
 function toDraft(settings: ChannelSettings | undefined): Draft {
   const threshold = settings?.threshold ?? DEFAULT_THRESHOLD
   return {
-    enabled: settings?.enabled ?? false,
+    enabled: settings?.enabled ?? true,
     target: settings?.target ?? '',
     guidance: settings?.guidance ?? 'tool',
     threshold: { enabled: threshold.enabled, valueText: String(threshold.value) },
@@ -202,12 +203,6 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
   // 当前值不在选项里（还没选、条目被删、接入层没装）时补一项把它显示出来：否则下拉是空白的，使用者看不出
   // 现在配的是哪个。
   const unlisted = !options.some(option => option.value === current.target)
-  // 关→开要求当前条目非空且仍在条目列表里；开→关永远可写（否则条目一删就关不掉了）。
-  const canEnable = current.target !== '' && !unlisted
-  /** 总开关旁边那句话：不能打开时说原因，其余时候说关掉与打开各是什么。 */
-  const switchNote = current.enabled || canEnable
-    ? t('switchHint')
-    : options.length === 0 ? t('noEntries') : t('switchPick')
   /** 配置里当前的数值：开关关掉、或草稿文本不合法时用它兜底。 */
   const storedValue = (): number => Number(toDraft(settings).threshold.valueText)
 
@@ -234,13 +229,10 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
     setDraft({ ...current, ...patch })
   }
 
-  /**
-   * 总开关：关掉只写 `enabled`；打开时若当前条目还没落到配置里（条目那次写回还在路上或失败了），
-   * 把它与开关写成同一次 mutate——两笔一起成功或一起失败，不会留下「开着却没条目」的配置。
-   */
+  /** 总开关：只写 `enabled`；关掉时下面三组设置收起，不影响它们已经存下的值。 */
   const toggleEnabled = (enabled: boolean): void => {
     edit({ enabled })
-    commit(enabled && current.target !== settings?.target ? { enabled, target: current.target } : { enabled })
+    commit({ enabled })
   }
 
   /** 选条目：只写 `target`。 */
@@ -304,13 +296,13 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
             <input
               type="checkbox"
               checked={current.enabled}
-              disabled={!current.enabled && !canEnable}
               onChange={(event) => { toggleEnabled(event.target.checked) }}
             />
             {t('switchOn')}
           </label>
-          <span style={HINT_STYLE}>{switchNote}</span>
+          <span style={HINT_STYLE}>{t('switchHint')}</span>
         </section>
+        {current.enabled && (<>
         <section style={GROUP_STYLE}>
           <label style={FIELD_STYLE}>
             <span style={LABEL_STYLE}>{t('target')}</span>
@@ -376,6 +368,7 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
             </>
           )}
         </section>
+        </>)}
       {failure !== null && (
         <div role="alert" style={ALERT_STYLE}>{failure === 'range' ? t('thresholdInvalid') : t('saveFailed')}</div>
       )}

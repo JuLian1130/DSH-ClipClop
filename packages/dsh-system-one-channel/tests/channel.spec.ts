@@ -128,7 +128,7 @@ describe('总开关热切换', () => {
   })
 
   it('开-关-开之后工具与引导段各恰好一份，技能不重复注册', async () => {
-    const { ctx, update } = await mountSwitch({ config: { target: TARGET, guidance: 'context' }, skills: true })
+    const { ctx, update } = await mountSwitch({ config: { enabled: false, target: TARGET, guidance: 'context' }, skills: true })
     expect(tool(ctx)).toBeUndefined()
 
     update({ enabled: true })
@@ -144,7 +144,7 @@ describe('总开关热切换', () => {
   })
 
   it('技能子系统缺席：照样能开关，只是没有技能', async () => {
-    const { ctx, update } = await mountSwitch({ config: { target: TARGET } })
+    const { ctx, update } = await mountSwitch({ config: { enabled: false, target: TARGET } })
     expect(ctx.get('skills')).toBeUndefined()
 
     update({ enabled: true })
@@ -154,10 +154,8 @@ describe('总开关热切换', () => {
     expect(tool(ctx)).toBeUndefined()
   })
 
-  it('运行时被改成「开却没选条目」：保持关闭；补上条目后按新配置打开', async () => {
+  it('默认开着但没选条目：什么也不注册；选上条目后注册，不需要再动开关', async () => {
     const { ctx, update } = await mountSwitch()
-
-    update({ enabled: true })
     expect(tool(ctx)).toBeUndefined()
 
     update({ target: TARGET })

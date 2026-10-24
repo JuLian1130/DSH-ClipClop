@@ -129,9 +129,8 @@ describe('通道页：注册面', () => {
 
     expect(targetSelect().value).toBe('')
     expect(targetSelect().options[0]?.textContent).toBe(zh.unset)
-    // 默认关闭；没有条目可选，所以连点都点不了。
-    expect(masterSwitch().checked).toBe(false)
-    expect(masterSwitch().disabled).toBe(true)
+    // 开关默认勾选；条目没选时只是不注册，不挡设置。
+    expect(masterSwitch().checked).toBe(true)
     expect((screen.getByLabelText(zh.guidanceTool) as HTMLInputElement).checked).toBe(true)
     expect((screen.getByLabelText(zh.thresholdOn) as HTMLInputElement).checked).toBe(false)
     expect(screen.queryByLabelText(new RegExp(`^${zh.thresholdValue}`))).toBeNull()
@@ -334,47 +333,37 @@ describe('通道页：可信度门槛', () => {
 })
 
 describe('通道页：总开关', () => {
-  it('有条目但还没选：关着且不可打开，提示先选一个', async () => {
+  it('默认打开：开关勾选，下面三组设置都在', async () => {
     const fixture = await mounted()
-    renderPage(fixture, { settings: {}, entries: SAME_LABEL })
+    renderPage(fixture, { settings: undefined, entries: undefined })
 
-    expect(masterSwitch().checked).toBe(false)
-    expect(masterSwitch().disabled).toBe(true)
-    expect(screen.getByText(zh.switchPick)).toBeTruthy()
-    // 页面不替使用者开：没有交互就不落盘。
+    expect(masterSwitch().checked).toBe(true)
+    expect(targetSelect()).toBeTruthy()
+    expect(screen.getByLabelText(zh.guidanceTool)).toBeTruthy()
+    expect(screen.getByLabelText(zh.thresholdOn)).toBeTruthy()
+    // 页面不替使用者写：没有交互就不落盘。
     expect(fixture.forms.writes).toHaveLength(0)
   })
 
-  it('选了条目：可以打开，点一下只写开关这一项', async () => {
+  it('取消勾选：只写 enabled，下面三组设置收起；再勾上回来', async () => {
     const fixture = await mounted()
-    renderPage(fixture, { settings: { target: 'remote_1' }, entries: SAME_LABEL })
+    renderPage(fixture, { settings: { enabled: true, target: 'remote_1' }, entries: SAME_LABEL })
 
-    expect(masterSwitch().disabled).toBe(false)
     fireEvent.click(masterSwitch())
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     expect(lastWrite(fixture).namespace).toBe(PREFERENCE_NAMESPACE)
-    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: true }])
-  })
-
-  it('条目那次写回失败后马上打开：把条目与开关写成同一次 mutate，不留下「开着却没条目」', async () => {
-    const fixture = await mounted()
-    fixture.forms.accepted = false
-    renderPage(fixture, { settings: { target: 'remote_1' }, entries: SAME_LABEL })
-
-    // 先选的条目被宿主拒绝，配置里的条目还是旧的。
-    fireEvent.change(targetSelect(), { target: { value: 'sglang_other_9f3c' } })
-    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
-    fixture.forms.accepted = true
+    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: false }])
+    // 关掉时三组设置整组收起，页面只剩开关与那句说明。
+    expect(screen.queryByLabelText(new RegExp(`^${zh.target}`))).toBeNull()
+    expect(screen.queryByLabelText(zh.guidanceTool)).toBeNull()
+    expect(screen.queryByLabelText(zh.thresholdOn)).toBeNull()
 
     fireEvent.click(masterSwitch())
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(2) })
-    // 两笔同一次写入：宿主全接受或全拒绝，不会只落开关。
-    expect(lastWrite(fixture).ops).toEqual([
-      { op: 'set', path: ['enabled'], value: true },
-      { op: 'set', path: ['target'], value: 'sglang_other_9f3c' },
-    ])
+    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: true }])
+    expect(targetSelect()).toBeTruthy()
   })
 
   it('开着时条目已被删：照样能关；列表为空或还有别的条目都一样', async () => {
@@ -384,21 +373,11 @@ describe('通道页：总开关', () => {
       renderPage(fixture, { settings: { enabled: true, target: 'gone_1' }, entries })
 
       expect(masterSwitch().checked).toBe(true)
-      expect(masterSwitch().disabled).toBe(false)
 
       fireEvent.click(masterSwitch())
       await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
       expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: false }])
     }
-  })
-
-  it('开着时当前条目不在列表里：不能再点成「开」，但能关', async () => {
-    const fixture = await mounted()
-    renderPage(fixture, { settings: { enabled: true, target: 'gone_1' }, entries: SAME_LABEL })
-
-    // 关→开只要求入口非空且在列表里；开→关永远可写。
-    expect(masterSwitch().disabled).toBe(false)
-    expect(screen.queryByText(zh.switchPick)).toBeNull()
   })
 })
 
@@ -410,17 +389,18 @@ describe('通道页：写回面', () => {
       entries: SAME_LABEL,
     })
 
-    fireEvent.click(masterSwitch())
     fireEvent.change(targetSelect(), { target: { value: 'sglang_local_a1b2' } })
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
     fireEvent.click(screen.getByLabelText(zh.thresholdOn))
+    // 最后关掉总开关：三组设置随即收起，所以它必须排在最后。
+    fireEvent.click(masterSwitch())
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(4) })
     expect(fixture.forms.writes.map(write => write.ops)).toEqual([
-      [{ op: 'set', path: ['enabled'], value: true }],
       [{ op: 'set', path: ['target'], value: 'sglang_local_a1b2' }],
       [{ op: 'set', path: ['guidance'], value: 'context' }],
       [{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.5 } }],
+      [{ op: 'set', path: ['enabled'], value: false }],
     ])
     // 跨命名空间只读：整个装配里没有一笔写入落在接入层那一行上。
     expect(fixture.forms.writes.every(write => write.namespace === PREFERENCE_NAMESPACE)).toBe(true)

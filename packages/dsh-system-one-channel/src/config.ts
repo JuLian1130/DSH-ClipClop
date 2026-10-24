@@ -5,7 +5,8 @@
  * 都按**每次现读**用——改完即生效，不需要重载插件。开关决定注册哪一批（工具、引导段、技能），换开关由插件
  * 自己在 `loader/volatile-update` 里整批换，机制见设计文档「决策通道」。
  *
- * 配置非法一律在装载期报错并点出键名：开关打开却没选条目、阈值越界。
+ * 配置非法一律在装载期报错并点出键名：阈值越界、条目字段越界。开关打开却没选条目不是非法配置——
+ * 默认就是「开着但还没选」，这时什么也不注册，选好条目后由 `loader/volatile-update` 补上。
  *
  * @module
  */
@@ -34,7 +35,7 @@ export interface Threshold {
 
 /** 插件配置。 */
 export interface Config {
-  /** 总开关，设置页可改。默认关闭；关掉时工具、引导段与技能都不注册。 */
+  /** 总开关，设置页可改。默认开启；没选条目或关掉时工具、引导段与技能都不注册。 */
   enabled?: Volatile<boolean>
   /** 当前条目：接入层里那条决策模型的 `id`。开关打开时必填，否则装载期报错。 */
   target?: Volatile<string>
@@ -54,7 +55,7 @@ export const Config: z<
   { enabled?: boolean; target?: string; guidance?: Guidance; threshold?: Threshold },
   Required<Config>
 > = z.object({
-  enabled: z.boolean().default(false).volatile(),
+  enabled: z.boolean().default(true).volatile(),
   target: z.string().default('').volatile(),
   guidance: z.union([z.const('tool'), z.const('context')]).default('tool').volatile(),
   threshold: z
