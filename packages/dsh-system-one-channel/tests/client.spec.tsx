@@ -164,8 +164,8 @@ describe('通道页：当前条目', () => {
 
     // 下拉不能是空白的：当前配的是哪个要看得见（这里它已经不在条目列表里）。
     expect([...targetSelect().options].map(option => option.value)).toEqual(['gone_1'])
-    // 总开关那一组也给出同一句「先去登记」：没有可选条目时它也不可点。
-    expect(screen.getAllByText(zh.noEntries).length).toBeGreaterThan(0)
+    // 条目那一组自己给出「先去登记」的提示（总开关旁是另一句说明）。
+    expect(screen.getByText(zh.noEntries)).toBeTruthy()
     // 页面不会替使用者写这一项：没有交互就不落盘。
     expect(fixture.forms.writes).toHaveLength(0)
   })
@@ -378,6 +378,18 @@ describe('通道页：总开关', () => {
       await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
       expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: false }])
     }
+  })
+
+  it('持久化为关：重新打开页面时开关未勾选，下面三组设置收起', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: { enabled: false, target: 'remote_1' }, entries: SAME_LABEL })
+
+    expect(masterSwitch().checked).toBe(false)
+    expect(screen.queryByLabelText(new RegExp(`^${zh.target}`))).toBeNull()
+    expect(screen.queryByLabelText(zh.guidanceTool)).toBeNull()
+    expect(screen.queryByLabelText(zh.thresholdOn)).toBeNull()
+    // 页面不替使用者写：没有交互就不落盘。
+    expect(fixture.forms.writes).toHaveLength(0)
   })
 })
 
