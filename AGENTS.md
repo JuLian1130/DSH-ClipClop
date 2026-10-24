@@ -60,6 +60,13 @@
 - **不要**把 `.scratch/` 的改动提交到主仓库（在主仓库里它是被排除的未跟踪路径，`git add -f` 会打破这个安排）。
 - 主仓库只收代码、测试与 `docs/` 下的改动；两边的改动各自提交，不混进同一个提交。
 
+**提交信息**：主仓库是公开仓库，历史对读者可见，提交信息按 Conventional Commits 写；`.scratch/` 仓库不受此约束。
+
+- 格式：`<type>(<scope>): <中文短句>`，句末不加句号。type 取 `feat` / `fix` / `docs` / `test` / `refactor` / `chore`；scope 取包名短形：`navigator`、`reasoning-pruner`、`result-clipper`、`system-one`、`system-one-channel`。只动根级文件（`docs/`、`scripts/`、`.github/`、`AGENTS.md`）时用 `docs` / `chore`，不带 scope。
+- 标题写「实现了什么功能 / 修了什么问题」，不写票号、轮次、「复核落修」这类内部过程词。一轮复核的落修按改动性质归 `fix` / `test` / `refactor`。
+- 票号与轮次写进正文（如 `票据 04 第 2 轮：……`），正文说明为什么这么改。标题是给读历史的人看的，票据日志留在 `.scratch/` 的提交里。
+- `.scratch/` 仓库继续照既有格式写「票NN …」中文短句，不改。
+
 ### Domain docs
 
 本仓库使用根目录 `CONTEXT.md` 的单一上下文结构。详见 `docs/agents/domain.md`。
