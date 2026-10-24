@@ -45,22 +45,43 @@ function providerIds(ctx: Context): readonly string[] {
   return (ctx.systemOne as SystemOne.SystemOneService).providers()
 }
 
+/** schema 的字段表：顶层是 `entries`，再往下一层是条目自己的字段。 */
+const dict = Config.dict as unknown as { entries: { inner: { dict: Record<string, unknown> } } }
+
+/**
+ * 取出随包 patch 里某一行的示例配置。
+ *
+ * 示例是注释：先认行 id，再认它下面的 `# config:`，然后一路收注释行到第一个空行。
+ * @param patch - patch 文件的全文。
+ * @param rowId - 行 id。
+ * @returns 去掉注释前缀后的示例配置行（缩进保留层级）。
+ */
+function exampleConfigLines(patch: string, rowId: string): string[] {
+  const lines = patch.split('\n')
+  const start = lines.findIndex(line => line.trim() === `- id: ${rowId}`)
+  expect(start).toBeGreaterThanOrEqual(0)
+  const config = lines.findIndex((line, index) => index > start && line.trim() === '# config:')
+  expect(config).toBeGreaterThan(start)
+  const block = lines.slice(config + 1).map(line => /^\s*# ?(.*)$/.exec(line)?.[1] ?? '')
+  return block.slice(0, block.indexOf(''))
+}
+
+/** 一层 YAML 里的键（`- ` 列表项也算同一层的键）。 */
+function keysOf(lines: string[]): string[] {
+  return lines
+    .map(line => /^\s*(?:- )?([\w-]+):/.exec(line)?.[1])
+    .filter((key): key is string => key !== undefined)
+}
+
 describe('条目配置', () => {
-  it('示例 patch 的配置键集合与 Config 的字段集合逐一相等', () => {
-    const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
-    const lines = patch.split('\n')
-    const start = lines.findIndex(line => line.trim() === '# config:')
-    expect(start).toBeGreaterThanOrEqual(0)
-
-    // 示例是注释：去掉行首的 `# ` 后，`config:` 下的一层键就是 Config 的字段。
-    const example = lines.slice(start + 1)
-      .filter(line => line.trim().startsWith('#'))
-      .map(line => line.replace(/^\s*#\s?/, ''))
-    const keys = example
-      .filter(line => line.trim() !== '' && !line.trim().startsWith('-'))
-      .map(line => /^\s*([\w-]+):/.exec(line)?.[1])
-
-    expect(keys).toEqual(Object.keys(Config.dict ?? {}))
+  it('示例 patch 的键集合与 schema 的字段集合逐一相等：`config:` 下是 Config，再往下是条目的六个字段', () => {
+    const example = exampleConfigLines(
+      readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8'),
+      SystemOne.name,
+    )
+    const base = Math.min(...example.map(line => line.search(/\S/)))
+    expect(keysOf(example.filter(line => line.search(/\S/) === base))).toEqual(Object.keys(dict))
+    expect(keysOf(example.filter(line => line.search(/\S/) > base))).toEqual(Object.keys(dict.entries.inner.dict))
   })
 
   it('entries 默认空数组：没有条目，ask 点名未注册的 target', async () => {

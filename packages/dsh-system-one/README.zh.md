@@ -6,16 +6,22 @@
 
 ## 安装
 
-本包 `private: true`，不发布到 registry。装进 profile 的必须是预构建产物（安装不执行构建脚本）：
+本包是个两行的 bundle：接入层（`dsh-system-one`）加它的决策通道（`dsh-system-one-channel`，在子包 `@dsh-clipclop/dsh-system-one-channel` 里）。两个包都 `private: true`、不发布到 registry，装进 profile 用 link（子包从工作副本解析）：
 
 ```bash
-cd packages/dsh-system-one
-./node_modules/.bin/tsc -p tsconfig.json      # 产出 lib/
-pnpm pack --pack-destination /tmp/dsh-system-one
-dsh plugin --profile <name> add /tmp/dsh-system-one/dsh-clipclop-dsh-system-one-*.tgz --ignore-scripts
+pnpm install                                       # 仓库根：装好工作区，子包与它的产物一同就位
+dsh plugin --profile <name> add link:<仓库>/packages/dsh-system-one
 ```
 
-包声明了 `dsh.bundle.patch`，安装会把它自动追加进 profile 的 `dsh.profile.bundles`，不必手改。装完重启 DSH（或让 profile 重载）——`dsh --profile <name> --dump-config` 里出现 `id: dsh-system-one` 这一行即装载成功。
+包声明了 `dsh.bundle.patch`，安装会把它自动追加进 profile 的 `dsh.profile.bundles`，不必手改。装完重启 DSH（或让 profile 重载）——`dsh --profile <name> --dump-config` 里出现 `id: dsh-system-one` 与 `id: dsh-system-one-channel` 两行即装载成功。
+
+要打成 tarball 装也可以，但子包同样得装进那个 profile（它不发布，registry 上没有）：profile 的 `pnpm-workspace.yaml` 里给子包加一条指向本地 tarball 的 override，否则那一条依赖装不上。
+
+## 两行怎么配合
+
+- **接入层**那一行装载 `ctx.systemOne` 注册表，并按 `entries` 建条目。它单装也有用：别的插件可以 `inject: ['systemOne']` 自己注册 provider、自己 `ask`。
+- **决策通道**那一行接在接入层上（`inject: ['systemOne', 'tools', 'systemPrompt']`），给模型一个 `systemone_ask` 工具。它的配置在子包 README 里。
+- 两行各有 id，按 id 单独禁用其中一行即可，效果见子包 README 与 `.scratch/dsh-system-one/profile-load-07.md`：只禁通道那一行，接入层照常；只禁接入层那一行，通道行不激活（启动审计点名它在等 `systemOne`，不会带着半注册的工具跑）。
 
 ## 配置
 
