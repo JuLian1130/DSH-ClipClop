@@ -357,6 +357,26 @@ describe('通道页：总开关', () => {
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['enabled'], value: true }])
   })
 
+  it('条目那次写回失败后马上打开：把条目与开关写成同一次 mutate，不留下「开着却没条目」', async () => {
+    const fixture = await mounted()
+    fixture.forms.accepted = false
+    renderPage(fixture, { settings: { target: 'remote_1' }, entries: SAME_LABEL })
+
+    // 先选的条目被宿主拒绝，配置里的条目还是旧的。
+    fireEvent.change(targetSelect(), { target: { value: 'sglang_other_9f3c' } })
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+    fixture.forms.accepted = true
+
+    fireEvent.click(masterSwitch())
+
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(2) })
+    // 两笔同一次写入：宿主全接受或全拒绝，不会只落开关。
+    expect(lastWrite(fixture).ops).toEqual([
+      { op: 'set', path: ['enabled'], value: true },
+      { op: 'set', path: ['target'], value: 'sglang_other_9f3c' },
+    ])
+  })
+
   it('开着时条目已被删：照样能关；列表为空或还有别的条目都一样', async () => {
     for (const entries of [[], SAME_LABEL]) {
       cleanup()

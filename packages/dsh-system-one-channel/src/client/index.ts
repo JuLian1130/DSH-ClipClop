@@ -80,7 +80,7 @@ export function apply(ctx: Context): void {
    *
    * 宿主拒绝时 `mutate` resolve `false`，传输层失败时它 **reject**——后者若不接住，页面上不会有任何提示，
    * 使用者会以为已经生效（承接方按结果与异常各报一句话）。
-   * @param patch - 这一页能改的三项，只含这次改动的那一项。
+   * @param patch - 这一页能改的四项，只含这次改动的那一项。
    * @returns 宿主是否接受；不抛错（失败也是结果的一种）。
    */
   const save = async (patch: ChannelPatch): Promise<boolean> => {

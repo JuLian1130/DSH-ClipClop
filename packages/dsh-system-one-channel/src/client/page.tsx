@@ -234,10 +234,13 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
     setDraft({ ...current, ...patch })
   }
 
-  /** 总开关：只写 `enabled`。 */
+  /**
+   * 总开关：关掉只写 `enabled`；打开时若当前条目还没落到配置里（条目那次写回还在路上或失败了），
+   * 把它与开关写成同一次 mutate——两笔一起成功或一起失败，不会留下「开着却没条目」的配置。
+   */
   const toggleEnabled = (enabled: boolean): void => {
     edit({ enabled })
-    commit({ enabled })
+    commit(enabled && current.target !== settings?.target ? { enabled, target: current.target } : { enabled })
   }
 
   /** 选条目：只写 `target`。 */

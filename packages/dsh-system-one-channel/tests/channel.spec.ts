@@ -173,7 +173,8 @@ describe('总开关热切换', () => {
   })
 })
 
-describe('两档引导与技能', () => {  it('第一档注册技能、不含那句；第二档含且只含那一句', async () => {
+describe('两档引导与技能', () => {
+  it('第一档注册技能、不含那句；第二档含且只含那一句', async () => {
     const first = await mount({ channel: { enabled: true, target: TARGET, guidance: 'tool' }, skills: true })
     const second = await mount({ channel: { enabled: true, target: TARGET, guidance: 'context' }, skills: true })
     const firstPrompt = await prompt(first.ctx)

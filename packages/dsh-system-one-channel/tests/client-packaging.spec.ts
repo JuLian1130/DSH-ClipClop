@@ -80,7 +80,7 @@ describe('两面构建第 1 条：双面包的声明与产物', () => {
     const patchPath = join(packageRoot, patch!.replace(/^\.\//, ''))
     expect(existsSync(patchPath)).toBe(true)
     // patch 是 YAML，这里不做通用解析、也不引入 YAML 依赖：只核对两条决定「按哪个 id、装哪个模块」的取值。
-    // 行 id 一旦与页面的写回命名空间脱钩，页面上的三项就写进一个不存在的命名空间（宿主一律拒绝），而任何其它
+    // 行 id 一旦与页面的写回命名空间脱钩，页面上的四项就写进一个不存在的命名空间（宿主一律拒绝），而任何其它
     // 用例都看不见。
     const text = readFileSync(patchPath, 'utf8')
     expect(text).toContain(`id: ${pluginName}`)
