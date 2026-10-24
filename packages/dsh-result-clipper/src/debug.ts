@@ -182,7 +182,8 @@ export async function appendDebugRecord(path: string, record: DebugRecord | Moun
 export type MountMode = 'takeover' | 'shadow' | 'absent'
 
 /**
- * 一行挂载决策记录（`kind: 'mount'`），每次装载只写一行（首个 agent 创建时）。
+ * 一行挂载决策记录（`kind: 'mount'`），每次装载只写一行（首个 agent 创建时），记录的是那个时点的快照：
+ * 首次挂载失败、之后重试成功也不补写。
  *
  * 为什么单独要这一行：部署用 patch 关掉原生条目后由插件挂回（真单关），与"原生还在、插件只是遮蔽了它"交出的
  * 工具完全一样——模型侧 schema、工具行为、debug 里的结果记录都分不出来。要确认真单关真的生效，只能把当时
