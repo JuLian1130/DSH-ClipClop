@@ -102,10 +102,13 @@ dsh plugin --profile <name> add link:<仓库>/packages/dsh-system-one
 - **`labelMass` 是下界**：只算 top-20 里看得见的标识符质量，不是整词表的质量。标识符有缺失时 `choice`/`score` 不返回 `probabilities`，另报一条 `coverage` 警告——缺席表示没报完整分布，不是 0；`boolean` 的 `probability` 仍返回，但同样带警告。
 - **`confidence`** 是重归一之前的域内最大概率，所以低 `labelMass` 的答案不会因为重归一显得很确定。
 - **错题隔离**：单题 HTTP 失败只让该题缺席并报一条警告；401/403/404 是配置或地址错，整次调用直接失败。
-- **实测状态**：2026-10-24 的小样本 pilot 跑过真实端点——hard 20（boolean 8／choice 8／score 4）判对 14，easy 20（boolean 6／choice 14）判对 20；hard 的 8 条 boolean 上 `argmaxIsLabel` 8/8、`labelMass` 中位数 0.9994。**这是 20 + 20 的方向性读数，不是 231 条全量测量，不能当成本 provider 的准确率**；test-jev 那套题面上的 75.7%／100% 也不是。
+- **实测状态**：2026-10-24 的小样本 pilot 跑过真实端点——hard 20（boolean 8／choice 8／score 4）判对 14（boolean 7/8、choice 7/8、score 0/4），easy 20（boolean 6／choice 14）判对 20；hard 的 8 条 boolean 上 `argmaxIsLabel` 8/8、`labelMass` 中位数 0.9994。量表题另补跑了 public hard 的**全部 6 条**（`probes/02c-score-check.mjs`），本次 2/6（前 4 条与 pilot 一致、全错）；test-jev 在**同一批 6 条**上也是 2/6。4 档题的随机基线是 25%，n=6，且重复调用会有个别题翻面（`trap-05` 有一次读到第 2 档、其余几次读到第 0 档），所以这组数字只说明「这批 hard 量表题上两个实现都接近随机」。
+- **量表题的低分不是读法问题**（2026-10-24 补充核对，记录与脚本在票 02c 的 `probes/02c-score-check.*`）：3 道答案唯一的合成量表题 3/3 落对档位（其中一条的分布因标识符没进 top-20 被省略，但 `score` 恰为 2.000，读法仍对）；错得最狠的 `temporal_numeric-12` 经手算复核 **gold 成立**（各段休息 10.5／14.5／20／11.5／11／11／11 小时，规则写明恰好 11 小时合规 → 恰好 1 条违规；题面里的工会注记是对抗干扰），本 provider 与 test-jev 都判错。全量基准为什么暂不做，见票 10。
+- **这是 20 + 20 的方向性读数，不是 231 条全量测量，不能当成本 provider 的准确率**；test-jev 那套题面上的 75.7%／100% 也不是。
 - **已知限制**：
   - 只测了 `deepseek-flash`；`deepseek-v4-pro` 的单 token 标识符、截断哨兵与覆盖率未复核。
   - 图片内容块按官方文档发出，`deepseek-flash` 是否真的收图未测；不支持时由后端 4xx 报错。
   - 规范化会把大写单词并进标识符（`I`→`i`、`A`→`a`、`No`→`no`），与 jev 的 `normalize` 一致；换标识符集时要留意。
   - 通道的 boolean 确定性已乘上 `labelMass`（票 08）：低覆盖时重归一后的 0.99 不会再被当成确定；`labelMass` 缺席按 1。
   - 没有重试与并发；速率限制、429、长 `state` 的前缀缓存未测。
+  - 量表题只在这 6 条 hard 题上看过，**没有 easy 量表题样本**；gold 只手动复核了其中 1 条，其余 5 条的 gold 未独立验证。别把「2/6」当成量表题的普遍准确率。
