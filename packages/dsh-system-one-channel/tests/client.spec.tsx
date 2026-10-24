@@ -20,7 +20,7 @@ import { name as accessLayerName } from '@dsh-clipclop/dsh-system-one'
 import { name as channelName } from '../src/index.ts'
 import { ENTRIES_NAMESPACE, inject as pageInject, PREFERENCE_NAMESPACE } from '../src/client/index.ts'
 import { ChannelPage, type ChannelPageInjected, type ChannelPageProps } from '../src/client/page.tsx'
-import { zh } from '../src/client/locales.ts'
+import { zh, en } from '../src/client/locales.ts'
 import { mountClient, type ClientFixture, type StubWrite } from './support/client.ts'
 
 const open: ClientFixture[] = []
@@ -55,23 +55,22 @@ function boundHooks(hooks: Record<string, ObservableSnapshot<unknown>>): Record<
 }
 
 /**
- * 按页签的形状渲染一次：写进两个命名空间的初始值、取注册面、绑定注入面、渲染组件。
+ * 按页签的形状渲染一次：写进两个命名空间的初始值、取注册面、绑定注入面、渲染组件。断言一律走 DOM 与写入
+ * 记账，所以不需要返回值。
  * @param fixture - 已装好的浏览器半夹具。
  * @param initial - 两个命名空间的初始值（`undefined` 表示快照还没到）。
- * @returns 渲染结果与注入面。
  */
 function renderPage(
   fixture: ClientFixture,
   initial: { settings?: Record<string, unknown>, entries?: readonly Record<string, unknown>[] },
-): { container: HTMLElement, face: ChannelPageInjected } {
+): void {
   fixture.forms.update(PREFERENCE_NAMESPACE, initial.settings)
   fixture.forms.update(ENTRIES_NAMESPACE, { entries: initial.entries })
   const entry = fixture.entries('settings.plugins.tab')[0]
   if (entry === undefined) throw new Error('fixture: the channel page is not registered')
   const face = entry.options.inject!() as ChannelPageInjected
   const props = { view: 'page', t: fixture.t, ...boundHooks(face.hooks), save: face.save }
-  const { container } = render(<ChannelPage {...(props as unknown as ChannelPageProps)} />)
-  return { container, face }
+  render(<ChannelPage {...(props as unknown as ChannelPageProps)} />)
 }
 
 /** 页面上「当前应用的决策模型」那张下拉。标签里还带着下面那行说明，所以按前缀匹配。 */
@@ -159,6 +158,34 @@ describe('通道页：当前条目', () => {
     // 下拉不能是空白的：当前配的是哪个要看得见（这里它已经不在条目列表里）。
     expect([...targetSelect().options].map(option => option.value)).toEqual(['gone_1'])
     expect(screen.getByText(zh.noEntries)).toBeTruthy()
+    // 这个局面下点保存不能把当前条目写空——那是使用者没碰过的设置。
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
+    expect(fixture.forms.writes).toHaveLength(0)
+  })
+
+  it('条目被删掉、只改引导：保存只写引导，不动当前条目', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: { target: 'gone_1', guidance: 'tool' }, entries: [] })
+
+    fireEvent.click(screen.getByLabelText(zh.guidanceContext))
+    fireEvent.click(screen.getByText(zh.save))
+
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+    // 只提交改过的那一项：整份回写会把 `target` 改成空值（下拉里没有能匹配它的选项）。
+    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['guidance'], value: 'context' }])
+  })
+
+  it('快照还没到时只改引导：保存也只写引导，不把默认值写进配置', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: undefined, entries: undefined })
+
+    fireEvent.click(screen.getByLabelText(zh.guidanceContext))
+    fireEvent.click(screen.getByText(zh.save))
+
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+    // 这一页的草稿从默认值起步；整份回写会拿默认值盖掉真实配置（条目、档位、门槛三样一起）。
+    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['guidance'], value: 'context' }])
   })
 
   it('选一个条目后保存：只写 target 一项，落在自己的命名空间', async () => {
@@ -227,6 +254,28 @@ describe('通道页：可信度门槛', () => {
     }
     expect(fixture.forms.writes).toHaveLength(0)
   })
+
+  it('门槛关着时那个数值不参与判定：开着填了越界值再关掉，改别的项照样能保存', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, {
+      settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: true, value: 0.5 } },
+      entries: SAME_LABEL,
+    })
+
+    // 开着时填了个越界值，随后把门槛关掉：控件这时是禁用的，没法就地改。保存别的项不该被它卡死。
+    fireEvent.change(thresholdInput(), { target: { value: '1.5' } })
+    fireEvent.click(screen.getByLabelText(zh.thresholdOn))
+    fireEvent.change(targetSelect(), { target: { value: 'sglang_other_9f3c' } })
+    fireEvent.click(screen.getByText(zh.save))
+
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+    expect(screen.queryByRole('alert')).toBeNull()
+    // 关掉不等于把数值丢掉：按配置里原来的数值写回。
+    expect(lastWrite(fixture).ops).toEqual([
+      { op: 'set', path: ['target'], value: 'sglang_other_9f3c' },
+      { op: 'set', path: ['threshold'], value: { enabled: false, value: 0.5 } },
+    ])
+  })
 })
 
 describe('通道页：写回面', () => {
@@ -290,8 +339,11 @@ describe('通道页：写回面', () => {
 
 describe('通道页：文案', () => {
   it('不出现参数名、机制名与具体模型名', () => {
-    const text = Object.values(zh).join(' ')
-    expect(text).not.toMatch(/target|guidance|threshold|enabled|decisions|systemone|openai|vllm|sglang|deepseek|qwen/i)
+    // `guidance` 不在禁词里：英文的标签就叫 "Guidance"，那是日常词与字段名同形的巧合，不是泄漏。
+    for (const dictionary of [zh, en]) {
+      expect(Object.values(dictionary).join(' '))
+        .not.toMatch(/target|threshold|enabled|decisions|systemone|openai|vllm|sglang|deepseek|qwen/i)
+    }
   })
 
   it('阈值那句点名不可跨模型比较；当前条目那句说清只对这一层有效', async () => {
@@ -302,8 +354,9 @@ describe('通道页：文案', () => {
     expect(zh.thresholdHint).toContain('换一个模型')
     expect(zh.targetHint).toContain('只对决策通道这一层有效')
     expect(zh.targetHint).toContain('不是全局开关')
-    // 两句都要真的在页面上，而不只是字典里有。
-    expect(screen.getByText(zh.thresholdHint)).toBeTruthy()
-    expect(screen.getByText(zh.targetHint)).toBeTruthy()
+    // 这几句都要真的在页面上，而不只是字典里有。
+    for (const text of [zh.thresholdHint, zh.targetHint, zh.switch]) {
+      expect(screen.getByText(text)).toBeTruthy()
+    }
   })
 })

@@ -7,8 +7,10 @@
  * 为了不覆盖页面不知道的东西——最要紧的一种：条目被删掉之后，下拉里没有能匹配当前值的选项，此时若照草稿
  * 回写就会把一项使用者没碰过的设置清空。
  *
- * 门槛的数值在草稿里留**原始文本**：`<input type="number">` 按 `Number()` 收值的话，输入 `0.` 这一瞬会被
- * 打回成 `0`，小数点再也打不进去。合法性与范围在保存时一次判定（报一句话、一条都不写）。
+ * 门槛的数值在草稿里留**原始文本**：按 `Number()` 收值的话，敲下 `0.` 这一瞬会被当成 `0` 写回控件，小数点
+ * 就再也打不进去（数字输入框对这类中间态报空串，React 只在值与目标不等时才改 DOM——按数字收值一定会改，
+ * 按文本收值不会）。合法性与范围在**门槛开着时**一次判定（报一句话、一条都不写）；关着时那个数值不参与判定，
+ * 按配置里原来的数值写回。
  *
  * @module
  */
@@ -194,23 +196,33 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
   }
 
   /**
-   * 保存：先判定门槛数值，再把改过的字段合成一次原子写回。
+   * 保存：门槛开着时先判定数值，再把改过的字段合成一次原子写回。
    *
    * 与当前配置逐项比对而不是无条件写回——见模块注释。基准取自**快照**，不取草稿。
+   *
+   * 门槛关着时不读那个数值：控件是禁用的，里面可能留着上一次敲进去的越界文本；拿它拦保存会把无关的改动
+   * 一起卡死，而控件禁用又没法就地改。这时按配置里原来的数值写回，数值不丢。
    */
   const saveDraft = async (): Promise<void> => {
-    const text = current.threshold.valueText.trim()
-    const value = Number(text)
-    if (text === '' || !Number.isFinite(value) || value < 0 || value > 1) {
-      setFailure('range')
-      return
-    }
     const base = toDraft(settings)
+    const enabled = current.threshold.enabled
+    const baseValue = Number(base.threshold.valueText)
+    let value = baseValue
+    if (enabled) {
+      const text = current.threshold.valueText.trim()
+      const parsed = Number(text)
+      if (text === '' || !Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+        setFailure('range')
+        return
+      }
+      value = parsed
+    }
     const patch: ChannelPatch = {}
     if (current.target !== base.target) patch.target = current.target
     if (current.guidance !== base.guidance) patch.guidance = current.guidance
-    if (current.threshold.enabled !== base.threshold.enabled
-      || value !== Number(base.threshold.valueText)) patch.threshold = { enabled: current.threshold.enabled, value }
+    if (enabled !== base.threshold.enabled || (enabled && value !== baseValue)) {
+      patch.threshold = { enabled, value }
+    }
     setFailure(null)
     if (patch.target === undefined && patch.guidance === undefined && patch.threshold === undefined) return
     // 写入面把「宿主拒绝」与「传输层失败」都收成一个 `false`：两种都不抛错、都报同一句话。
@@ -222,6 +234,7 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
       <h2 style={TITLE_STYLE}>{t('title')}</h2>
       <p style={HINT_STYLE}>{t('intro')}</p>
       <p style={HINT_STYLE}>{t('live')}</p>
+      <p style={HINT_STYLE}>{t('switch')}</p>
       <section style={GROUP_STYLE}>
         <label style={FIELD_STYLE}>
           <span style={LABEL_STYLE}>{t('target')}</span>

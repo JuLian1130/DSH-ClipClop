@@ -16,6 +16,7 @@ export type ChannelLocaleKey =
   | 'title'
   | 'intro'
   | 'live'
+  | 'switch'
   | 'target'
   | 'targetHint'
   | 'unset'
@@ -37,6 +38,7 @@ export const zh: Record<ChannelLocaleKey, string> = {
   title: '决策通道',
   intro: '需要判断、选择或评分时，把这一层交给决策模型，而不是让主模型自己拿主意。',
   live: '保存后马上生效，不用重载插件。',
+  switch: '通道本身要先在插件配置里启用（那一步要重载插件）；没启用时，这一页的设置不起作用。',
   target: '当前应用的决策模型',
   targetHint: '只对决策通道这一层有效，不是全局开关：别的插件各自指名自己的决策模型，不受这里影响。',
   unset: '选一个决策模型',
@@ -59,6 +61,7 @@ export const en: Record<ChannelLocaleKey, string> = {
   title: 'Decision channel',
   intro: 'Hand a judgement, a choice, or a score to a decision model instead of letting the main model decide on its own.',
   live: 'Changes apply as soon as you save; no reload needed.',
+  switch: 'The channel itself has to be switched on in the plugin configuration first (that step needs a plugin reload); until it is on, the settings here do nothing.',
   target: 'Decision model in use',
   targetHint: 'Applies to this decision channel only, not globally: other plugins name their own decision model and are unaffected.',
   unset: 'Choose a decision model',
