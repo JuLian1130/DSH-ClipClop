@@ -20,7 +20,6 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
-import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { name as pluginName } from '../src/index.ts'
 import { inject as pageInject, PREFERENCE_NAMESPACE } from '../src/client/index.ts'
 
@@ -103,11 +102,10 @@ describe('两面构建第 2 条：产物是闭包工厂注册', () => {
     expect(registrations).toHaveLength(1)
     const registration = registrations[0]!
     expect(registration.id).toBe(manifest.name)
-    // 平台模块表里本产物只会用到这几个（跨包协作一律走 cordis 服务，所以没有别的 external）。
+    // 平台模块表里本产物只会 require react 与 jsx runtime（跨包协作一律走 cordis 服务，所以没有别的 external）。
     const externals: Record<string, unknown> = {
       react: React,
       'react/jsx-runtime': jsxRuntime,
-      '@deepseek-ai/dsh-client-ui-primitives': primitives,
     }
     const requested: string[] = []
     const exported = registration.factory((id) => {
@@ -116,7 +114,7 @@ describe('两面构建第 2 条：产物是闭包工厂注册', () => {
       return externals[id]
     })
     // 同一模块被 require 多次是正常的（模块缓存由装载器持有），所以按去重后的集合比对。
-    expect([...new Set(requested)].sort()).toEqual(['@deepseek-ai/dsh-client-ui-primitives', 'react', 'react/jsx-runtime'])
+    expect([...new Set(requested)].sort()).toEqual(['react', 'react/jsx-runtime'])
     // 注入清单是契约的一部分（接入层没装时页照常可用），所以与源码逐项相等比「是个数组」有用。
     expect(exported.inject).toEqual(pageInject)
     expect(typeof exported.apply).toBe('function')

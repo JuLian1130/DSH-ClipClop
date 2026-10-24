@@ -4,7 +4,7 @@
  *
  * 观察面分两层：注册层断言页签的键与两个命名空间常量（写回用本行的 patch 行 id、只读用接入层那一行的 id），
  * 控件层把注册面注入的业务面按渲染机的形状绑到组件上，断言「选条目／切档位／开阈值都写回自己的命名空间」
- * 「跨命名空间只有读」「阈值关闭时数值控件禁用」。
+ * 「跨命名空间只有读」「改动即写、没有保存按钮」「阈值关闭时数值设置整组不显示」。
  *
  * 命名空间是判据的一部分：写入替身按命名空间记账，所以「不存在写另一个命名空间的调用」是一条直接观察，
  * 而不是「代码里没写」的推断。
@@ -12,8 +12,8 @@
  * @module
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import { name as accessLayerName } from '@dsh-clipclop/dsh-system-one'
@@ -126,7 +126,7 @@ describe('通道页：注册面', () => {
     expect(targetSelect().options[0]?.textContent).toBe(zh.unset)
     expect((screen.getByLabelText(zh.guidanceTool) as HTMLInputElement).checked).toBe(true)
     expect((screen.getByLabelText(zh.thresholdOn) as HTMLInputElement).checked).toBe(false)
-    expect(thresholdInput().disabled).toBe(true)
+    expect(screen.queryByLabelText(new RegExp(`^${zh.thresholdValue}`))).toBeNull()
   })
 })
 
@@ -158,42 +158,37 @@ describe('通道页：当前条目', () => {
     // 下拉不能是空白的：当前配的是哪个要看得见（这里它已经不在条目列表里）。
     expect([...targetSelect().options].map(option => option.value)).toEqual(['gone_1'])
     expect(screen.getByText(zh.noEntries)).toBeTruthy()
-    // 这个局面下点保存不能把当前条目写空——那是使用者没碰过的设置。
-    fireEvent.click(screen.getByText(zh.save))
-    await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
+    // 页面不会替使用者写这一项：没有交互就不落盘。
     expect(fixture.forms.writes).toHaveLength(0)
   })
 
-  it('条目被删掉、只改引导：保存只写引导，不动当前条目', async () => {
+  it('条目被删掉、只改引导：只写引导，不动当前条目', async () => {
     const fixture = await mounted()
     renderPage(fixture, { settings: { target: 'gone_1', guidance: 'tool' }, entries: [] })
 
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
-    fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     // 只提交改过的那一项：整份回写会把 `target` 改成空值（下拉里没有能匹配它的选项）。
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['guidance'], value: 'context' }])
   })
 
-  it('快照还没到时只改引导：保存也只写引导，不把默认值写进配置', async () => {
+  it('快照还没到时只改引导：也只写引导，不把默认值写进配置', async () => {
     const fixture = await mounted()
     renderPage(fixture, { settings: undefined, entries: undefined })
 
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
-    fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     // 这一页的草稿从默认值起步；整份回写会拿默认值盖掉真实配置（条目、档位、门槛三样一起）。
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['guidance'], value: 'context' }])
   })
 
-  it('选一个条目后保存：只写 target 一项，落在自己的命名空间', async () => {
+  it('选一个条目：只写 target 一项，落在自己的命名空间', async () => {
     const fixture = await mounted()
     renderPage(fixture, { settings: { target: 'remote_1' }, entries: SAME_LABEL })
 
     fireEvent.change(targetSelect(), { target: { value: 'sglang_other_9f3c' } })
-    fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     expect(lastWrite(fixture).namespace).toBe(PREFERENCE_NAMESPACE)
@@ -208,7 +203,6 @@ describe('通道页：引导档位', () => {
 
     expect((screen.getByLabelText(zh.guidanceTool) as HTMLInputElement).checked).toBe(true)
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
-    fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['guidance'], value: 'context' }])
@@ -216,19 +210,23 @@ describe('通道页：引导档位', () => {
 })
 
 describe('通道页：可信度门槛', () => {
-  it('关闭时数值控件禁用；开启并设值后开关与数值一次写回', async () => {
+  it('关闭时整组数值设置不显示；开启后按配置里的数值写回，改值再写一次', async () => {
     const fixture = await mounted()
     renderPage(fixture, { settings: { threshold: { enabled: false, value: 0.5 } } })
 
-    expect(thresholdInput().disabled).toBe(true)
-    fireEvent.click(screen.getByLabelText(zh.thresholdOn))
-    expect(thresholdInput().disabled).toBe(false)
-    expect(thresholdInput().value).toBe('0.5')
-    fireEvent.change(thresholdInput(), { target: { value: '0.8' } })
-    fireEvent.click(screen.getByText(zh.save))
+    expect(screen.queryByLabelText(new RegExp(`^${zh.thresholdValue}`))).toBeNull()
+    expect(screen.queryByText(zh.thresholdHint)).toBeNull()
 
+    fireEvent.click(screen.getByLabelText(zh.thresholdOn))
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     // 开关与数值是同一个字段：只写其中一个会留下「开着但拿旧数值算」的状态。
+    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.5 } }])
+    expect(thresholdInput().value).toBe('0.5')
+    expect(screen.getByText(zh.thresholdHint)).toBeTruthy()
+
+    fireEvent.change(thresholdInput(), { target: { value: '0.8' } })
+    fireEvent.blur(thresholdInput())
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(2) })
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.8 } }])
   })
 
@@ -237,87 +235,97 @@ describe('通道页：可信度门槛', () => {
     renderPage(fixture, { settings: { threshold: { enabled: false, value: 0.35 } } })
 
     fireEvent.click(screen.getByLabelText(zh.thresholdOn))
-    fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.35 } }])
   })
 
-  it('门槛已开着、只改数值：新数值照样写回', async () => {
+  it('门槛已开着、只改数值：失焦后写回新数值', async () => {
     const fixture = await mounted()
     renderPage(fixture, { settings: { threshold: { enabled: true, value: 0.5 } } })
 
     fireEvent.change(thresholdInput(), { target: { value: '0.7' } })
-    fireEvent.click(screen.getByText(zh.save))
+    fireEvent.blur(thresholdInput())
 
     await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.7 } }])
   })
 
-  it('保存期间三组控件与按钮都禁用：在途写入返回前，页面上看到的与配置一致', async () => {
+  it('数值合法时停止输入 400ms 后自动写回，不必失焦', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: { threshold: { enabled: true, value: 0.5 } } })
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(thresholdInput(), { target: { value: '0.7' } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+
+      expect(fixture.forms.writes).toHaveLength(1)
+      expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.7 } }])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('写入按顺序排队：前一笔还在途时，后一次改动等它落地再写', async () => {
     const fixture = await mounted()
     let release = (): void => {}
     fixture.forms.hold = new Promise<void>((resolve) => { release = () => { resolve() } })
     renderPage(fixture, {
-      settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: true, value: 0.5 } },
+      settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: false, value: 0.5 } },
       entries: SAME_LABEL,
     })
 
-    // 门槛开着，所以数值框此时是可用的：下面它变灰只可能是「保存期间整组禁用」。
-    expect(thresholdInput().disabled).toBe(false)
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
-    fireEvent.click(screen.getByText(zh.save))
-    // 按钮换成「保存中」，三组控件整组禁用（`fieldset[disabled]`）。
-    await waitFor(() => { expect(screen.getByText(zh.saving)).toBeTruthy() })
-    expect(targetSelect().disabled).toBe(true)
-    expect((screen.getByLabelText(zh.guidanceTool) as HTMLInputElement).disabled).toBe(true)
-    expect((screen.getByLabelText(zh.thresholdOn) as HTMLInputElement).disabled).toBe(true)
-    expect(thresholdInput().disabled).toBe(true)
+    fireEvent.click(screen.getByLabelText(zh.thresholdOn))
+    // 第一笔被卡住时第二笔不进写入面：顺序由页面保证，不靠宿主调度。
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
 
     release()
-    await waitFor(() => { expect(screen.getByText(zh.save)).toBeTruthy() })
-    expect(targetSelect().disabled).toBe(false)
-    expect(thresholdInput().disabled).toBe(false)
-    expect(fixture.forms.writes).toHaveLength(1)
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(2) })
+    expect(fixture.forms.writes.map(write => write.ops)).toEqual([
+      [{ op: 'set', path: ['guidance'], value: 'context' }],
+      [{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.5 } }],
+    ])
   })
 
-  it('数值越界或为空：报一句话，一条都不写', async () => {
+  it('数值越界或为空：失焦时报一句话，一条都不写', async () => {
     const fixture = await mounted()
     renderPage(fixture, { settings: { threshold: { enabled: true, value: 0.5 } } })
 
     for (const bad of ['1.5', '', 'abc', '-0.1']) {
       fireEvent.change(thresholdInput(), { target: { value: bad } })
-      fireEvent.click(screen.getByText(zh.save))
+      fireEvent.blur(thresholdInput())
       await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(zh.thresholdInvalid) })
     }
     expect(fixture.forms.writes).toHaveLength(0)
   })
 
-  it('门槛关着时那个数值不参与判定：开着填了越界值再关掉，改别的项照样能保存', async () => {
+  it('关掉门槛时按草稿里的有效数值写回，不把越界文本带上', async () => {
     const fixture = await mounted()
     renderPage(fixture, {
-      settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: true, value: 0.5 } },
+      settings: { target: 'remote_1', threshold: { enabled: true, value: 0.5 } },
       entries: SAME_LABEL,
     })
 
-    // 开着时填了个越界值，随后把门槛关掉：控件这时是禁用的，没法就地改。保存别的项不该被它卡死。
+    // 开着时填了个越界值，随后把门槛关掉：按配置里原来的数值写回，数值不丢。
     fireEvent.change(thresholdInput(), { target: { value: '1.5' } })
     fireEvent.click(screen.getByLabelText(zh.thresholdOn))
     fireEvent.change(targetSelect(), { target: { value: 'sglang_other_9f3c' } })
-    fireEvent.click(screen.getByText(zh.save))
 
-    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(2) })
     expect(screen.queryByRole('alert')).toBeNull()
-    // 关掉不等于把数值丢掉：按配置里原来的数值写回。
-    expect(lastWrite(fixture).ops).toEqual([
-      { op: 'set', path: ['target'], value: 'sglang_other_9f3c' },
-      { op: 'set', path: ['threshold'], value: { enabled: false, value: 0.5 } },
+    expect(fixture.forms.writes.map(write => write.ops)).toEqual([
+      [{ op: 'set', path: ['threshold'], value: { enabled: false, value: 0.5 } }],
+      [{ op: 'set', path: ['target'], value: 'sglang_other_9f3c' }],
     ])
+    // 关掉后整组数值设置收起。
+    expect(screen.queryByLabelText(new RegExp(`^${zh.thresholdValue}`))).toBeNull()
   })
 })
 
 describe('通道页：写回面', () => {
-  it('三项都改过时是一次原子写入，且没有任何一笔写到另一个命名空间', async () => {
+  it('三项各改一次：各写一项，没有任何一笔写到另一个命名空间', async () => {
     const fixture = await mounted()
     renderPage(fixture, {
       settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: false, value: 0.5 } },
@@ -327,26 +335,24 @@ describe('通道页：写回面', () => {
     fireEvent.change(targetSelect(), { target: { value: 'sglang_local_a1b2' } })
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
     fireEvent.click(screen.getByLabelText(zh.thresholdOn))
-    fireEvent.click(screen.getByText(zh.save))
 
-    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
-    expect(lastWrite(fixture).ops).toEqual([
-      { op: 'set', path: ['target'], value: 'sglang_local_a1b2' },
-      { op: 'set', path: ['guidance'], value: 'context' },
-      { op: 'set', path: ['threshold'], value: { enabled: true, value: 0.5 } },
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(3) })
+    expect(fixture.forms.writes.map(write => write.ops)).toEqual([
+      [{ op: 'set', path: ['target'], value: 'sglang_local_a1b2' }],
+      [{ op: 'set', path: ['guidance'], value: 'context' }],
+      [{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.5 } }],
     ])
     // 跨命名空间只读：整个装配里没有一笔写入落在接入层那一行上。
     expect(fixture.forms.writes.every(write => write.namespace === PREFERENCE_NAMESPACE)).toBe(true)
   })
 
-  it('什么都没改就点保存：一条都不写', async () => {
+  it('没有任何交互就不落盘', async () => {
     const fixture = await mounted()
     renderPage(fixture, {
       settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: false, value: 0.5 } },
       entries: SAME_LABEL,
     })
 
-    fireEvent.click(screen.getByText(zh.save))
     await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
     expect(fixture.forms.writes).toHaveLength(0)
   })
@@ -357,7 +363,6 @@ describe('通道页：写回面', () => {
     renderPage(fixture, { settings: { guidance: 'tool' } })
 
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
-    fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(zh.saveFailed) })
     expect(fixture.forms.writes).toHaveLength(1)
@@ -369,7 +374,6 @@ describe('通道页：写回面', () => {
     renderPage(fixture, { settings: { guidance: 'tool' } })
 
     fireEvent.click(screen.getByLabelText(zh.guidanceContext))
-    fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(zh.saveFailed) })
   })
@@ -386,7 +390,8 @@ describe('通道页：文案', () => {
 
   it('阈值那句点名不可跨模型比较；当前条目那句说清只对这一层有效', async () => {
     const fixture = await mounted()
-    renderPage(fixture, { entries: SAME_LABEL })
+    // 阈值整组只在开启后显示，所以这里先把它打开。
+    renderPage(fixture, { settings: { threshold: { enabled: true, value: 0.5 } }, entries: SAME_LABEL })
 
     expect(zh.thresholdHint).toContain('松紧不同')
     expect(zh.thresholdHint).toContain('换一个模型')

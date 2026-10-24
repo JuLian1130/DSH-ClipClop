@@ -76,11 +76,11 @@ export function apply(ctx: Context): void {
   const settings = ctx.configForms.get<ChannelSettings>(PREFERENCE_NAMESPACE)
   const entries = ctx.configForms.get<EntriesSection>(ENTRIES_NAMESPACE)
   /**
-   * 把这次改过的字段合成一次原子写入。
+   * 把这次改动的一项写回（页面每次只提交一项；门槛的开关与数值是同一个字段，一起写）。
    *
    * 宿主拒绝时 `mutate` resolve `false`，传输层失败时它 **reject**——后者若不接住，页面上不会有任何提示，
-   * 使用者会以为已经保存（承接方按结果与异常各报一句话）。
-   * @param patch - 这一页能改的三项，只含改动过的。
+   * 使用者会以为已经生效（承接方按结果与异常各报一句话）。
+   * @param patch - 这一页能改的三项，只含这次改动的那一项。
    * @returns 宿主是否接受；不抛错（失败也是结果的一种）。
    */
   const save = async (patch: ChannelPatch): Promise<boolean> => {
