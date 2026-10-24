@@ -1,5 +1,5 @@
 /**
- * 两个 provider 共用的那一半线上读写：解析凭据、发 JSON 请求、把失败包成 provider 级失败。
+ * 三个 provider 共用的那一半线上读写：解析凭据、发 JSON 请求、把失败包成 provider 级失败。
  *
  * 端点路径、请求体与响应形状各家不同，由 provider 自己拼；共用的只有这些与形状无关的部分。
  * @module

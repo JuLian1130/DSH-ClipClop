@@ -194,16 +194,14 @@ function messages(request: ProviderRequest, question: Question): readonly Messag
 
 /** 题面按固定顺序拼：请求级说明、state、本题说明、选项、末段指令。 */
 function userText(request: ProviderRequest, question: Question): string {
-  const state: string = typeof request.state === 'string'
-    ? request.state
-    : JSON.stringify(request.state) ?? 'null'
+  const state = typeof request.state === 'string' ? request.state : JSON.stringify(request.state)
   return [
     ...(request.instructions ? [request.instructions] : []),
     state,
     question.instructions,
     options(question),
     closing(question),
-  ].join('\n\n')
+  ].filter((part) => part !== '').join('\n\n')
 }
 
 /** 选项/档位块：标识符在左、描述在右。 */

@@ -155,6 +155,18 @@ describe('deepseek provider', () => {
     )
   })
 
+  it('空的请求级/题面 instructions 等于没传，题面不留空段', async () => {
+    const calls = stubFetch(() => completion([
+      { token: 'no', logprob: log(0.75) },
+      { token: 'yes', logprob: log(0.25) },
+    ]))
+    const ctx = await mount()
+
+    await ctx.systemOne.ask(ask({ q: { type: 'boolean', instructions: '' } }, { instructions: '' }))
+
+    expect(sentUser(calls)).toBe('{"step":3}\n\nOptions:\n- no\n- yes\n\nAnswer with exactly one word: no or yes.')
+  })
+
   it('读出：no/yes 重归一、choice 按选项顺序、score = Σ i·p_i，诊断项齐全', async () => {
     stubFetch((_call, index) => [
       completion([{ token: 'no', logprob: log(0.75) }, { token: 'yes', logprob: log(0.25) }]),
@@ -252,6 +264,23 @@ describe('deepseek provider', () => {
     expect(answer.confidence).toBeCloseTo(0.3)
     expect(answer.labelMass).toBeCloseTo(0.4)
     expect(answer.argmaxIsLabel).toBe(false)
+  })
+
+  it('同一标识符的多个表面形式在 log 域合并后再归一化', async () => {
+    stubFetch(() => completion([
+      { token: 'no', logprob: log(0.6) },
+      { token: 'No', logprob: log(0.3) },
+      { token: 'yes', logprob: log(0.1) },
+    ]))
+    const ctx = await mount()
+
+    const result = await ctx.systemOne.ask(ask({ 'turn.continue': QUESTIONS['turn.continue'] }))
+
+    const answer = result.answers['turn.continue'] as SystemOne.BooleanAnswer
+    // no 的两个表面形式合并成 0.9（不是 0.6 或 0.3），P(yes) 才仍是 0.1。
+    expect(answer.probability).toBeCloseTo(0.1)
+    expect(answer.confidence).toBeCloseTo(0.9)
+    expect(answer.labelMass).toBeCloseTo(1)
   })
 
   it('temperature 0 的症状：非哨兵条目 ≤ 1 时按 provider 级失败，不返回 argmax 答案', async () => {
