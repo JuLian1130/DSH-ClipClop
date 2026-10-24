@@ -284,4 +284,28 @@ describe('条目配置热生效', () => {
     const result = await ctx.systemOne.ask({ target: 'kept', state: null, questions: QUESTIONS })
     expect(result.answers).toEqual(ANSWERS)
   })
+
+  it('另一个插件占用的 id 出现在新配置里：预检拦下，旧注册表保留', async () => {
+    stubFactories()
+    const { config, update } = volatileConfig([entry('own')])
+    const ctx = new Context()
+    const logged = vi.spyOn(ctx.logger, 'error').mockImplementation(() => {})
+    SystemOne.apply(ctx, config)
+    // 第三方 provider 和配置条目撞 id：这是预检唯一要防的路径，重复 id 在 buildEntries 就抛了。
+    const owner = await ctx.plugin({
+      name: 'other-provider-owner',
+      inject: ['systemOne'],
+      apply(fiber: Context) { fiber.systemOne.register('foreign', new StubProvider()) },
+    })
+
+    update([entry('own'), entry('foreign')])
+    expect(() => ctx.emit('loader/volatile-update', [['entries']])).not.toThrow()
+
+    // 旧那批注册原样留着：自己的条目仍能 ask，别人的条目也不受影响。
+    expect(providerIds(ctx)).toEqual(['own', 'foreign'])
+    expect(logged.mock.calls.flat().some((arg) => String(arg).includes('"foreign" is already registered by another plugin'))).toBe(true)
+    const result = await ctx.systemOne.ask({ target: 'own', state: null, questions: QUESTIONS })
+    expect(result.answers).toEqual(ANSWERS)
+    await owner.dispose()
+  })
 })
