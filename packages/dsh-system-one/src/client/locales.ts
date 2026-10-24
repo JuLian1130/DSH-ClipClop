@@ -24,6 +24,8 @@ export type SystemOneLocaleKey =
   | 'kind'
   | 'kindHint'
   | 'baseUrl'
+  | 'baseUrlHintSystemone'
+  | 'baseUrlHintOpenai'
   | 'model'
   | 'modelPlaceholder'
   | 'key'
@@ -51,6 +53,8 @@ export const zh: Record<SystemOneLocaleKey, string> = {
   kind: '协议',
   kindHint: '与服务方给的接口类型一致，选错会在调用时报错。',
   baseUrl: 'API 地址',
+  baseUrlHintSystemone: '填服务根地址，例如自建服务的 http://127.0.0.1:30000，或服务方给的根地址；只填到端口，不要填到某个具体接口，末尾的斜杠可有可无。',
+  baseUrlHintOpenai: '填服务根地址，例如 https://api.openai.com，或兼容服务的根地址；只填到域名，不要填到某个具体接口，末尾的斜杠可有可无。',
   model: '模型',
   modelPlaceholder: '服务方文档里的模型名',
   key: 'API 密钥',
@@ -79,6 +83,8 @@ export const en: Record<SystemOneLocaleKey, string> = {
   kind: 'Protocol',
   kindHint: 'Match the interface type your provider documents; a wrong pick fails at call time.',
   baseUrl: 'API address',
+  baseUrlHintSystemone: 'The service root, e.g. http://127.0.0.1:30000 for a self-hosted server, or the root address your provider gives you; stop at the port, not at an endpoint. A trailing slash is optional.',
+  baseUrlHintOpenai: "The service root, e.g. https://api.openai.com, or a compatible service's root address; stop at the host, not at an endpoint. A trailing slash is optional.",
   model: 'Model',
   modelPlaceholder: 'The model name from the provider docs',
   key: 'API key',

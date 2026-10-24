@@ -298,6 +298,20 @@ describe('条目页：增删改', () => {
     expect((field(zh.kind) as HTMLSelectElement).value).toBe('openai')
   })
 
+  it('API 地址的说明跟着协议切换', async () => {
+    const fixture = await mounted()
+    renderPage(fixture)
+    fireEvent.click(screen.getByText(zh.add))
+
+    expect(screen.getByText(zh.baseUrlHintSystemone)).toBeTruthy()
+    expect(screen.queryByText(zh.baseUrlHintOpenai)).toBeNull()
+
+    fireEvent.change(field(zh.kind), { target: { value: 'openai' } })
+
+    expect(screen.getByText(zh.baseUrlHintOpenai)).toBeTruthy()
+    expect(screen.queryByText(zh.baseUrlHintSystemone)).toBeNull()
+  })
+
   it('只写 volatile 路径：一整轮增删改之后，每条写入都落在 entries 上', async () => {
     const fixture = await mounted()
     renderPage(fixture, [{ id: 'old', label: '旧的', kind: 'systemone', baseUrl: 'http://127.0.0.1:1', model: 'm' }])

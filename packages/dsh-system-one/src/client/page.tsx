@@ -333,6 +333,9 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
                       style={INPUT_STYLE}
                       onChange={(event) => { edit(index, { baseUrl: event.target.value }) }}
                     />
+                    <span style={HINT_STYLE}>
+                      {t(row.kind === 'openai' ? 'baseUrlHintOpenai' : 'baseUrlHintSystemone')}
+                    </span>
                   </label>
                   <label style={FIELD_STYLE}>
                     <span style={LABEL_STYLE}>{t('model')}</span>

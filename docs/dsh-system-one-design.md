@@ -114,7 +114,7 @@
 
 **`entries` 整字段 `.volatile()`**：设置页的写回路径只接受 volatile 路径；而 volatile 只能落在顶层固定字段路径（数组元素内部再放会被拒），所以标记打在整个 `entries` 上。**volatile 更新不重挂载插件**：loader 把新引用提交进运行中的 fiber 后，只向所属 fiber 派发 `loader/volatile-update`（`vendor/loader/src/config/entry.ts` 的 `_commitVolatile`）；host 半监听它做整批替换——按新快照用 `buildEntries` 建出完整新一批（重复 id 在这里抛）、再预检新 id 没被其它插件占用，全部通过后才 dispose 旧的、注册新的。任一步失败都保留旧注册表并记日志，不会半替换。所以设置页保存后增删改条目立即生效，不需要重载插件或重启 DSH；同类监听的先例是 `packages/llm/llm-pi-ai/src/index.ts:315`。
 
-**条目页**（客户端半，`src/client/`）做增删改：名称、模型、API 地址、协议（下拉两种）、API 密钥（可选）。已有条目默认折叠成一行（名称 + 模型·协议），点「编辑」展开，保存成功后全部收起；新增行在保存前一直展开。内部 `id` 不由用户输入——新增时生成，展开时在卡片头以一行次要文本显示（可选中复制到消费者的配置里）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。**引用名的默认值 = 条目 `id`**（存密钥时按 `id` 取默认值，页面不提供改它的控件）；要换引用名仍可手写 patch 把 `apiKeyEnv` 改成自己的环境变量名。
+**条目页**（客户端半，`src/client/`）做增删改：名称、模型、API 地址、协议（下拉两种）、API 密钥（可选）。API 地址下方按所选协议给一句填写说明（服务根地址，不要填到具体接口）。已有条目默认折叠成一行（名称 + 模型·协议），点「编辑」展开，保存成功后全部收起；新增行在保存前一直展开。内部 `id` 不由用户输入——新增时生成，展开时在卡片头以一行次要文本显示（可选中复制到消费者的配置里）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。**引用名的默认值 = 条目 `id`**（存密钥时按 `id` 取默认值，页面不提供改它的控件）；要换引用名仍可手写 patch 把 `apiKeyEnv` 改成自己的环境变量名。
 
 落地时的四条口径（都进了 `tests/client.spec.tsx` 的判据）：
 
