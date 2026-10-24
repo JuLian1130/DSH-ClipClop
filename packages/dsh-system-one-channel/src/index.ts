@@ -226,6 +226,9 @@ function askTool(ctx: Context, config: Required<ChannelConfig>): ToolDefinition 
  * @throws 同 id 出现两次：答案按 id 组织，后一道会悄悄顶掉前一道，等于丢题。
  */
 function toQuestions(entries: readonly ToolQuestion[]): Readonly<Record<string, Question>> {
+  // 空题单是一次手滑：工具 schema 的数组没有 `minItems` 可写（DSH 的参数 DSL 只到 `items`），在这里拦，
+  // 免得为一次白跑付一次外部决策模型的调用。
+  if (entries.length === 0) throw new Error(`${TOOL_NAME}: ask at least one question`)
   // 无原型：题 id 是模型给的，`__proto__` 这类键在普通对象上会改掉原型而不是当成一道题。
   const questions = Object.create(null) as Record<string, Question>
   for (const { id, ...question } of entries) {

@@ -5,6 +5,7 @@
  * 技能缺席时照常加载、阈值两种确定性各一条、算不出确定性时标 `abstain`、卸载后全部消失。
  */
 
+import SkillRegistry from '@deepseek-ai/dsh-skill'
 import { describe, expect, it } from 'vitest'
 import type { Answer, ProviderResponse } from '@dsh-clipclop/dsh-system-one'
 import * as Channel from '../src/index.ts'
@@ -60,6 +61,12 @@ describe('工具面', () => {
     await expect(callTool(ctx, { state: STATE, questions: [BOOLEAN_QUESTION] })).rejects.toThrow('missing')
   })
 
+  it('空题单：派发前拦下，不为一次手滑白跑一趟决策模型', async () => {
+    const { ctx, provider } = await mount({ channel: { enabled: true, target: TARGET } })
+    await expect(callTool(ctx, { state: STATE, questions: [] })).rejects.toThrow('at least one question')
+    expect(provider.requests).toHaveLength(0)
+  })
+
   it('同 id 的两道题：点名 id 报错，不悄悄顶掉前一道', async () => {
     const { ctx, provider } = await mount({ channel: { enabled: true, target: TARGET } })
     await expect(callTool(ctx, { state: STATE, questions: [BOOLEAN_QUESTION, BOOLEAN_QUESTION] }))
@@ -110,6 +117,13 @@ describe('两档引导与技能', () => {
     // 技能属于第一档，两档都有。
     expect((await skills(first.ctx).list()).map(skill => skill.name)).toEqual(['systemone'])
     expect((await skills(second.ctx).list()).map(skill => skill.name)).toEqual(['systemone'])
+  })
+
+  it('技能子系统比本插件晚装：技能仍会补上（可选依赖等它出现，不是装载时的快照）', async () => {
+    const { ctx } = await mount({ channel: { enabled: true, target: TARGET } })
+    expect(ctx.get('skills')).toBeUndefined()
+    await ctx.plugin(SkillRegistry)
+    expect((await skills(ctx).list()).map(skill => skill.name)).toEqual(['systemone'])
   })
 
   it('技能注册表缺席时插件仍加载、工具可用，只是没有技能', async () => {
