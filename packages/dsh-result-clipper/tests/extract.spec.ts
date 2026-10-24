@@ -548,7 +548,7 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
 
   it('首次挂载抛错后，下一个 agent 创建时再试：bash 最终可见，且失败只告警一次', async () => {
     let attempts = 0
-    const { ctx } = await takeoverHost({
+    const { ctx, reports } = await takeoverHost({
       takeover: {
         bash: (ctx) => {
           attempts += 1
@@ -576,6 +576,9 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     expect(mounted, '重试成功后应当能看到 bash').toBeDefined()
     expect(Object.keys(mounted!.parameters?.properties ?? {})).toContain('extract')
     expect(warned).toHaveLength(1)
+    // 挂载记录仍只反映首个 agent 时点（那次是 absent），重试成功不补写。
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.tools).toMatchObject({ bash: 'absent' })
     await ctx.fiber.dispose()
   })
 
