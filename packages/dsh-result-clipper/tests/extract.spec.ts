@@ -469,6 +469,26 @@ describe('声明了目标就跳过 memo', () => {
   })
 })
 
+/**
+ * 「真单关」最小宿主：原生 `bash` / `web_fetch` 都不在表里，工具以外的服务用桩（工具本身不执行，桩有形即可）。
+ * @param options - 测试接缝：接管工厂表（缺省走生产实现）与启用判据。
+ * @returns context 与安装时收到的挂载记录。
+ */
+async function takeoverHost(options: {
+  takeover?: Record<string, (ctx: Context) => unknown>
+  enabled?: () => boolean
+} = {}): Promise<{ ctx: Context, reports: MountRecord[] }> {
+  const ctx = new Context()
+  await mountAgentLoopTestDependencies(ctx)
+  await ctx.plugin(TokenMeter)
+  ctx.provide('web', {} as never)
+  ctx.provide('shell', { sandboxMode: undefined } as never)
+  ctx.provide('shellEnv', {} as never)
+  const reports: MountRecord[] = []
+  installExtractArg(ctx as never, options.enabled ?? (() => true), (record) => { reports.push(record) }, options.takeover)
+  return { ctx, reports }
+}
+
 describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
   it('摘要开着时，这个 agent 的工具表与模型侧 schema 当场多出 extract；全局那份定义不动', async () => {
     // 真 agent loop：`bash` 在装载后才注册，然后才创建 agent —— 遮蔽必须发生在 agent/created 上，
@@ -500,16 +520,7 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
   })
 
   it('原生条目已被 patch 关掉时全局挂回来并就地补参；接管失败不会把 agent 创建带崩', async () => {
-    // 最小宿主：这里只验"挂回来 + 补参"这一步，服务用桩（工具本身不执行，所以桩只要有形）。
-    const ctx = new Context()
-    await mountAgentLoopTestDependencies(ctx)
-    await ctx.plugin(TokenMeter)
-    ctx.provide('web', {} as never)
-    ctx.provide('shell', { sandboxMode: undefined } as never)
-    ctx.provide('shellEnv', {} as never)
-    // 两个原生工具此时都不在表里（=部署用 patch 关掉了条目），install 才会走接管。
-    const reports: MountRecord[] = []
-    installExtractArg(ctx as never, () => true, (record) => { reports.push(record) })
+    const { ctx, reports } = await takeoverHost()
     const harness = await mountAgentLoopTestHarness(ctx)
     await harness.create(SessionId('takeover-probe'), { provider: 'mock', model: 'mock' })
 
@@ -532,6 +543,82 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     // 第二个 agent 不再写一次：这条记录是"本次装载"的，不是"每个 agent"的。
     await harness.create(SessionId('takeover-probe-2'), { provider: 'mock', model: 'mock' })
     expect(reports).toHaveLength(1)
+    await ctx.fiber.dispose()
+  })
+
+  it('首次挂载抛错后，下一个 agent 创建时再试：bash 最终可见，且失败只告警一次', async () => {
+    let attempts = 0
+    const { ctx } = await takeoverHost({
+      takeover: {
+        bash: (ctx) => {
+          attempts += 1
+          if (attempts === 1) throw new Error('mount exploded')
+          ctx.tools.register(textTool('bash', LONG_BODY))
+        },
+      },
+    })
+    const warned: string[] = []
+    ctx.logger.exporter({
+      levels: { default: 99 },
+      export: (message) => {
+        if (message.type === 'warn' && String(message.args[0]).includes('mounting bash failed')) warned.push(String(message.args[0]))
+      },
+    })
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const first = await harness.create(SessionId('mount-retry-1'), { provider: 'mock', model: 'mock' })
+    // 挂载失败不得把 agent 创建弄失败，这一轮 bash 确实缺失、只有一条告警。
+    expect(ctx.tools.get('bash', first)).toBeUndefined()
+    expect(warned).toHaveLength(1)
+
+    const second = await harness.create(SessionId('mount-retry-2'), { provider: 'mock', model: 'mock' })
+    expect(attempts, '第二个 agent 创建时应当再试一次').toBe(2)
+    const mounted = ctx.tools.get('bash', second)
+    expect(mounted, '重试成功后应当能看到 bash').toBeDefined()
+    expect(Object.keys(mounted!.parameters?.properties ?? {})).toContain('extract')
+    expect(warned).toHaveLength(1)
+    await ctx.fiber.dispose()
+  })
+
+  it('接管来的工具从表里消失后，下一个 agent 创建时重新挂回来', async () => {
+    let remove: (() => void) | undefined
+    let mounts = 0
+    const { ctx, reports } = await takeoverHost({
+      takeover: {
+        bash: (ctx) => {
+          mounts += 1
+          remove = ctx.tools.register(textTool('bash', LONG_BODY))
+        },
+      },
+    })
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const first = await harness.create(SessionId('mount-lost-1'), { provider: 'mock', model: 'mock' })
+    expect(ctx.tools.get('bash', first)).toBeDefined()
+    // 夹具模拟"挂载来的工具从工具表里消失"：卸掉那次注册，不碰挂载 fiber。
+    remove!()
+    expect(ctx.tools.get('bash')).toBeUndefined()
+
+    const second = await harness.create(SessionId('mount-lost-2'), { provider: 'mock', model: 'mock' })
+    expect(mounts).toBe(2)
+    expect(ctx.tools.get('bash', second), '重挂或遮蔽，二者之一').toBeDefined()
+    // 连续创建 agent 不重复注册（同层同名会当场抛错）；已经挂回来之后不再挂第三次。
+    const third = await harness.create(SessionId('mount-lost-3'), { provider: 'mock', model: 'mock' })
+    expect(ctx.tools.get('bash', third)).toBeDefined()
+    expect(mounts).toBe(2)
+    // 挂载记录仍只有首条，且反映首个 agent 时点（当时是接管）。
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.tools).toMatchObject({ bash: 'takeover' })
+    await ctx.fiber.dispose()
+  })
+
+  it('摘要关着时不接管、不遮蔽、不写挂载记录', async () => {
+    const { ctx, reports } = await takeoverHost({ enabled: () => false })
+    ctx.tools.register(textTool('read', LONG_BODY))
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const agent = await harness.create(SessionId('mount-off'), { provider: 'mock', model: 'mock' })
+
+    expect(ctx.tools.get('bash')).toBeUndefined()
+    expect(Object.keys(ctx.tools.get('read', agent)!.parameters?.properties ?? {})).not.toContain('extract')
+    expect(reports).toHaveLength(0)
     await ctx.fiber.dispose()
   })
 

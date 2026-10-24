@@ -349,43 +349,47 @@ const SHADOW_TOOLS = ['read', 'bash', 'web_fetch', 'pwsh'] as const
  * `read` 不尝试接管：原生 `read` 与 `write`/`edit`/`read_image` 同一条目，禁用它会一并失去写与编辑能力。
  *
  * 两处时机都不是随意的：**启用判据按每个 agent 创建时读一次**（`enabled()`），所以关掉摘要时之后创建的 agent
- * 完全看不到这个参数；**接管判定放在第一个"启用时"创建的 agent**而不是 `apply()` 里，因为
- * 装载顺序会让早执行的那一次看到空表，从而误判"原生不在"并对仍在装载的原生条目重复注册（同层重名会抛错，
- * 整条插件装载失败）。挂回来是异步的（`ctx.plugin` 交回的 fiber），所以监听器是 async 并 await 它，模型侧
- * schema 才是扩过的。
+ * 完全看不到这个参数；**接管挂在 `agent/created` 上而不是 `apply()` 里**，因为装载顺序会让早执行的那一次看到
+ * 空表，从而误判"原生不在"并对仍在装载的原生条目重复注册（同层重名会抛错，整条插件装载失败）。每个 agent
+ * 创建时都按工具表重判一次：挂载失败、或挂回来的工具从表里消失后，下一个 agent 会重挂，而不是永远缺失。
+ * 挂回来是异步的（`ctx.plugin` 交回的 fiber），所以监听器是 async 并 await 它，模型侧 schema 才是扩过的。
  * @param ctx - 插件 context；`tools` 已就绪。
  * @param enabled - 这套机制当前是否启用；每次 agent 创建时调用一次。
  * @param report - 收到首个 agent 实际走的路（每个目标工具一名，连平台一起）；调用方据此写诊断记录。真单关的
  * "接管成功"与"原生还在、只是遮蔽"交出的工具一模一样，这一条是会话里唯一的区分依据。
+ * @param takeover - 测试接缝：接管工厂表；生产调用不传，用本模块的 {@link TAKEOVER}。
  */
 export function installExtractArg(
   ctx: Context,
   enabled: () => boolean,
   report?: (record: MountRecord) => void,
+  takeover: Record<string, (ctx: Context) => unknown> = TAKEOVER,
 ): void {
   const taken = new Set<string>()
-  let decided = false
+  let reported = false
   ctx.on('agent/created', async ({ agent }) => {
     if (!enabled()) return
-    const first = !decided
-    if (first) {
-      decided = true
-      for (const name of takeoverPlan(process.platform)) {
-        // 原生已经不在了 = 部署用 patch 关掉了那个条目，可以自己挂回来并就地改写。
-        if (ctx.tools.get(name) !== undefined) continue
-        try {
-          await TAKEOVER[name]?.(ctx)
-        } catch (error: unknown) {
-          // 接管失败不得把 agent 创建一起弄失败（历史上正是这样炸过一次）；这一轮里这个工具就缺失，
-          // 下一次创建 agent 时还会再试。
-          logger(ctx)?.warn(`dsh-result-clipper: mounting ${name} failed: ${String(error)}`)
-          continue
-        }
-        const registered = ctx.tools.get(name)
-        if (registered === undefined) continue
-        extendInPlace(registered, name)
-        taken.add(name)
+    // `taken` 只是"这个工具由我们挂回来"的影子标记，真相是工具表：条目没了就把它当没接管过，下一次挂载循环
+    // 会重挂，遮蔽循环也会照常兜底。挂载 fiber 属插件作用域、不随 agent 释放，所以不能拿 fiber 的生命周期
+    // 代替这一步。
+    for (const name of taken) if (ctx.tools.get(name) === undefined) taken.delete(name)
+    const first = !reported
+    if (first) reported = true
+    for (const name of takeoverPlan(process.platform)) {
+      // 原生已经不在了 = 部署用 patch 关掉了那个条目，可以自己挂回来并就地改写。
+      if (ctx.tools.get(name) !== undefined) continue
+      try {
+        await takeover[name]?.(ctx)
+      } catch (error: unknown) {
+        // 接管失败不得把 agent 创建一起弄失败（历史上正是这样炸过一次）；失败只影响这一次，
+        // 下一个 agent 创建时还会再试。
+        logger(ctx)?.warn(`dsh-result-clipper: mounting ${name} failed: ${String(error)}`)
+        continue
       }
+      const registered = ctx.tools.get(name)
+      if (registered === undefined) continue
+      extendInPlace(registered, name)
+      taken.add(name)
     }
     const modes: Record<string, MountMode> = {}
     for (const name of SHADOW_TOOLS) {
