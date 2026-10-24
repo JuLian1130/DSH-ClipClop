@@ -10,6 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Entry, Kind } from './config.ts'
 import type { SystemOneProvider } from './provider.ts'
+import { deepseek } from './providers/deepseek.ts'
 import { openai } from './providers/openai.ts'
 import { systemone } from './providers/systemone.ts'
 
@@ -21,7 +22,7 @@ import { systemone } from './providers/systemone.ts'
 export type ProviderFactory = (entry: Entry, ctx: Context) => SystemOneProvider
 
 /** `kind` → provider 工厂。 */
-export const FACTORIES: Record<Kind, ProviderFactory> = { systemone, openai }
+export const FACTORIES: Record<Kind, ProviderFactory> = { systemone, openai, deepseek }
 
 /**
  * 校验条目并建出 provider。

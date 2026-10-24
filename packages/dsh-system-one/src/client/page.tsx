@@ -23,10 +23,10 @@ import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-cli
 import type { Entry, Kind } from '../config.ts'
 
 /**
- * 协议的两个取值：`Record<Kind, …>` 让 tsc 兜住枚举的增删——`Kind` 多一个值，这里就缺一项，编译期报错；
+ * 协议的三个取值：`Record<Kind, …>` 让 tsc 兜住枚举的增删——`Kind` 多一个值，这里就缺一项，编译期报错；
  * 普通数组 + `satisfies readonly Kind[]` 做不到这件事（少一项也是合法赋值）。
  */
-const KIND_OPTIONS: Record<Kind, Kind> = { systemone: 'systemone', openai: 'openai' }
+const KIND_OPTIONS: Record<Kind, Kind> = { systemone: 'systemone', openai: 'openai', deepseek: 'deepseek' }
 
 /**
  * 空列表的**稳定引用**：选择器的返回值会被 `useSyncExternalStore` 反复比较，每次 new 一个空数组会被判成
@@ -334,7 +334,9 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
                       onChange={(event) => { edit(index, { baseUrl: event.target.value }) }}
                     />
                     <span style={HINT_STYLE}>
-                      {t(row.kind === 'openai' ? 'baseUrlHintOpenai' : 'baseUrlHintSystemone')}
+                      {t(row.kind === 'openai'
+                        ? 'baseUrlHintOpenai'
+                        : row.kind === 'deepseek' ? 'baseUrlHintDeepseek' : 'baseUrlHintSystemone')}
                     </span>
                   </label>
                   <label style={FIELD_STYLE}>

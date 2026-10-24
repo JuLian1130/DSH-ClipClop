@@ -11,7 +11,7 @@ import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
 /** 条目的协议。枚举外的值在装载期报错；枚举里的每个值都有实现（工厂表是穷尽的）。 */
-export type Kind = 'systemone' | 'openai'
+export type Kind = 'systemone' | 'openai' | 'deepseek'
 
 /** 一个决策模型条目。 */
 export interface Entry {
@@ -51,7 +51,7 @@ export const Config: z<{ entries?: Entry[] }, Required<Config>> = z.object({
     .array(z.object({
       id: z.string().required(),
       label: z.string().required(),
-      kind: z.union([z.const('systemone'), z.const('openai')]).required(),
+      kind: z.union([z.const('systemone'), z.const('openai'), z.const('deepseek')]).required(),
       baseUrl: z.string().required(),
       model: z.string().required(),
       // 空串＝不带凭据；非空时由 provider 在请求时解析。引用名可以不给（默认 = 条目 id 是页面的口径）。

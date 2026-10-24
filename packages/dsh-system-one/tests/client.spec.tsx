@@ -286,16 +286,18 @@ describe('条目页：增删改', () => {
     expect(container.querySelectorAll('input')).toHaveLength(4)
   })
 
-  it('协议下拉只有两个选项，取值是 kind 枚举的两个值', async () => {
+  it('协议下拉有三个选项，取值是 kind 枚举的三个值', async () => {
     const fixture = await mounted()
     const { container } = renderPage(fixture)
     fireEvent.click(screen.getByText(zh.add))
 
     const [select] = kindSelects(container)
-    expect([...select!.options].map(option => option.value)).toEqual(['systemone', 'openai'])
+    expect([...select!.options].map(option => option.value)).toEqual(['systemone', 'openai', 'deepseek'])
     expect((field(zh.kind) as HTMLSelectElement).value).toBe('systemone')
     fireEvent.change(field(zh.kind), { target: { value: 'openai' } })
     expect((field(zh.kind) as HTMLSelectElement).value).toBe('openai')
+    fireEvent.change(field(zh.kind), { target: { value: 'deepseek' } })
+    expect((field(zh.kind) as HTMLSelectElement).value).toBe('deepseek')
   })
 
   it('API 地址的说明跟着协议切换', async () => {
@@ -310,6 +312,11 @@ describe('条目页：增删改', () => {
 
     expect(screen.getByText(zh.baseUrlHintOpenai)).toBeTruthy()
     expect(screen.queryByText(zh.baseUrlHintSystemone)).toBeNull()
+
+    fireEvent.change(field(zh.kind), { target: { value: 'deepseek' } })
+
+    expect(screen.getByText(zh.baseUrlHintDeepseek)).toBeTruthy()
+    expect(screen.queryByText(zh.baseUrlHintOpenai)).toBeNull()
   })
 
   it('只写 volatile 路径：一整轮增删改之后，每条写入都落在 entries 上', async () => {
