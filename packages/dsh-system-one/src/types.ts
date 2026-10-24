@@ -33,7 +33,8 @@ export type JsonArray = readonly JsonValue[]
  * 量表档位的值。
  *
  * 字符串是 vllm 与 sglang 都忠实支持的公共集；JSON 对象/数组只有 sglang 会原样保留，
- * 发给 vllm 的 provider 必须拒绝（它会把非字符串档位串化）。
+ * vllm 会把非字符串档位串化。`systemone` provider 不预判后端：富档位照发，靠响应回显的
+ * `legend` 逐档核对，对不上就抛错点 `levels`。
  */
 export type Level = string | JsonObject | JsonArray
 

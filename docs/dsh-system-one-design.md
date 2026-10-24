@@ -52,7 +52,7 @@
 
 - `instructions`（整次请求）：放在所有题之前的一段共享上下文；目前只有 vllm 的 `/v1/systemone` 有它（固定 prompt 的模型会 400），SGLang 没有。发给 SGLang 的 provider 收到非空值必须抛错——SGLang 会静默忽略未知顶层字段，不能让它悄悄丢掉。`systemone` provider 的落法见下面「provider 怎么区分两家的行为」：响应里没有它的回显，所以非空即抛错。
 - `optionDescriptions`（是非题与单选）：把两侧/各选项的含义单列出来；缺席表示含义写在 `instructions` 里。两边都支持，且都按字符串忠实渲染。是非题的 key 用 `true`/`false`，与答案的 `probability` 对齐，不用后端的 `yes`/`no`。
-- `levels`（量表）：每档是 `Level`（字符串或 JSON 对象/数组）。字符串是两边的公共集；富值只有 SGLang 原样保留，vllm 会 `str()` 化，所以 vllm provider 必须拒绝非字符串档位。
+- `levels`（量表）：每档是 `Level`（字符串或 JSON 对象/数组）。字符串是两边的公共集；富值只有 SGLang 原样保留，vllm 会 `str()` 化。`systemone` provider 不预判后端是哪一家：富档位照发，靠响应回显的 `legend` 逐档核对，对不上就抛错点 `levels`。
 - `images`（整次请求）：图片 URL 或 data URL；两边都收字符串。模型不支持图片时由后端报错。
 - `chatTemplateKwargs`（整次请求）：传给 chat template 的参数。两边都收，但都会按自己的模板规则校验或拒绝；vllm 的固定 prompt 模型可能忽略它，所以它是 **best-effort**，契约不据此保证效果。
 
@@ -78,7 +78,7 @@
 | `images` | `images`（字符串 URL/data URL） | `images`（字符串或 `{url, detail}`） | 模型不支持图片时后端 400 |
 | `instructions` | `instructions` | 无；未知顶层字段被忽略 | SGLang provider 抛错 |
 | `optionDescriptions` | `criteria` 里的描述 | 同左 | 无 |
-| 富 `levels` | 会 `str()` 化 | 原样保留 | vllm provider 抛错 |
+| 富 `levels` | 会 `str()` 化 | 原样保留 | `legend` 回显不符时抛错点 `levels`（回显缺席则无从核对） |
 | `chatTemplateKwargs` | `chat_template_kwargs`；固定 prompt 模型可能忽略 | `chat_template_kwargs`；Clef 拒绝非空 | 后端 400；标注 best-effort |
 | `legend` | score 答案的 `legend`（字符串） | score 答案的 `legend`（可为 JSON） | 长度不符时 provider 抛错 |
 
@@ -162,7 +162,7 @@
 - **保留可选 `confidence`，另加 `labelMass`/`argmaxIsLabel`**：三者都是可信度信号，业务插件可能按它们设阈值。定义随 provider 而变、不可跨 provider 比较，契约只透传，不用它们做任何判断。
 - **`mock` 不做**：生态里的 mock 解决的是「无网络无凭据也能断言精确值」，本仓这个角色由测试期的进程内假 provider 承担（第一步的 8 条行为测试已经这么用）。
 - **8 个可选字段进契约**：`labelMass`、`argmaxIsLabel`、`images`、`instructions`、`optionDescriptions`、富 `levels`、`chatTemplateKwargs`、`legend`。`cacheSalt`、`priority`、`requestId` 只记录用途，不进契约（等真实的运维/追踪需求）；`audio`/`videos` 也不进，只加 `images`。
-- **provider-specific 字段进同一契约，靠“不支持就抛错”兜住**：请求字段在某个 provider 上无法如实表达时抛错并点名字段（尤其 SGLang 的 `instructions`、vllm 的富 `levels`）；响应字段 optional，缺席有明确语义。这样既不丢有场景的能力，也不会静默换掉答案依据。
+- **provider-specific 字段进同一契约，靠“不支持就抛错”兜住**：请求字段在某个后端上无法如实表达时抛错并点名字段（SGLang 的 `instructions` 不可证实即拒；vllm 的富 `levels` 靠 `legend` 回显核对抓出）；响应字段 optional，缺席有明确语义。这样既不丢有场景的能力，也不会静默换掉答案依据。
 - **`labelMass` 归一化**：SGLang 在 Clef/joint schema 与 decision checkpoint 上省略 `x_label_mass`；`systemone` provider 按 1.0 归一化，与 vllm 在这些模型上的 `label_mass=1` 对齐。这是一条依赖 SGLang 文档的假设，接新 checkpoint 时复核。
 - **`chatTemplateKwargs` 是 best-effort**：vllm 的固定 prompt 模型会忽略它，SGLang 的 Clef 会拒绝非空值；契约不据此保证效果，只作为模板参数透传。
 - **`legend` 用数组**：与 `levels` 同序，`legend[i]` 是第 i 档的值；provider 把两边的 map 转数组并校验长度。不采用 wire 的 map 形状，避免字符串键与整数样键重排。
@@ -195,7 +195,7 @@
 - 第一步的 8 条行为测试继续通过（`ask` 交回答案与耗时、漏答的题从 `answers` 缺席且 `warnings` 原样交回、未注册 `target` 的报错点名 id、同名注册抛错、`providers()` 顺序、注册随注册方 fiber 释放、可选请求字段原样透传且 `target` 不进入 provider 请求、可信度信号与 `legend` 原样交回）。
 - 条目配置：`tests/entries-config.spec.ts` 把配置契约纳入门禁——示例 patch 的键集合与 `Config` 字段逐一相等、`label` 不唯一、`id` 重复或缺失与 `kind` 越界在装载期报错并点出键名、两个 kind 的条目同时装载并各自注册、`entries` 是整字段 volatile（宿主写回门禁读的 `schema.meta.volatile`）。
 - 跨包声明合并：`tests/declaration-merge.spec.ts` 在临时目录里搭一个真实消费者包跑 `tsc`，fixture 带上可选字段，并带反向对照（不 import 本包时同一个用法必须编译失败）与插件面断言（`ctx.systemOne.providers()` 取不到）。
-- provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端 4xx/5xx 与限额原文、凭据解析与 `Bearer`。
+- provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端非 2xx 连原文（当前用例以 400 与 422 为例；限额由后端校验、provider 只转述，未单设夹具）、凭据解析与 `Bearer`。
 - `openai` provider：`tests/openai-provider.spec.ts` 覆盖三种题型的题面数组与答案映射、`state`／`instructions`／`images` 落成哪段 `input`、`chatTemplateKwargs` 与是非题 `optionDescriptions` 与非字符串 `Level` 的拒绝、具名拒答的缺席+警告与未具名拒答的整次失败、两个 kind 按 `target` 各自命中自己的端点；**未对真实端点实测**，接上真实端点后补一次。
 - 决策通道（宿主半在 `packages/dsh-system-one-channel/tests/`）：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导（第二档比第一档只多那一句）、阈值语义（两种确定性公式、算不出时按 `abstain`）、配置非法在装载期点名键名各有可跑用例；技能注册表的缺席由「不装它也能挂起来」那一条覆盖。
 - 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、已有条目默认折叠点「编辑」展开（保存后收起）、保存后条目的增删改热生效（`tests/system-one.spec.ts` 的「条目配置热生效」一组与 `tests/volatile-update.spec.ts` 的真实 Loader 链路）、协议下拉的两个取值等于 `Kind` 枚举、宿主拒绝／传输层失败／凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md`）。
