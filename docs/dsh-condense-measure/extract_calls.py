@@ -251,7 +251,7 @@ def main():
                     flush=True,
                 )
 
-    for row in iter_rows(out_dir):
+    for row in iter_rows(args.out):
         name = row.get("name") or "<none>"
         bucket = per_tool.setdefault(name, {"calls": 0, "chars": 0, "noResult": 0})
         bucket["calls"] += 1
