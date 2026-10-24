@@ -39,10 +39,10 @@ function exampleLines(source: string): string[] {
   return block.slice(0, block.indexOf('')).filter(line => line.trim() !== '')
 }
 
-/** 一层 YAML 里的键，按出现顺序。 */
+/** 一层 YAML 里的键，按出现顺序（`- ` 列表项也算同一层，与接入层那份夹具同一个口径）。 */
 function keysOf(lines: string[]): string[] {
   return lines
-    .map(line => /^\s*([\w-]+):/.exec(line)?.[1])
+    .map(line => /^\s*(?:- )?([\w-]+):/.exec(line)?.[1])
     .filter((key): key is string => key !== undefined)
 }
 

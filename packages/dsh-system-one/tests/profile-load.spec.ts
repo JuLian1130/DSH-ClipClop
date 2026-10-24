@@ -71,7 +71,6 @@ const PENDING = 0 as FiberState.PENDING
 interface RowPatch {
   id: string
   disabled?: boolean
-  config?: unknown
 }
 
 const QUESTIONS: Record<string, Question> = {
@@ -84,8 +83,12 @@ const ANSWERS: Record<string, Answer> = {
   'turn.route': { type: 'choice', choice: 'ask', probabilities: [0.3, 0.7] },
 }
 
-/** 交给工具的题面：一题是非题（工具参数里的形状，不是契约的映射）。 */
-const TOOL_QUESTION = { id: 'turn.continue', type: 'boolean', instructions: '本轮是否应该继续？' } as const
+/** 交给工具的题面：一题是非题（工具参数里的形状，不是契约的映射）；文案与契约那条共用一份。 */
+const TOOL_QUESTION = {
+  id: 'turn.continue',
+  type: 'boolean',
+  instructions: QUESTIONS['turn.continue'].instructions,
+} as const
 
 /**
  * 由装载方（第三方 provider 插件）注册的假条目。
@@ -252,6 +255,22 @@ function row(ctx: Context, id: string) {
 }
 
 /**
+ * 注册假条目，直接经 `ctx.systemOne` 调一次。
+ * @returns 假 provider 收到的请求与这次调用的耗时。
+ */
+async function askDirect(ctx: Context) {
+  const provider = new StubProvider()
+  const dispose = ctx.systemOne.register('probe', provider)
+  try {
+    const result = await ctx.systemOne.ask({ target: 'probe', state: { step: 3 }, questions: QUESTIONS })
+    expect(result.answers).toEqual(ANSWERS)
+    return { calls: provider.calls, latencyMs: result.latencyMs }
+  } finally {
+    dispose()
+  }
+}
+
+/**
  * 注册假条目，再经工具面调一次。
  * @returns 假 provider 收到的请求。
  */
@@ -285,15 +304,10 @@ describe('真实 profile 装载', () => {
       expect(row(ctx, ROW_ID)?.fiber?.state).toBe(ACTIVE)
       expect(warnings).toEqual([])
 
-      const provider = new StubProvider()
-      const dispose = ctx.systemOne.register('probe', provider)
-      const result = await ctx.systemOne.ask({ target: 'probe', state: { step: 3 }, questions: QUESTIONS })
-
-      expect(provider.calls).toHaveLength(1)
-      expect(provider.calls[0]?.state).toEqual({ step: 3 })
-      expect(result.answers).toEqual(ANSWERS)
-      expect(typeof result.latencyMs).toBe('number')
-      dispose()
+      const { calls, latencyMs } = await askDirect(ctx)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]?.state).toEqual({ step: 3 })
+      expect(typeof latencyMs).toBe('number')
     } finally {
       await ctx.fiber.dispose()
     }
@@ -348,11 +362,7 @@ describe('真实 profile 装载', () => {
       // 被禁用不是「没激活」：启动审计不该为此报警。
       expect(warnings).toEqual([])
 
-      const provider = new StubProvider()
-      const dispose = ctx.systemOne.register('probe', provider)
-      const result = await ctx.systemOne.ask({ target: 'probe', state: { step: 3 }, questions: QUESTIONS })
-      expect(result.answers).toEqual(ANSWERS)
-      dispose()
+      await askDirect(ctx)
     } finally {
       await ctx.fiber.dispose()
     }
