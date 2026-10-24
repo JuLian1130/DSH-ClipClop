@@ -1,6 +1,6 @@
 {
   "name": "@dsh-clipclop/dsh-system-one",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "决策模型接入层的契约与注册表：把带类型的题面发出去，拿回带概率的答案。",
   "type": "module",
