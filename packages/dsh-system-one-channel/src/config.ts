@@ -25,8 +25,9 @@ export type Guidance = 'tool' | 'context'
 export interface Threshold {
   enabled: boolean
   /**
-   * 低于它标 `abstain`。这一步的确定性是**我们**给的语义（是非题按与 0.5 的距离，choice/score 用
-   * provider 自报的 `confidence`），而各 provider 的 `confidence` 定义不同，同一数值不可跨 provider 比较。
+   * 低于它标 `abstain`。这一步的确定性是**我们**给的语义（是非题按与 0.5 的距离再乘 `labelMass`，
+   * choice/score 用 provider 自报的 `confidence`），而各 provider 的 `confidence` 定义不同，同一数值
+   * 不可跨 provider 比较。
    */
   value: number
 }

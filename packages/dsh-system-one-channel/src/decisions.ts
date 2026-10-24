@@ -1,9 +1,9 @@
 /**
  * 可信度门槛：阈值开着时，给每道题一个 `act`／`abstain` 标记。
  *
- * 确定性是**我们**给的语义，不是 provider 的：是非题用 `|probability − 0.5| × 2`（与 0.5 的距离，
- * 越接近 0 或 1 越确定）；choice/score 用 provider 自报的 `confidence`。低于阈值标 `abstain`，
- * **答案与概率仍原样交回**——这一层只加标记，不改答案。
+ * 确定性是**我们**给的语义，不是 provider 的：是非题用 `|probability − 0.5| × 2 × labelMass`（与 0.5
+ * 的距离，再乘答案标签的可见质量；`labelMass` 缺席按 1）；choice/score 用 provider 自报的 `confidence`。
+ * 低于阈值标 `abstain`，**答案与概率仍原样交回**——这一层只加标记，不改答案。
  *
  * 算不出确定性时同样标 `abstain` 并写明原因：「判不出来」不等于「放行」。三种算不出：该题在
  * `answers` 里缺席（provider 没答）、choice/score 没有 `confidence`、以及将来新增的题型。
@@ -19,9 +19,15 @@ export interface Decision {
   reason?: string
 }
 
-/** 一道题的确定性；算不出来时为空。 */
+/**
+ * 一道题的确定性；算不出来时为空。
+ *
+ * 是非题先算与 0.5 的距离，再乘 `labelMass`：`deepseek` 的 `labelMass` 只是 top-20 可见质量的
+ * 下界，重归一后的 0.99 在低覆盖时不该算确定。缺席（其他 provider）按 1，行为与旧公式一致。
+ */
 function certaintyOf(answer: Answer): number | undefined {
-  return answer.type === 'boolean' ? Math.abs(answer.probability - 0.5) * 2 : answer.confidence
+  if (answer.type !== 'boolean') return answer.confidence
+  return Math.abs(answer.probability - 0.5) * 2 * (answer.labelMass ?? 1)
 }
 
 /**

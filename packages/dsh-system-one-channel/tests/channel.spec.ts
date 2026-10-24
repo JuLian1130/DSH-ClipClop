@@ -144,7 +144,7 @@ describe('可信度门槛', () => {
     expect(result).not.toHaveProperty('decisions')
   })
 
-  it('是非题按 |probability − 0.5| × 2：够门槛标 act，不够标 abstain 且答案原样交回', async () => {
+  it('是非题按 |probability − 0.5| × 2 × labelMass（缺席按 1）：够门槛标 act，不够标 abstain 且答案原样交回', async () => {
     const answers = {
       sure: { type: 'boolean', probability: 0.9 },
       unsure: { type: 'boolean', probability: 0.55 },
@@ -161,11 +161,34 @@ describe('可信度门槛', () => {
       answers: unknown
       decisions: Record<string, { verdict: string; reason?: string }>
     }
-    // 0.9 → 0.8 ≥ 0.6；0.55 → 0.1 < 0.6。
+    // 0.9 → 0.8 ≥ 0.6；0.55 → 0.1 < 0.6（两条都没报 labelMass，按 1）。
     expect(result.decisions.sure).toEqual({ verdict: 'act' })
     expect(result.decisions.unsure?.verdict).toBe('abstain')
     expect(result.decisions.unsure?.reason).toContain('certainty')
     // 标记只加一层，答案本体两种情况下都一样。
+    expect(result.answers).toEqual(answers)
+  })
+
+  it('是非题的 labelMass 参与确定性：低覆盖把重归一后的 0.99 拉回 abstain', async () => {
+    const answers = {
+      whole: { type: 'boolean', probability: 0.99, labelMass: 0.9 },
+      thin: { type: 'boolean', probability: 0.99, labelMass: 0.2 },
+    } satisfies Readonly<Record<string, Answer>>
+    const questions = [
+      { id: 'whole', type: 'boolean', instructions: 'Is the build green?' },
+      { id: 'thin', type: 'boolean', instructions: 'Is the diff complete?' },
+    ]
+    const { ctx } = await mount({
+      channel: { enabled: true, target: TARGET, threshold: { enabled: true, value: 0.6 } },
+      respond: () => ({ answers }),
+    })
+    const result = valueOf(await callTool(ctx, { state: STATE, questions })) as {
+      answers: unknown
+      decisions: Record<string, { verdict: string }>
+    }
+    // 0.99 → 0.98；×0.9 = 0.882 ≥ 0.6；×0.2 = 0.196 < 0.6。
+    expect(result.decisions.whole).toEqual({ verdict: 'act' })
+    expect(result.decisions.thin?.verdict).toBe('abstain')
     expect(result.answers).toEqual(answers)
   })
 

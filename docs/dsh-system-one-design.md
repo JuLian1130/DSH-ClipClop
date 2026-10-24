@@ -119,7 +119,7 @@
 - **上限与拒绝**：单选 > 20、量表 > 10、空选项/空档位在发请求前抛错并点名字段；`choice` 的字母表是 `a`…`t`，`score` 的标识符是 `0`…`9`。
 - **不做**：通用 logprobs 协议、verbalized JSON 概率、prefix 续写、重试与并发、`temperature` 配置项，以及全量基准测量（本票只做 20 + 20 pilot）。
 - **实测状态（2026-10-24，`deepseek-flash`）**：hard 20（boolean 8／choice 8／score 4）判对 14（boolean 7/8、choice 7/8、score 0/4）；easy 20（boolean 6／choice 14）判对 20。hard 的 8 条 boolean 上 `argmaxIsLabel` 8/8、`labelMass` 中位数 0.9994、最低 0.9885，硬门通过；3 条 easy 带 `coverage` 警告但仍判对。6 条 hard 错题在 test-jev 的 `runs/260925-1722-measure/measure.json` 里同样判错（同一 argmax 口径），是模型本身答错，不是读出故障。基线来自 test-jev 的题面、与本 provider 的 prompt 不同，且 n=8，只作方向性参照；**这组读数不是准确率声明**。
-- **已知限制**：`labelMass` 是 top-20 下界；标识符缺失时省略分布；只测了 `deepseek-flash`（`deepseek-v4-pro` 未复核单 token／哨兵／覆盖率）；图片是否真的收未测；规范化会把大写单词并进标识符（`I`→`i`、`A`→`a`、`No`→`no`），与 jev 一致；通道的 boolean 阈值 `|p−0.5|×2` 在低 `labelMass` 时不可靠，等通道票把 `labelMass` 纳入确定度。
+- **已知限制**：`labelMass` 是 top-20 下界；标识符缺失时省略分布；只测了 `deepseek-flash`（`deepseek-v4-pro` 未复核单 token／哨兵／覆盖率）；图片是否真的收未测；规范化会把大写单词并进标识符（`I`→`i`、`A`→`a`、`No`→`no`），与 jev 一致；通道的 boolean 确定性已把 `labelMass` 乘进去（票 08），低覆盖时不会被重归一后的概率误导。
 
 ## 条目配置与设置页
 
@@ -150,7 +150,7 @@
 
 **开关默认关闭，关掉即不注册工具**：工具不存在，它的 guidance 段也不存在。本仓先例是改 agent 行为的能力默认关闭；`ctx.tools.register` 返回 disposer，配合 `ctx.effect` 的动态注册有现成写法（`dsh-tool-subagent` 与 `dsh-experimental-tool-agent-team` 各一处）。
 
-**阈值默认不设，设置页可开可设**：开启后每题给一个确定性——是非题用 `|probability − 0.5| × 2`，choice/score 用 provider 自报的 `confidence`；低于阈值该题标 `abstain`，答案与概率仍原样交回。provider 没报可信度、分布也缺席时确定性算不出来，同样标 `abstain` 并写明原因——「判不出来」不等于「放行」。标记的形状是工具返回里新增的一层 `decisions: Record<题 id, { verdict: 'act' | 'abstain'; reason?: string }>`；阈值关闭时这一层不出现，`answers` 本体不变。阈值只进配置、不进工具参数（取值 0–1，越界按配置非法在加载期报错）：模型能自己放宽的闸门不是闸门。确定性公式是我们给的语义，而 provider 的 `confidence` 定义各不相同，同一阈值在不同 provider 上松紧不同——这一点要写进页面文案与 README，工具描述里也要说明 `decisions` 层的含义（`abstain` 是「低于你设的可信度门槛」，不是「答案错了」）。
+**阈值默认不设，设置页可开可设**：开启后每题给一个确定性——是非题用 `|probability − 0.5| × 2 × labelMass`（`labelMass` 缺席按 1），choice/score 用 provider 自报的 `confidence`；低于阈值该题标 `abstain`，答案与概率仍原样交回。provider 没报可信度、分布也缺席时确定性算不出来，同样标 `abstain` 并写明原因——「判不出来」不等于「放行」。标记的形状是工具返回里新增的一层 `decisions: Record<题 id, { verdict: 'act' | 'abstain'; reason?: string }>`；阈值关闭时这一层不出现，`answers` 本体不变。阈值只进配置、不进工具参数（取值 0–1，越界按配置非法在加载期报错）：模型能自己放宽的闸门不是闸门。确定性公式是我们给的语义，而 provider 的 `confidence` 定义各不相同，同一阈值在不同 provider 上松紧不同——这一点要写进页面文案与 README，工具描述里也要说明 `decisions` 层的含义（`abstain` 是「低于你设的可信度门槛」，不是「答案错了」）。
 
 不采用生态里「由判定器决定要不要披露这个工具」的做法：mu 的实测记录是它在 Terminal-Bench 2.1 上被问了 162 次、从未生效，交互会话里问了 34 次、一个都没打开，还让每轮等待（p50 0.91 s / p90 8.9 s）。开关由使用者控制。
 

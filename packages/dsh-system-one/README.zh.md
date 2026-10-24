@@ -107,5 +107,5 @@ dsh plugin --profile <name> add link:<仓库>/packages/dsh-system-one
   - 只测了 `deepseek-flash`；`deepseek-v4-pro` 的单 token 标识符、截断哨兵与覆盖率未复核。
   - 图片内容块按官方文档发出，`deepseek-flash` 是否真的收图未测；不支持时由后端 4xx 报错。
   - 规范化会把大写单词并进标识符（`I`→`i`、`A`→`a`、`No`→`no`），与 jev 的 `normalize` 一致；换标识符集时要留意。
-  - 通道的 boolean 阈值目前用 `|p−0.5|×2`：低 `labelMass` 时重归一后的 0.99 会被当成确定。在通道把 `labelMass` 纳入确定度之前，这条阈值在 `deepseek` 上不可靠。
+  - 通道的 boolean 确定性已乘上 `labelMass`（票 08）：低覆盖时重归一后的 0.99 不会再被当成确定；`labelMass` 缺席按 1。
   - 没有重试与并发；速率限制、429、长 `state` 的前缀缓存未测。
