@@ -370,8 +370,8 @@ export function installExtractArg(
   ctx.on('agent/created', async ({ agent }) => {
     if (!enabled()) return
     // `taken` 只是"这个工具由我们挂回来"的影子标记，真相是工具表：条目没了就把它当没接管过，下一次挂载循环
-    // 会重挂，遮蔽循环也会照常兜底。挂载 fiber 属插件作用域、不随 agent 释放，所以不能拿 fiber 的生命周期
-    // 代替这一步。
+    // 会重挂，遮蔽循环也会照常兜底。不拿挂载 fiber 的生命周期代替这一步——fiber 是否随 agent 释放尚未核实
+    // （票 28「未核实」），工具表才是可观察的事实。
     for (const name of taken) if (ctx.tools.get(name) === undefined) taken.delete(name)
     const first = !reported
     if (first) reported = true
