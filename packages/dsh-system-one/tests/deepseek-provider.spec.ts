@@ -394,6 +394,35 @@ describe('deepseek provider', () => {
     }))).rejects.toThrow('HTTP 500')
   })
 
+  it('三个 kind 的条目同时存在时各按 target 命中自己的端点', async () => {
+    const calls = stubFetch((call) => {
+      if (call.url.endsWith('/v1/systemone')) return { answers: { q: { type: 'noul', noul: 0.3, x_label_mass: 1 } } }
+      if (call.url.endsWith('/chat/completions')) {
+        return completion([{ token: 'no', logprob: log(0.8) }, { token: 'yes', logprob: log(0.2) }])
+      }
+      return { answers: [{ type: 'predicate', name: 'q', probability: 0.7 }] }
+    })
+    const ctx = await mount([
+      { id: 'sglang-local', label: '本地 SGLang', kind: 'systemone', baseUrl: 'http://127.0.0.1:30000', model: 'qwen3-4b' },
+      { id: 'openai-decisions', label: 'OpenAI Decisions', kind: 'openai', baseUrl: 'https://api.openai.com', model: 'gpt-6' },
+      ENTRY,
+    ])
+    const questions = { q: { type: 'boolean', instructions: '?' } } satisfies Record<string, Question>
+
+    const local = await ctx.systemOne.ask({ target: 'sglang-local', state: { step: 1 }, questions })
+    const remote = await ctx.systemOne.ask({ target: 'openai-decisions', state: { step: 2 }, questions })
+    const deep = await ctx.systemOne.ask({ target: ENTRY.id, state: { step: 3 }, questions })
+
+    expect(calls.map((call) => call.url)).toEqual([
+      'http://127.0.0.1:30000/v1/systemone',
+      'https://api.openai.com/v1/decisions',
+      'https://api.deepseek.com/chat/completions',
+    ])
+    expect(local.answers['q']).toMatchObject({ type: 'boolean', probability: 0.3 })
+    expect(remote.answers['q']).toMatchObject({ type: 'boolean', probability: 0.7 })
+    expect(deep.answers['q']).toMatchObject({ type: 'boolean', probability: 0.2 })
+  })
+
   it('401/403/404 直接抛出，不当成单题失败', async () => {
     stubFetch(() => new Response('nope', { status: 401 }))
     const ctx = await mount()
