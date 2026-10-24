@@ -179,6 +179,7 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
   const entries = useEntries(section => section?.entries ?? NO_ENTRIES)
   // `draft` 为 null 表示「没动过」：这时照配置里的值显示，所以宿主晚到的快照与保存后的新值都能直接看见。
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<'refused' | 'range' | null>(null)
   const current = draft ?? toDraft(settings)
   const options = toOptions(entries)
@@ -225,8 +226,15 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
     }
     setFailure(null)
     if (patch.target === undefined && patch.guidance === undefined && patch.threshold === undefined) return
-    // 写入面把「宿主拒绝」与「传输层失败」都收成一个 `false`：两种都不抛错、都报同一句话。
-    if (!await save(patch)) setFailure('refused')
+    // 等写入返回期间禁用控件：否则这期间敲进去的值与「写下去的是上一份草稿」会错开——页面显示的是没写进去
+    // 的那一份，配置里是写进去的那一份。
+    setBusy(true)
+    try {
+      // 写入面把「宿主拒绝」与「传输层失败」都收成一个 `false`：两种都不抛错、都报同一句话。
+      if (!await save(patch)) setFailure('refused')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -235,68 +243,72 @@ export function ChannelPage({ t, useSettings, useEntries, save }: ChannelPagePro
       <p style={HINT_STYLE}>{t('intro')}</p>
       <p style={HINT_STYLE}>{t('live')}</p>
       <p style={HINT_STYLE}>{t('switch')}</p>
-      <section style={GROUP_STYLE}>
-        <label style={FIELD_STYLE}>
-          <span style={LABEL_STYLE}>{t('target')}</span>
-          <select
-            value={current.target}
-            style={SELECT_STYLE}
-            onChange={(event) => { edit({ target: event.target.value }) }}
-          >
-            {unlisted && <option value={current.target}>{current.target === '' ? t('unset') : current.target}</option>}
-            {options.map(option => <option key={option.value} value={option.value}>{option.text}</option>)}
-          </select>
-          <span style={HINT_STYLE}>{t(options.length === 0 ? 'noEntries' : 'targetHint')}</span>
-        </label>
-      </section>
-      <section style={GROUP_STYLE}>
-        <span style={LABEL_STYLE}>{t('guidance')}</span>
-        <label style={ROW_STYLE}>
-          <input
-            type="radio"
-            name="systemone-channel-guidance"
-            checked={current.guidance === 'tool'}
-            onChange={() => { edit({ guidance: 'tool' }) }}
-          />
-          {t('guidanceTool')}
-        </label>
-        <label style={ROW_STYLE}>
-          <input
-            type="radio"
-            name="systemone-channel-guidance"
-            checked={current.guidance === 'context'}
-            onChange={() => { edit({ guidance: 'context' }) }}
-          />
-          {t('guidanceContext')}
-        </label>
-      </section>
-      <section style={GROUP_STYLE}>
-        <span style={LABEL_STYLE}>{t('threshold')}</span>
-        <label style={ROW_STYLE}>
-          <input
-            type="checkbox"
-            checked={current.threshold.enabled}
-            onChange={(event) => { edit({ threshold: { ...current.threshold, enabled: event.target.checked } }) }}
-          />
-          {t('thresholdOn')}
-        </label>
-        <label style={ROW_STYLE}>
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={current.threshold.valueText}
-            disabled={!current.threshold.enabled}
-            style={NUMBER_STYLE}
-            onChange={(event) => { edit({ threshold: { ...current.threshold, valueText: event.target.value } }) }}
-          />
-          {t('thresholdValue')}
-        </label>
-        <span style={HINT_STYLE}>{t('thresholdHint')}</span>
-      </section>
+        <section style={GROUP_STYLE}>
+          <label style={FIELD_STYLE}>
+            <span style={LABEL_STYLE}>{t('target')}</span>
+            <select
+              value={current.target}
+              disabled={busy}
+              style={SELECT_STYLE}
+              onChange={(event) => { edit({ target: event.target.value }) }}
+            >
+              {unlisted && <option value={current.target}>{current.target === '' ? t('unset') : current.target}</option>}
+              {options.map(option => <option key={option.value} value={option.value}>{option.text}</option>)}
+            </select>
+            <span style={HINT_STYLE}>{t(options.length === 0 ? 'noEntries' : 'targetHint')}</span>
+          </label>
+        </section>
+        <section style={GROUP_STYLE}>
+          <span style={LABEL_STYLE}>{t('guidance')}</span>
+          <label style={ROW_STYLE}>
+            <input
+              type="radio"
+              name="systemone-channel-guidance"
+              disabled={busy}
+              checked={current.guidance === 'tool'}
+              onChange={() => { edit({ guidance: 'tool' }) }}
+            />
+            {t('guidanceTool')}
+          </label>
+          <label style={ROW_STYLE}>
+            <input
+              type="radio"
+              name="systemone-channel-guidance"
+              disabled={busy}
+              checked={current.guidance === 'context'}
+              onChange={() => { edit({ guidance: 'context' }) }}
+            />
+            {t('guidanceContext')}
+          </label>
+        </section>
+        <section style={GROUP_STYLE}>
+          <span style={LABEL_STYLE}>{t('threshold')}</span>
+          <label style={ROW_STYLE}>
+            <input
+              type="checkbox"
+              disabled={busy}
+              checked={current.threshold.enabled}
+              onChange={(event) => { edit({ threshold: { ...current.threshold, enabled: event.target.checked } }) }}
+            />
+            {t('thresholdOn')}
+          </label>
+          <label style={ROW_STYLE}>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={current.threshold.valueText}
+              disabled={busy || !current.threshold.enabled}
+              style={NUMBER_STYLE}
+              onChange={(event) => { edit({ threshold: { ...current.threshold, valueText: event.target.value } }) }}
+            />
+            {t('thresholdValue')}
+          </label>
+          <span style={HINT_STYLE}>{t('thresholdHint')}</span>
+        </section>
       <div style={ACTIONS_STYLE}>
-        <Button variant="primary" onClick={() => { void saveDraft() }}>{t('save')}</Button>
+        <Button variant="primary" disabled={busy} onClick={() => { void saveDraft() }}>{busy ? t('saving') : t('save')}</Button>
       </div>
       {failure !== null && (
         <div role="alert" style={ALERT_STYLE}>{failure === 'range' ? t('thresholdInvalid') : t('saveFailed')}</div>

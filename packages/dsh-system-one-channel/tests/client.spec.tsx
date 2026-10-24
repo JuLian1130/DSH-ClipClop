@@ -243,6 +243,44 @@ describe('通道页：可信度门槛', () => {
     expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.35 } }])
   })
 
+  it('门槛已开着、只改数值：新数值照样写回', async () => {
+    const fixture = await mounted()
+    renderPage(fixture, { settings: { threshold: { enabled: true, value: 0.5 } } })
+
+    fireEvent.change(thresholdInput(), { target: { value: '0.7' } })
+    fireEvent.click(screen.getByText(zh.save))
+
+    await waitFor(() => { expect(fixture.forms.writes).toHaveLength(1) })
+    expect(lastWrite(fixture).ops).toEqual([{ op: 'set', path: ['threshold'], value: { enabled: true, value: 0.7 } }])
+  })
+
+  it('保存期间三组控件与按钮都禁用：在途写入返回前，页面上看到的与配置一致', async () => {
+    const fixture = await mounted()
+    let release = (): void => {}
+    fixture.forms.hold = new Promise<void>((resolve) => { release = () => { resolve() } })
+    renderPage(fixture, {
+      settings: { target: 'remote_1', guidance: 'tool', threshold: { enabled: true, value: 0.5 } },
+      entries: SAME_LABEL,
+    })
+
+    // 门槛开着，所以数值框此时是可用的：下面它变灰只可能是「保存期间整组禁用」。
+    expect(thresholdInput().disabled).toBe(false)
+    fireEvent.click(screen.getByLabelText(zh.guidanceContext))
+    fireEvent.click(screen.getByText(zh.save))
+    // 按钮换成「保存中」，三组控件整组禁用（`fieldset[disabled]`）。
+    await waitFor(() => { expect(screen.getByText(zh.saving)).toBeTruthy() })
+    expect(targetSelect().disabled).toBe(true)
+    expect((screen.getByLabelText(zh.guidanceTool) as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByLabelText(zh.thresholdOn) as HTMLInputElement).disabled).toBe(true)
+    expect(thresholdInput().disabled).toBe(true)
+
+    release()
+    await waitFor(() => { expect(screen.getByText(zh.save)).toBeTruthy() })
+    expect(targetSelect().disabled).toBe(false)
+    expect(thresholdInput().disabled).toBe(false)
+    expect(fixture.forms.writes).toHaveLength(1)
+  })
+
   it('数值越界或为空：报一句话，一条都不写', async () => {
     const fixture = await mounted()
     renderPage(fixture, { settings: { threshold: { enabled: true, value: 0.5 } } })

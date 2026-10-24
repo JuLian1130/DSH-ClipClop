@@ -30,6 +30,7 @@ export type ChannelLocaleKey =
   | 'thresholdHint'
   | 'thresholdInvalid'
   | 'save'
+  | 'saving'
   | 'saveFailed'
 
 /** 中文文案。 */
@@ -52,6 +53,7 @@ export const zh: Record<ChannelLocaleKey, string> = {
   thresholdHint: '各个决策模型自报可信度的算法不同，同一个数值在它们之间松紧不同：换一个模型可能要重新调。低于门槛的题会标成「拿不准」，答案与概率照样交回。',
   thresholdInvalid: '门槛要填 0 到 1 之间的数。',
   save: '保存',
+  saving: '保存中…',
   saveFailed: '这次保存没有被接受，改动没有生效。',
 }
 
@@ -75,5 +77,6 @@ export const en: Record<ChannelLocaleKey, string> = {
   thresholdHint: 'Each decision model reports confidence its own way, so the same number is looser or tighter on another model: switching models may need a new one. Questions below the cut-off are marked unsure; the answer and its probability still come back.',
   thresholdInvalid: 'Enter a number between 0 and 1.',
   save: 'Save',
+  saving: 'Saving…',
   saveFailed: 'This save was not accepted; nothing changed.',
 }
