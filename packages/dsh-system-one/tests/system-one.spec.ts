@@ -1,5 +1,6 @@
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { FACTORIES } from '../src/entries.ts'
 import * as SystemOne from '../src/index.ts'
 import { SystemOneProvider, type ProviderRequest } from '../src/provider.ts'
 import type { Answer, ProviderResponse, Question } from '../src/types.ts'
@@ -42,6 +43,39 @@ async function mount(): Promise<Context> {
  */
 function providerIds(ctx: Context): readonly string[] {
   return (ctx.systemOne as SystemOne.SystemOneService).providers()
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+/** 一个合法条目；热更新只关心 id，其余字段给能过 schema 的占位值。 */
+function entry(id: string): SystemOne.Entry {
+  return { id, label: id, kind: 'systemone', baseUrl: 'http://127.0.0.1:1', model: 'stub' }
+}
+
+/**
+ * 带 `get()` 的 volatile 替身：模拟 loader 把新值提交进运行中的 fiber 后，配置引用读到的快照。
+ * @param initial - 初始条目。
+ * @returns 交给 `apply` 的配置，以及替换快照的入口。
+ */
+function volatileConfig(initial: SystemOne.Entry[]) {
+  let current = initial
+  const config = { entries: { get: () => current } } as Required<SystemOne.Config>
+  return {
+    config,
+    update(next: SystemOne.Entry[]): void {
+      current = next
+    },
+  }
+}
+
+/** 工厂表是条目与网络实现之间的接缝：热更新用例把它换成不联网的 StubProvider，并可记下收到的条目。 */
+function stubFactories(seen?: SystemOne.Entry[]): void {
+  vi.spyOn(FACTORIES, 'systemone').mockImplementation((current) => {
+    seen?.push(current)
+    return new StubProvider()
+  })
 }
 
 describe('ctx.systemOne', () => {
@@ -186,5 +220,68 @@ describe('ctx.systemOne', () => {
     await owner.dispose()
 
     expect(providerIds(ctx)).toEqual([])
+  })
+})
+
+describe('条目配置热生效', () => {
+  it('volatile 更新新增的条目不需要重挂载就能 ask', async () => {
+    stubFactories()
+    const { config, update } = volatileConfig([])
+    const ctx = new Context()
+    SystemOne.apply(ctx, config)
+    await expect(ctx.systemOne.ask({ target: 'added', state: null, questions: QUESTIONS }))
+      .rejects.toThrow('system-one: no provider registered as "added" (registered: none)')
+
+    update([entry('added')])
+    ctx.emit('loader/volatile-update', [['entries']])
+
+    const result = await ctx.systemOne.ask({ target: 'added', state: { step: 1 }, questions: QUESTIONS })
+    expect(result.answers).toEqual(ANSWERS)
+  })
+
+  it('从配置去掉的条目在 volatile 更新后不再可 ask，报错点出现在还有的 id', async () => {
+    stubFactories()
+    const { config, update } = volatileConfig([entry('keep'), entry('drop')])
+    const ctx = new Context()
+    SystemOne.apply(ctx, config)
+    expect(providerIds(ctx)).toEqual(['keep', 'drop'])
+
+    update([entry('keep')])
+    ctx.emit('loader/volatile-update', [['entries']])
+
+    expect(providerIds(ctx)).toEqual(['keep'])
+    await expect(ctx.systemOne.ask({ target: 'drop', state: null, questions: QUESTIONS }))
+      .rejects.toThrow('system-one: no provider registered as "drop" (registered: keep)')
+  })
+
+  it('volatile 更新里改过的条目重新建出 provider，新字段生效', async () => {
+    const seen: SystemOne.Entry[] = []
+    stubFactories(seen)
+    const { config, update } = volatileConfig([entry('kept')])
+    const ctx = new Context()
+    SystemOne.apply(ctx, config)
+
+    update([{ ...entry('kept'), model: 'changed' }])
+    ctx.emit('loader/volatile-update', [['entries']])
+
+    expect(providerIds(ctx)).toEqual(['kept'])
+    expect(seen.at(-1)?.model).toBe('changed')
+  })
+
+  it('重复 id 的非法新配置保留旧注册表，事件不把异常抛出去', async () => {
+    stubFactories()
+    const { config, update } = volatileConfig([entry('kept')])
+    const ctx = new Context()
+    const logged = vi.spyOn(ctx.logger, 'error').mockImplementation(() => {})
+    SystemOne.apply(ctx, config)
+
+    update([entry('kept'), entry('kept')])
+    expect(() => ctx.emit('loader/volatile-update', [['entries']])).not.toThrow()
+
+    expect(providerIds(ctx)).toEqual(['kept'])
+    // 报错要能定位到出问题的条目。
+    expect(logged.mock.calls.flat().some((arg) => String(arg).includes('"kept" is used twice'))).toBe(true)
+    const result = await ctx.systemOne.ask({ target: 'kept', state: null, questions: QUESTIONS })
+    expect(result.answers).toEqual(ANSWERS)
   })
 })

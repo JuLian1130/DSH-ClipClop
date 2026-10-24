@@ -13,7 +13,6 @@ export type SystemOneLocaleKey =
   | 'tab'
   | 'title'
   | 'intro'
-  | 'reload'
   | 'empty'
   | 'add'
   | 'save'
@@ -31,6 +30,9 @@ export type SystemOneLocaleKey =
   | 'keyHint'
   | 'keyPlaceholder'
   | 'id'
+  | 'edit'
+  | 'collapse'
+  | 'unnamed'
   | 'delete'
 
 /** 中文文案。 */
@@ -38,7 +40,6 @@ export const zh: Record<SystemOneLocaleKey, string> = {
   tab: '决策模型',
   title: '决策模型条目',
   intro: '这里登记做判断的模型。名称只给人看，可以重名；协议按服务方给出的接口类型选；地址与模型名照服务方的文档填。',
-  reload: '保存后要重载插件（或重启 DSH）才用得上新条目。',
   empty: '还没有条目。点下面的「新增条目」开始。',
   add: '新增条目',
   save: '保存',
@@ -56,6 +57,9 @@ export const zh: Record<SystemOneLocaleKey, string> = {
   keyHint: '只存在本机，不写进配置文件，保存后也读不回来。留空＝不改动密钥：本来没有密钥的条目就不使用密钥，已经存过的会保留原值。',
   keyPlaceholder: '留空＝不改',
   id: '条目 id',
+  edit: '编辑',
+  collapse: '收起',
+  unnamed: '未命名',
   delete: '删除',
 }
 
@@ -64,7 +68,6 @@ export const en: Record<SystemOneLocaleKey, string> = {
   tab: 'Decision models',
   title: 'Decision model entries',
   intro: 'The models that make decisions. A name is for people only and may repeat; pick the protocol your provider documents; copy the address and model name from that provider.',
-  reload: 'New entries take effect after reloading the plugin (or restarting DSH).',
   empty: 'No entries yet. Start with "Add entry" below.',
   add: 'Add entry',
   save: 'Save',
@@ -82,5 +85,8 @@ export const en: Record<SystemOneLocaleKey, string> = {
   keyHint: 'Stored on this machine only, never in the configuration, and it cannot be read back. Leave blank to keep the key unchanged: an entry with no key stays without one.',
   keyPlaceholder: 'Blank = unchanged',
   id: 'Entry id',
+  edit: 'Edit',
+  collapse: 'Collapse',
+  unnamed: 'Unnamed entry',
   delete: 'Delete',
 }

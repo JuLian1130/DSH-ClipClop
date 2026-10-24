@@ -1,8 +1,8 @@
 /**
  * 设置页里的「决策模型」页签：管理 `entries` 的增、删、改。
  *
- * 用户填五项（名称、模型、API 地址、协议、API 密钥）；`id` 由页面生成，卡片头上一行次要文本显示（可选中
- * 复制），不提供编辑。
+ * 用户填五项（名称、模型、API 地址、协议、API 密钥）；已有条目默认折叠成一行（名称 + 模型·协议），点「编辑」
+ * 展开，保存成功后全部收起。`id` 由页面生成，展开时在卡片头显示（可选中复制），不提供编辑。
  * 密钥不落配置：保存时先写进凭据域，配置里只写引用名 `apiKeyEnv`（默认等于该条目的 `id`）——所以页面上
  * 的密钥输入框是一份「这次要写的值」，保存成功即清空，读不回来也不显示。
  *
@@ -164,8 +164,14 @@ const SELECT_STYLE = {
   cursor: 'pointer',
 } as const
 
-/** 卡片头：id 在左、删除在右。 */
+/** 卡片头：名称与摘要（或 id）在左、动作在右。 */
 const HEADER_STYLE = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } as const
+
+/** 卡片头左侧：名称一行、辅助信息一行。 */
+const SUMMARY_STYLE = { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 } as const
+
+/** 卡片头右侧的动作按钮。 */
+const HEADER_ACTIONS_STYLE = { display: 'flex', gap: 8, flexShrink: 0 } as const
 
 /** 底部按钮行。 */
 const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '16px 0 0' } as const
@@ -187,6 +193,8 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
   const [draft, setDraft] = useState<readonly EntryDraft[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<'save' | 'credential' | null>(null)
+  // 展开的已保存条目下标；`null` = 全部折叠。还没保存过的行总是展开（见 `add`），不占这个状态。
+  const [open, setOpen] = useState<number | null>(null)
   const rows = draft ?? stored.map(toDraft)
 
   /**
@@ -210,6 +218,8 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
   /** 在最下面加一行空条目；id 先按空名称生成一个，名称一填就换成可读的那个。 */
   const add = (): void => {
     setFailure(null)
+    // 新行总是展开；收起正在编辑的旧行，避免两张卡片同时开着。
+    setOpen(null)
     setDraft([...rows, {
       id: newEntryId('', rows.map(row => row.id)),
       label: '',
@@ -229,6 +239,8 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
   const remove = (index: number): void => {
     setFailure(null)
     setDraft(rows.filter((_row, at) => at !== index))
+    // 删掉展开的那行就收起；删掉它前面的行时把下标跟着挪一下。
+    setOpen(current => current === null ? null : current === index ? null : current > index ? current - 1 : current)
   }
 
   /**
@@ -252,6 +264,8 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
         apiKeyEnv: row.key !== '' ? refOf(row) : row.apiKeyEnv,
         key: '',
       })))
+      // 保存成功后全部收起：新增的行从此进入列表态，和已有条目一样点「编辑」才展开。
+      setOpen(null)
     } finally {
       setBusy(false)
     }
@@ -261,74 +275,93 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
     <div style={PAGE_STYLE}>
       <h2 style={TITLE_STYLE}>{t('title')}</h2>
       <p style={HINT_STYLE}>{t('intro')}</p>
-      <p style={HINT_STYLE}>{t('reload')}</p>
       {rows.length === 0 && <p style={HINT_STYLE}>{t('empty')}</p>}
-      {rows.map((row, index) => (
-        // 按位置而不是按 id 作 key：新行的 id 会随名称改写，按 id 作 key 会在改名时重建整块表单、丢掉焦点。
-        <section key={index} style={CARD_STYLE}>
-          <div style={HEADER_STYLE}>
-            <span style={HINT_STYLE}>{t('id')}: {row.id}</span>
-            <Button variant="outline" size="sm" disabled={busy} onClick={() => { remove(index) }}>{t('delete')}</Button>
-          </div>
-          <div style={PAIR_STYLE}>
-            <label style={FIELD_STYLE}>
-              <span style={LABEL_STYLE}>{t('label')}</span>
-              <input
-                value={row.label}
-                disabled={busy}
-                style={INPUT_STYLE}
-                onChange={(event) => { edit(index, { label: event.target.value }) }}
-              />
-              <span style={HINT_STYLE}>{t('labelHint')}</span>
-            </label>
-            <label style={FIELD_STYLE}>
-              <span style={LABEL_STYLE}>{t('kind')}</span>
-              <select
-                value={row.kind}
-                disabled={busy}
-                style={SELECT_STYLE}
-                onChange={(event) => { edit(index, { kind: event.target.value as Kind }) }}
-              >
-                {Object.values(KIND_OPTIONS).map(kind => <option key={kind} value={kind}>{kind}</option>)}
-              </select>
-              <span style={HINT_STYLE}>{t('kindHint')}</span>
-            </label>
-          </div>
-          <div style={PAIR_STYLE}>
-            <label style={FIELD_STYLE}>
-              <span style={LABEL_STYLE}>{t('baseUrl')}</span>
-              <input
-                value={row.baseUrl}
-                disabled={busy}
-                style={INPUT_STYLE}
-                onChange={(event) => { edit(index, { baseUrl: event.target.value }) }}
-              />
-            </label>
-            <label style={FIELD_STYLE}>
-              <span style={LABEL_STYLE}>{t('model')}</span>
-              <input
-                value={row.model}
-                disabled={busy}
-                placeholder={t('modelPlaceholder')}
-                style={INPUT_STYLE}
-                onChange={(event) => { edit(index, { model: event.target.value }) }}
-              />
-            </label>
-          </div>
-          <label style={FIELD_STYLE}>
-            <span style={LABEL_STYLE}>{t('key')}</span>
-            <input
-              type="password"
-              value={row.key}
-              disabled={busy}
-              placeholder={t('keyPlaceholder')}
-              style={INPUT_STYLE}
-              onChange={(event) => { edit(index, { key: event.target.value }) }}
-            />
-            <span style={HINT_STYLE}>{t('keyHint')}</span>
-          </label>
-        </section>
-      ))}
+      {rows.map((row, index) => {
+        const expanded = row.fresh || open === index
+        return (
+          // 按位置而不是按 id 作 key：新行的 id 会随名称改写，按 id 作 key 会在改名时重建整块表单、丢掉焦点。
+          <section key={index} style={CARD_STYLE}>
+            <div style={HEADER_STYLE}>
+              <div style={SUMMARY_STYLE}>
+                <span style={LABEL_STYLE}>{row.label === '' ? t('unnamed') : row.label}</span>
+                <span style={HINT_STYLE}>
+                  {expanded ? `${t('id')}: ${row.id}` : row.model === '' ? row.kind : `${row.model} · ${row.kind}`}
+                </span>
+              </div>
+              <div style={HEADER_ACTIONS_STYLE}>
+                {!expanded && (
+                  <Button variant="outline" size="sm" disabled={busy} onClick={() => { setOpen(index) }}>{t('edit')}</Button>
+                )}
+                {expanded && !row.fresh && (
+                  <Button variant="outline" size="sm" disabled={busy} onClick={() => { setOpen(null) }}>{t('collapse')}</Button>
+                )}
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => { remove(index) }}>{t('delete')}</Button>
+              </div>
+            </div>
+            {expanded && (
+              <>
+                <div style={PAIR_STYLE}>
+                  <label style={FIELD_STYLE}>
+                    <span style={LABEL_STYLE}>{t('label')}</span>
+                    <input
+                      value={row.label}
+                      disabled={busy}
+                      style={INPUT_STYLE}
+                      onChange={(event) => { edit(index, { label: event.target.value }) }}
+                    />
+                    <span style={HINT_STYLE}>{t('labelHint')}</span>
+                  </label>
+                  <label style={FIELD_STYLE}>
+                    <span style={LABEL_STYLE}>{t('kind')}</span>
+                    <select
+                      value={row.kind}
+                      disabled={busy}
+                      style={SELECT_STYLE}
+                      onChange={(event) => { edit(index, { kind: event.target.value as Kind }) }}
+                    >
+                      {Object.values(KIND_OPTIONS).map(kind => <option key={kind} value={kind}>{kind}</option>)}
+                    </select>
+                    <span style={HINT_STYLE}>{t('kindHint')}</span>
+                  </label>
+                </div>
+                <div style={PAIR_STYLE}>
+                  <label style={FIELD_STYLE}>
+                    <span style={LABEL_STYLE}>{t('baseUrl')}</span>
+                    <input
+                      value={row.baseUrl}
+                      disabled={busy}
+                      style={INPUT_STYLE}
+                      onChange={(event) => { edit(index, { baseUrl: event.target.value }) }}
+                    />
+                  </label>
+                  <label style={FIELD_STYLE}>
+                    <span style={LABEL_STYLE}>{t('model')}</span>
+                    <input
+                      value={row.model}
+                      disabled={busy}
+                      placeholder={t('modelPlaceholder')}
+                      style={INPUT_STYLE}
+                      onChange={(event) => { edit(index, { model: event.target.value }) }}
+                    />
+                  </label>
+                </div>
+                <label style={FIELD_STYLE}>
+                  <span style={LABEL_STYLE}>{t('key')}</span>
+                  <input
+                    type="password"
+                    value={row.key}
+                    disabled={busy}
+                    placeholder={t('keyPlaceholder')}
+                    style={INPUT_STYLE}
+                    onChange={(event) => { edit(index, { key: event.target.value }) }}
+                  />
+                  <span style={HINT_STYLE}>{t('keyHint')}</span>
+                </label>
+              </>
+            )}
+          </section>
+        )
+      })}
       <div style={ACTIONS_STYLE}>
         <Button variant="outline" disabled={busy} onClick={add}>{t('add')}</Button>
         <Button variant="primary" disabled={busy} onClick={() => { void save() }}>{busy ? t('saving') : t('save')}</Button>

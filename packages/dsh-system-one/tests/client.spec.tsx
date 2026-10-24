@@ -3,8 +3,8 @@
  * 票据 04：接入层的条目页。
  *
  * 观察面分两层：注册层断言页签的键（`settings.plugins.tab` 的 id、文案命名空间、`whileServed` 的命名空间等于
- * patch 行 id），控件层把注册面注入的业务面按渲染机的形状绑到组件上，断言「点新增得到一个只读 id」「保存是
- * 一次整份 `entries` 的原子写入」「密钥进凭据域、配置里只留引用名」。
+ * patch 行 id），控件层把注册面注入的业务面按渲染机的形状绑到组件上，断言「点新增得到一个自动生成的 id」「已有
+ * 条目默认折叠、点编辑才展开」「保存是一次整份 `entries` 的原子写入」「密钥进凭据域、配置里只留引用名」。
  *
  * 写入路径与字段名都是判据的一部分：`{ op: 'set', path: ['entries'] }` 的 `entries` 是本包唯一的可写字段，
  * 也是唯一标了 volatile 的字段——非 volatile 的写入会被宿主直接拒绝，所以页面不该产生这类调用。
@@ -205,10 +205,13 @@ describe('条目页：增删改', () => {
     await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
     const savedId = savedEntries(fixture)[0]!.id
 
+    // 保存后折叠；改名要先展开。
+    fireEvent.click(screen.getByText(zh.edit))
     fireEvent.change(field(zh.label), { target: { value: 'Renamed' } })
     fireEvent.click(screen.getByText(zh.save))
     await waitFor(() => { expect(fixture.form.mutations).toHaveLength(2) })
     expect(savedEntries(fixture)[0]!.id).toBe(savedId)
+    fireEvent.click(screen.getByText(zh.edit))
     expect(idTexts(container)).toEqual([savedId])
   })
 
@@ -220,7 +223,13 @@ describe('条目页：增删改', () => {
     ]
     const { container } = renderPage(fixture, initial)
 
-    expect(idTexts(container)).toEqual(['keep', 'drop'])
+    // 已有条目默认折叠：只看到名称与动作，字段要点「编辑」才展开。
+    expect(container.querySelectorAll('input')).toHaveLength(0)
+    expect(screen.getByText('留着的')).toBeTruthy()
+    expect(screen.getByText('要删的')).toBeTruthy()
+
+    fireEvent.click(screen.getAllByText(zh.edit)[0]!)
+    expect(idTexts(container)).toEqual(['keep'])
     fireEvent.change(screen.getByDisplayValue('留着的'), { target: { value: '改过的' } })
     fireEvent.click(screen.getAllByText(zh.delete)[1]!)
     fireEvent.click(screen.getByText(zh.save))
@@ -234,6 +243,47 @@ describe('条目页：增删改', () => {
       model: 'm1',
       apiKeyEnv: '',
     }])
+  })
+
+  it('已有条目默认折叠成一行：点「编辑」才展开字段，保存后重新收起', async () => {
+    const fixture = await mounted()
+    const initial: readonly Entry[] = [
+      { id: 'e1', label: '本地 SGLang', kind: 'systemone', baseUrl: 'http://127.0.0.1:1', model: 'qwen3-4b' },
+    ]
+    const { container } = renderPage(fixture, initial)
+
+    expect(container.querySelectorAll('input')).toHaveLength(0)
+    expect(screen.getByText('本地 SGLang')).toBeTruthy()
+    expect(screen.getByText('qwen3-4b · systemone')).toBeTruthy()
+
+    fireEvent.click(screen.getByText(zh.edit))
+    expect(idTexts(container)).toEqual(['e1'])
+    expect(container.querySelectorAll('input')).toHaveLength(4)
+    expect(screen.queryByText(zh.edit)).toBeNull()
+    expect(screen.getByText(zh.collapse)).toBeTruthy()
+
+    fireEvent.change(field(zh.label), { target: { value: '改名后的' } })
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
+    expect(container.querySelectorAll('input')).toHaveLength(0)
+    expect(screen.getByText('改名后的')).toBeTruthy()
+    expect(savedEntries(fixture)[0]?.label).toBe('改名后的')
+  })
+
+  it('新增行保存后收起成一行，和已有条目一样点「编辑」再展开', async () => {
+    const fixture = await mounted()
+    const { container } = renderPage(fixture)
+
+    fireEvent.click(screen.getByText(zh.add))
+    expect(screen.queryByText(zh.edit)).toBeNull()
+    fillRow({ label: '新的', model: 'm', baseUrl: 'http://127.0.0.1:1' })
+    fireEvent.click(screen.getByText(zh.save))
+    await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
+
+    expect(container.querySelectorAll('input')).toHaveLength(0)
+    expect(screen.getByText('新的')).toBeTruthy()
+    fireEvent.click(screen.getByText(zh.edit))
+    expect(container.querySelectorAll('input')).toHaveLength(4)
   })
 
   it('协议下拉只有两个选项，取值是 kind 枚举的两个值', async () => {
@@ -282,7 +332,8 @@ describe('条目页：密钥与失败态', () => {
     expect(saved[0]?.apiKeyEnv).toBe(idText)
     // 负向断言：写回的配置里不出现密钥本身，只有引用名。
     expect(JSON.stringify(saved)).not.toContain('sk-secret-1')
-    // 保存成功后密钥输入框清空：值只存在凭据域里，页面上读不回来。
+    // 保存成功后密钥输入框清空：值只存在凭据域里，页面上读不回来（保存后已折叠，先展开）。
+    fireEvent.click(screen.getByText(zh.edit))
     await waitFor(() => { expect((field(zh.key) as HTMLInputElement).value).toBe('') })
   })
 
@@ -328,11 +379,13 @@ describe('条目页：密钥与失败态', () => {
     fixture.form.hold = new Promise<void>((resolve) => { release = () => { resolve() } })
     const { container } = renderPage(fixture, [{ id: 'e1', label: '旧名字', kind: 'systemone', baseUrl: 'http://127.0.0.1:1', model: 'm' }])
 
-    // 一行里六处手能碰到的地方：名称/地址/模型/密钥四个输入框、协议下拉、删除按钮。漏挂一处，
+    fireEvent.click(screen.getByText(zh.edit))
+
+    // 一行里七处手能碰到的地方：名称/地址/模型/密钥四个输入框、协议下拉、「收起」「删除」两个按钮。漏挂一处，
     // 那处敲进去的字照样会被写回返回时的旧快照覆盖。
     const rowControls = (): readonly HTMLInputElement[] =>
       [...container.querySelectorAll<HTMLInputElement>('section input, section select, section button')]
-    expect(rowControls()).toHaveLength(6)
+    expect(rowControls()).toHaveLength(7)
 
     fireEvent.click(screen.getByText(zh.save))
     await waitFor(() => { expect(rowControls().every(control => control.disabled)).toBe(true) })
