@@ -1,6 +1,6 @@
 # dsh-system-one 设计
 
-状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置、两个 provider（`systemone`、`openai`）、接入层的条目页与决策通道子插件（宿主半与它自己的页面）都已落地，bundle 的多行装载也已复验（两行同装、按 id 单独禁用；复核记录见 `.scratch/dsh-system-one/profile-load-07.md`）。远程面不做。
+状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置、三个 provider（`systemone`、`openai`、`deepseek`）、接入层的条目页与决策通道子插件（宿主半与它自己的页面）都已落地，bundle 的多行装载也已复验（两行同装、按 id 单独禁用；复核记录见 `.scratch/dsh-system-one/profile-load-07.md`）。`deepseek` 已用 hard 20 + easy 20 的小样本 pilot 跑过真实端点（读数与已知限制见下面「`deepseek` provider」一节；`openai` 仍未对真实端点实测）。远程面不做。
 
 一句话：把**带类型的题面**交给某个决策模型，拿回**带概率的答案**。这一层不产出内容，也不决定答案怎么用。术语见 `CONTEXT.md` 的「决策模型接入」。
 
@@ -50,7 +50,7 @@
 
 题面里的可选输入：
 
-- `instructions`（整次请求）：放在所有题之前的一段共享上下文；目前只有 vllm 的 `/v1/systemone` 有它（固定 prompt 的模型会 400），SGLang 没有。发给 SGLang 的 provider 收到非空值必须抛错——SGLang 会静默忽略未知顶层字段，不能让它悄悄丢掉。`systemone` provider 的落法见下面「provider 怎么区分两家的行为」：响应里没有它的回显，所以非空即抛错。
+- `instructions`（整次请求）：放在所有题之前的一段共享上下文；vllm 的 `/v1/systemone` 与 `deepseek` 支持它（后者由 provider 渲染进题面），SGLang 没有（固定 prompt 的模型会 400）。发给 SGLang 的 provider 收到非空值必须抛错——SGLang 会静默忽略未知顶层字段，不能让它悄悄丢掉。`systemone` provider 的落法见下面「provider 怎么区分两家的行为」：响应里没有它的回显，所以非空即抛错。
 - `optionDescriptions`（是非题与单选）：把两侧/各选项的含义单列出来；缺席表示含义写在 `instructions` 里。两边都支持，且都按字符串忠实渲染。是非题的 key 用 `true`/`false`，与答案的 `probability` 对齐，不用后端的 `yes`/`no`。
 - `levels`（量表）：每档是 `Level`（字符串或 JSON 对象/数组）。字符串是两边的公共集；富值只有 SGLang 原样保留，vllm 会 `str()` 化。`systemone` provider 不预判后端是哪一家：富档位照发，靠响应回显的 `legend` 逐档核对，对不上就抛错点 `levels`。
 - `images`（整次请求）：图片 URL 或 data URL；两边都收字符串。模型不支持图片时由后端报错。
@@ -59,7 +59,7 @@
 答案的可信度信号：
 
 - `confidence`：provider 自报的集中程度，**不是答案正确的概率**。定义随 provider 而变（vllm 是选中标签在全词表上的概率；SGLang 是 TypeSafe adapter 的归一化公式，忽略标签外的质量），**不可跨 provider 比较**；是非题在 SGLang 上缺席。
-- `labelMass`：答案标签在整个词表上的概率质量，0–1。vllm 放在每题的 `diagnostics.label_mass`，SGLang 放在答案的 `x_label_mass`；SGLang 在只对允许项打分的 checkpoint（Clef/joint schema、decision checkpoint）上省略，`systemone` provider 遇到省略时按 1.0 归一化。契约里它是可选项，缺席表示 provider 没报。
+- `labelMass`：答案标签在整个词表上的概率质量，0–1。vllm 放在每题的 `diagnostics.label_mass`，SGLang 放在答案的 `x_label_mass`；SGLang 在只对允许项打分的 checkpoint（Clef/joint schema、decision checkpoint）上省略，`systemone` provider 遇到省略时按 1.0 归一化。契约里它是可选项，缺席表示 provider 没报。`deepseek` 报的是 top-20 里可见标识符的质量，因此是**整词表质量的下界**（见「`deepseek` provider」）。
 - `argmaxIsLabel`：读位置的最高概率 token 是否属于答案标签；只有 vllm 测得到，SGLang 缺席。缺席不是 `true`/`false`，消费者不能把它当默认值。
 - `legend`：量表答案回显“第 i 档的值”，与请求的 `levels` 同序；vllm 与 SGLang 都回，只是 SGLang 能回 JSON 原值、vllm 只回字符串。provider 把它转成数组，长度必须等于 `levels`。
 
@@ -104,24 +104,39 @@
 - **拒答（`type: "refusal"`）**：具名的落成「该题从 `answers` 缺席 + 一条 `{type: 'refusal', questionId}` 警告」；没有 `name` 的拒答对不上任何题，只能算整次失败。
 - **未对真实端点实测**：夹具按 2026-10-23 的官方指南（`developers.openai.com` 的 Decisions 页）写，接上真实端点后补一次。
 
+## `deepseek` provider（DeepSeek 官方 chat completions）
+
+`kind: 'deepseek'` 接 `POST {baseUrl}/chat/completions`。与另外两路不同，它**不是决策端点**：官方只提供 chat 接口，所以题面、选项标识符与读出都由 provider 自己做。代价由三个读数框住：标识符必须是单 token、`labelMass` 只是 top-20 可见部分的下界、答案取分布 argmax 而不是采样值。契约不变。
+
+- **题面**：system 固定一句 `You are a decision engine. Reply with exactly one identifier. Do not explain.`；user 依次拼「请求级 `instructions`（非空时）→ `state`（字符串原样，其余 `JSON.stringify`）→ 该题 `instructions` → 选项/档位 → 末段指令」，每段之间空一行。选项块：是非题写 `Options:` 加 `- no`/`- yes`（`optionDescriptions.false`→`no`、`.true`→`yes`，没给描述就只写标识符），单选写 `- a: …`（按 `options` 顺序，没给描述就用选项本身），量表写 `Levels:` 加 `0: …`（富 `Level` 落成 JSON 文本）。末段点名本题实际标识符：`Answer with exactly one word: no or yes.`／`Answer with exactly one letter: a, b, …`／`Answer with exactly one digit: 0, 1, …`。`images` 非空时 user 内容换成「一段 text + 每个 URL 一个 `image_url`」；请求级 `chatTemplateKwargs` 没有位置，非空抛错；空 `instructions`、空 `optionDescriptions` 等于没传。
+- **请求固定**：`model`、`messages`、`thinking: {type:'disabled'}`、`temperature: 1.0`、`max_tokens: 1`、`logprobs: true`、`top_logprobs: 20`；不设 `response_format`/`stop`/`top_p`/`seed`。每题一次请求、串行；`requests` 是实际发起的请求数，`usage` 把各响应的 `prompt_tokens`/`completion_tokens` 求和，`modelId` 取第一个成功响应的 `model`。
+- **读出**：只读 `choices[0].logprobs.content[0].top_logprobs`；`logprob <= -9999` 是截断哨兵，按未观测跳过。**答案取 top 列表的 argmax，不取 `message.content`**——采样值可以不是分布里概率最高的 token。token 先规范化（去首尾空白 → 去尾随 `:, .` → 去成对引号 → 小写；顺序不能换，先去引号会让 `"a":` 这类 token 漏掉），同一标识符的多个表面形式用 logsumexp 在 log 域合并。
+- **答案**：`boolean.probability = P(yes)`；`choice.choice` 是重归一后 argmax 对应的选项；`score.score = Σ i·p_i`；`legend` 原样回显请求的 `levels`。`labelMass = Σ exp(logprob)`（只算 top-20 命中的标识符，clamp 到 `[0,1]`，是下界）；`confidence = max exp(logprob)`（重归一前域内最大）；`argmaxIsLabel` 看全部 top 条的 argmax 是否落在标识符集里。
+- **覆盖缺失**：`choice`/`score` 只在全部标识符都命中时返回 `probabilities`（`exp / labelMass`）；任一缺失就省略并加一条 `{type:'coverage', questionId}` 警告，仍返回答案，不拿 0 冒充概率。`boolean` 的 `probability` 照常返回，也带警告。
+- **失败**：没有标识符命中 → 该题从 `answers` 缺席 + `{type:'no-identifier'}`；响应缺 `logprobs`/`top_logprobs`、长度 < 2、或非哨兵条目 ≤ 1（`temperature: 0` 的症状）→ provider 级失败，不静默退化成只取 argmax。单题 HTTP 非 2xx → 该题缺席 + `{type:'http-error'}` 并继续；401/403/404 直接抛；所有题都失败时抛第一个错误。
+- **上限与拒绝**：单选 > 20、量表 > 10、空选项/空档位在发请求前抛错并点名字段；`choice` 的字母表是 `a`…`t`，`score` 的标识符是 `0`…`9`。
+- **不做**：通用 logprobs 协议、verbalized JSON 概率、prefix 续写、重试与并发、`temperature` 配置项，以及全量基准测量（本票只做 20 + 20 pilot）。
+- **实测状态（2026-10-24，`deepseek-flash`）**：hard 20（boolean 8／choice 8／score 4）判对 14（boolean 7/8、choice 7/8、score 0/4）；easy 20（boolean 6／choice 14）判对 20。hard 的 8 条 boolean 上 `argmaxIsLabel` 8/8、`labelMass` 中位数 0.9994、最低 0.9885，硬门通过；3 条 easy 带 `coverage` 警告但仍判对。6 条 hard 错题在 test-jev 的 `runs/260925-1722-measure/measure.json` 里同样判错（同一 argmax 口径），是模型本身答错，不是读出故障。基线来自 test-jev 的题面、与本 provider 的 prompt 不同，且 n=8，只作方向性参照；**这组读数不是准确率声明**。
+- **已知限制**：`labelMass` 是 top-20 下界；标识符缺失时省略分布；只测了 `deepseek-flash`（`deepseek-v4-pro` 未复核单 token／哨兵／覆盖率）；图片是否真的收未测；规范化会把大写单词并进标识符（`I`→`i`、`A`→`a`、`No`→`no`），与 jev 一致；通道的 boolean 阈值 `|p−0.5|×2` 在低 `labelMass` 时不可靠，等通道票把 `labelMass` 纳入确定度。
+
 ## 条目配置与设置页
 
 `entries` 是本包唯一的配置项：一个扁平对象数组，每项是 `{ id, label, kind, baseUrl, model, apiKeyEnv? }`。`id` 是内部标识，唯一、由系统生成（页面新增条目时生成一个可读 slug，例如 `sglang_local_1`；手写 patch 时自己给一个唯一值），消费者按它指名条目；`label` 是给人看的名称，**可以不唯一**（两个条目都叫「本地 SGLang」是合法的）。默认空数组，示例只以注释形式出现在 `cordis.patch.yml`，不指向任何真实部署。装载时按数组建条目并注册——`kind` 经**工厂表**映射到 provider 实现，表是穷尽的（`Record<Kind, …>`）：枚举里加一个 `kind` 却不实现它，`tsc` 就报错，不会出现「注册成功、到 `ask` 时才炸」的条目；重复 `id` 仍按既有规则抛错。
 
 **为什么 id 不能由用户填**：供应商名、模型、地址、协议这四项都不唯一，把其中任何一个当键，都会出现两个条目同名、`ask` 指向不确定实现的局面——这正是第一步「同名注册抛错」要防的事，所以在源头就给它一个系统生成的唯一 id。
 
-**用扁平对象 + `kind` 枚举，不用判别联合**：两种协议（`systemone`、`openai`）共用同一组字段，字段不随 kind 变化；判别联合只在字段随 kind 变化时才需要，而通用 HTTP 不做，那个需求不存在。
+**用扁平对象 + `kind` 枚举，不用判别联合**：三种协议（`systemone`、`openai`、`deepseek`）共用同一组字段，字段不随 kind 变化；判别联合只在字段随 kind 变化时才需要，而通用 HTTP 不做，那个需求不存在。
 
 **`entries` 整字段 `.volatile()`**：设置页的写回路径只接受 volatile 路径；而 volatile 只能落在顶层固定字段路径（数组元素内部再放会被拒），所以标记打在整个 `entries` 上。**volatile 更新不重挂载插件**：loader 把新引用提交进运行中的 fiber 后，只向所属 fiber 派发 `loader/volatile-update`（`vendor/loader/src/config/entry.ts` 的 `_commitVolatile`）；host 半监听它做整批替换——按新快照用 `buildEntries` 建出完整新一批（重复 id 在这里抛）、再预检新 id 没被其它插件占用，全部通过后才 dispose 旧的、注册新的。任一步失败都保留旧注册表并记日志，不会半替换。所以设置页保存后增删改条目立即生效，不需要重载插件或重启 DSH；同类监听的先例是 `packages/llm/llm-pi-ai/src/index.ts:315`。
 
-**条目页**（客户端半，`src/client/`）做增删改：名称、模型、API 地址、协议（下拉两种）、API 密钥（可选）。API 地址下方按所选协议给一句填写说明（服务根地址，不要填到具体接口）。已有条目默认折叠成一行（名称 + 模型·协议），点「编辑」展开，保存成功后全部收起；新增行在保存前一直展开。内部 `id` 不由用户输入——新增时生成，展开时在卡片头以一行次要文本显示（可选中复制到消费者的配置里）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。**引用名的默认值 = 条目 `id`**（存密钥时按 `id` 取默认值，页面不提供改它的控件）；要换引用名仍可手写 patch 把 `apiKeyEnv` 改成自己的环境变量名。
+**条目页**（客户端半，`src/client/`）做增删改：名称、模型、API 地址、协议（下拉三种）、API 密钥（可选）。API 地址下方按所选协议给一句填写说明（服务根地址，不要填到具体接口）。已有条目默认折叠成一行（名称 + 模型·协议），点「编辑」展开，保存成功后全部收起；新增行在保存前一直展开。内部 `id` 不由用户输入——新增时生成，展开时在卡片头以一行次要文本显示（可选中复制到消费者的配置里）。密钥字段把值写进凭据域（`$DSH_HOME/.credentials.yaml`），配置里只留引用名 `apiKeyEnv`——先例是设置页里的 WebSearchCard，「written through the credentials domain, never into the settings section」。**引用名的默认值 = 条目 `id`**（存密钥时按 `id` 取默认值，页面不提供改它的控件）；要换引用名仍可手写 patch 把 `apiKeyEnv` 改成自己的环境变量名。
 
 落地时的四条口径（都进了 `tests/client.spec.tsx` 的判据）：
 
 - **`id` 的字符集由凭据引用名决定**：引用名是 POSIX 环境变量名（`packages/credentials/credentials/src/index.ts` 的 `REF_PATTERN` = `^[A-Za-z_][A-Za-z0-9_]*$`），而引用名的默认值就是这个 `id`——带连字符的 slug（例如手写 patch 里的 `sglang-local`，页面已不再生成这种人写 id）在 `remote.credentials.set` 会被整次拒成 `gateway/bad-request`。所以页面生成的 `id` 只用 `[A-Za-z0-9_]`：`<名称的 ASCII slug>_<序号>`；名称里没有 ASCII 字母数字时退化成 `entry_<序号>`，名称以数字开头时前面补 `entry_`（否则首字符过不了引用名语法）。序号取**该前缀下**第一个没被用掉的整数（**不用随机后缀**：随机会在每次改名时变一次，卡片头上那行 id 跟着跳）。**新增那一刻还没有名称**，所以先给 `entry_<序号>`；还是草稿的行按当前名称重算（边打字前缀边长大；换了前缀就按新前缀重新取号），**保存之后固定**（下游配置里的 `target` 指着它，改名不再动摇）。**手写 patch 时**若打算让密钥存在默认引用名下（`apiKeyEnv` 等于 `id`），`id` 也必须落在这个字符集里；`apiKeyEnv` 留空表示这个条目不使用凭据（`wire.ts` 对空引用名不解析），想用带连字符的 id 就显式给一个合法的 `apiKeyEnv`。
 - **一次原子写回**：保存提交的是整份数组（`{ op: 'set', path: ['entries'] }`），本包没有第二个可写字段，所以写回路径上不会出现非 volatile 的写入（宿主对非 volatile 路径直接拒绝）。
 - **先写凭据、再写配置**：`apiKeyEnv` 只在「这次真写了密钥」或「条目本来就带引用名」时取到非空引用名，其余写空串——空串在 schema 里就是「这个条目不使用凭据」，`wire.ts` 对空引用名不解析，所以这一行照常不带凭据。凭据写失败整次不保存，避免配置指向一个不存在的密钥。
-- **协议下拉的两个取值就是 `Kind` 的两个值**（`systemone`、`openai`），页面不翻译它们：用户必须照着服务方给的接口类型选。
+- **协议下拉的三个取值就是 `Kind` 的三个值**（`systemone`、`openai`、`deepseek`），页面不翻译它们：用户必须照着服务方给的接口类型选。
 
 ## 决策通道（第二步）
 
@@ -174,7 +189,7 @@
 - **`OpenAI decisions` 指 OpenAI 的 Decisions API**（`POST /v1/decisions`，题型 `predicate`／`choice`／`score`），不是 SGLang 的同名端点：两家路径相同而载荷互不兼容——题目标识 `name` 对 `id`、答案数组对映射、概率 `[{value, probability}]` 对 `{名字: float}`。SGLang 那个不做，所以「当前范围」的 provider 列表里不会有同名项。
 - **拒答（refusal）走 `Warning`，不新增答案类型**：有的规范（如 OpenAI Decisions API）会让某一题返回 `type: "refusal"`——模型拒绝回答这一题，没有判断结果，也不带 `probability`／`choice`／`score`／`confidence`。它按我们的口径落成两件事：该题从 `answers` 缺席，provider 另报一条带 `questionId` 的 `Warning`；未具名的整次拒答算 provider 级失败、抛错。契约因此不需要新增答案类型——`Warning.questionId` 就是为这种情况留的。拒答只有 provider 看得到（响应里那一项写着 refusal），服务拿不到，所以它只能由 provider 自报，这正是「服务不合成警告」那条的用例。
 
-- **`kind` 只有两种**：`systemone`（vllm、SGLang、TypeSafe、OpenCode Zen 的 `/v1/systemone`）与 `openai`（OpenAI Decisions API）。后者**未对真实端点实测**，验收只到按官方载荷的夹具，接上真实端点后补一次。
+- **`kind` 有三种**：`systemone`（vllm、SGLang、TypeSafe、OpenCode Zen 的 `/v1/systemone`）、`openai`（OpenAI Decisions API，**未对真实端点实测**，验收只到按官方载荷的夹具）与 `deepseek`（DeepSeek 官方 `POST /chat/completions`；provider 自己渲染题面、把选项折成单 token 标识符、读 top-20，见下面「`deepseek` provider」）。
 - **通用 HTTP 不做**：`systemone` 换 `baseUrl` 已覆盖同类端点；要「通用」就得引入请求/响应映射配置，而契约要求「不支持的可选字段必须抛错」，通用映射无法保证这条。等出现一个 `systemone` 表达不了的具体端点再做。
 - **页面分两张**：接入层的客户端半管条目的增删改（写自己的命名空间）；通道子插件的客户端半管「选当前条目 + 引导档位 + 阈值」（写自己的命名空间，跨命名空间只读条目 id）。跨命名空间写没有先例，不做。页面上的「当前应用的决策模型」只对通道这一层有意义——它不是全局开关，注册表按设计可以有多条，多个业务插件各自指名自己的条目。
 - **MCP 面与策略插件不在第二步**：MCP 面是同一批工具的第二种交付，需要一个独立进程与框架无关的核心（DSH 只有 MCP 客户端，没有 MCP server 能力）；「决策模型如何在 Agent 中被使用」的策略插件要按真实场景定，否则就是替使用者预设用法。两者与通道同属这个 bundle，记为后续。
@@ -183,7 +198,7 @@
 
 第一步交付契约与注册表。第二步交付三件事，需求已厘清：
 
-1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册，之后跟着 volatile 更新整批替换，两个 provider 都已落地。`systemone` 按「字段与后端对照」与「provider 怎么区分两家的行为」做映射与拒绝规则——`instructions` 非空抛错、富 `levels` 按 `legend` 回显核对、`labelMass` 按响应字段读并在缺席时归一到 1.0、`legend` 长度校验、后端错误码与限额连原文包成 provider 级失败；`openai` 按「`openai` provider（OpenAI Decisions API）」那节接官方载荷。两者共用同一层 HTTP 与凭据：凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析（`ctx.get` 取可选服务，没装凭据子系统时用到才报错），以 `Authorization: Bearer` 放进请求。
+1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册，之后跟着 volatile 更新整批替换，三个 provider 都已落地。`systemone` 按「字段与后端对照」与「provider 怎么区分两家的行为」做映射与拒绝规则——`instructions` 非空抛错、富 `levels` 按 `legend` 回显核对、`labelMass` 按响应字段读并在缺席时归一到 1.0、`legend` 长度校验、后端错误码与限额连原文包成 provider 级失败；`openai` 按「`openai` provider（OpenAI Decisions API）」那节接官方载荷；`deepseek` 按「`deepseek` provider」那节接官方 chat completions（自渲染题面、单 token 标识符、top-20 读出）。三者共用同一层 HTTP 与凭据：凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析（`ctx.get` 取可选服务，没装凭据子系统时用到才报错），以 `Authorization: Bearer` 放进请求。
 2. **接入层的条目页**（客户端半，已落地）：设置页里的「决策模型」页签，增删改条目，密钥写凭据域；口径见「条目配置与设置页」末四条。
 3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值，以及它自己的页面（宿主半与页面都已落地，在独立包里）。
 
@@ -193,12 +208,13 @@
 
 - `pnpm --dir packages/dsh-system-one run typecheck` 同时覆盖 `src` 与 `tests`；`build` 在 `tsc` 之外多一条客户端产物（条目页），`tests/declaration-merge.spec.ts` 继续读构建产物。
 - 第一步的 8 条行为测试继续通过（`ask` 交回答案与耗时、漏答的题从 `answers` 缺席且 `warnings` 原样交回、未注册 `target` 的报错点名 id、同名注册抛错、`providers()` 顺序、注册随注册方 fiber 释放、可选请求字段原样透传且 `target` 不进入 provider 请求、可信度信号与 `legend` 原样交回）。
-- 条目配置：`tests/entries-config.spec.ts` 把配置契约纳入门禁——示例 patch 的键集合与 `Config` 字段逐一相等、`label` 不唯一、`id` 重复或缺失与 `kind` 越界在装载期报错并点出键名、两个 kind 的条目同时装载并各自注册、`entries` 是整字段 volatile（宿主写回门禁读的 `schema.meta.volatile`）。
+- 条目配置：`tests/entries-config.spec.ts` 把配置契约纳入门禁——示例 patch 的键集合与 `Config` 字段逐一相等、`label` 不唯一、`id` 重复或缺失与 `kind` 越界在装载期报错并点出键名、三个 kind 的条目同时装载并各自注册、`entries` 是整字段 volatile（宿主写回门禁读的 `schema.meta.volatile`）。
 - 跨包声明合并：`tests/declaration-merge.spec.ts` 在临时目录里搭一个真实消费者包跑 `tsc`，fixture 带上可选字段，并带反向对照（不 import 本包时同一个用法必须编译失败）与插件面断言（`ctx.systemOne.providers()` 取不到）。
 - provider 的映射与拒绝规则按 vllm/SGLang 源码核对的**线上形状**做夹具（不按厂商身份）：`tests/systemone-provider.spec.ts` 覆盖三种题型的映射、非空 `instructions` 的拒绝、`legend` 长度与回显核对（后端把档位串化时抛错）、`labelMass` 的两种位置与缺席时的归一、后端非 2xx 连原文（当前用例以 400 与 422 为例；限额由后端校验、provider 只转述，未单设夹具）、凭据解析与 `Bearer`。
 - `openai` provider：`tests/openai-provider.spec.ts` 覆盖三种题型的题面数组与答案映射、`state`／`instructions`／`images` 落成哪段 `input`、`chatTemplateKwargs` 与是非题 `optionDescriptions` 与非字符串 `Level` 的拒绝、具名拒答的缺席+警告与未具名拒答的整次失败、两个 kind 按 `target` 各自命中自己的端点；**未对真实端点实测**，接上真实端点后补一次。
+- `deepseek` provider：`tests/deepseek-provider.spec.ts` 覆盖三种题型的题面与请求体（含 messages）、`labelMass`／`confidence`／`argmaxIsLabel` 的读出、标识符部分缺失时省略 `probabilities` 并报 `coverage`、`argmaxIsLabel=false` 仍取域内 argmax、`temperature 0` 症状与缺 `logprobs` 的 provider 级失败、没有标识符命中时的缺席+警告、选项/档位上限与 `chatTemplateKwargs` 拒绝、`usage`／`requests`／`modelId` 与单题 HTTP 隔离；真实端点只做 20 + 20 pilot（读数见「`deepseek` provider」一节），**不进验收门禁**。
 - 决策通道（宿主半在 `packages/dsh-system-one-channel/tests/`）：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导（第二档比第一档只多那一句）、阈值语义（两种确定性公式、算不出时按 `abstain`）、配置非法在装载期点名键名各有可跑用例；技能注册表的缺席由「不装它也能挂起来」那一条覆盖。
-- 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、已有条目默认折叠点「编辑」展开（保存后收起）、保存后条目的增删改热生效（`tests/system-one.spec.ts` 的「条目配置热生效」一组与 `tests/volatile-update.spec.ts` 的真实 Loader 链路）、协议下拉的两个取值等于 `Kind` 枚举、宿主拒绝／传输层失败／凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md`）。
+- 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、已有条目默认折叠点「编辑」展开（保存后收起）、保存后条目的增删改热生效（`tests/system-one.spec.ts` 的「条目配置热生效」一组与 `tests/volatile-update.spec.ts` 的真实 Loader 链路）、协议下拉的三个取值等于 `Kind` 枚举、宿主拒绝／传输层失败／凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md` 与 `manual-check-02c.md`）。
 - 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——两个包 `pnpm pack` 进临时 profile（profile 由真实的 `initProfile` 初始化，`nodeLinker: hoisted`）、按 `dsh.profile.bundles` 组合出两行、用真实 Loader 启动并跑启动审计，断言**两行都 ACTIVE**、接入层的 `ctx.systemOne` 与通道的 `systemone_ask` 同时可用（经工具面调一次走完接入层，并断言题面真的进了 provider）、两行都从 profile 的安装副本解析；按 id 只禁用通道那一行时接入层照常、工具不存在，只禁用接入层那一行时通道行不激活且审计点名它在等 `systemOne`，用重新组合把那一行放开后恢复；profile 里装不上本包时该 bundle 被跳过、原因点名本包。示例 patch 的键集合与各自 schema 逐一相等由 `tests/entries-config.spec.ts`（`entries` 与条目的六个字段）与子包 `tests/channel-config.spec.ts`（通道那一行的四个字段加门槛里两个内层键，bundle 那份与子包自己那份都查）覆盖。复核记录见 `.scratch/dsh-system-one/profile-load.md`（单行）与 `.scratch/dsh-system-one/profile-load-07.md`（多行、真实 `dsh`）。
 - 通道页（客户端半，在 `packages/dsh-system-one-channel/tests/`）：`client.spec.tsx` 与 `client-packaging.spec.ts` 把它纳入门禁——写回命名空间等于本行 patch 的 id `dsh-system-one-channel`（与宿主半的 `name` 同一个字符串）、只读命名空间等于接入层那一行的 id、页签注册在 `settings.plugins.tab` 且 `whileServed` 只跟自己的命名空间走、下拉的值是条目 `id`（重名追加后四位、空列表给出去哪登记的提示）、三件事各写回自己的命名空间且整个装配里没有一笔写到另一个命名空间（负向断言）、门槛关闭时数值设置整组不显示、越界在失焦时报错且一条都不写、改动即写没有保存按钮、写入按交互顺序排队、宿主拒绝与传输层失败各报一句话、页面文案不出现参数名与机制名；产物是装载器认的闭包工厂。**真实 profile 里的视觉与文案核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-06.md`）。
 - 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。

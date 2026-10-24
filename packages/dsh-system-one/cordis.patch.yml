@@ -1,7 +1,7 @@
 # 本包提供的两行：接入层（装载决策模型注册表 `ctx.systemOne`，并把配置里的条目注册进去）与决策通道
 # （工具、技能、两档引导、开关与可选阈值）。两行各有 id，后续层可按 id 覆盖或禁用；name 用包名，交
 # Node 解析到安装副本。id 同时是各自设置页的配置命名空间，改名要连客户端半里写死的常量一起改。
-# 条目的六个字段、两个 kind 与凭据引用名的写法见 README.zh.md；通道那一行的字段见子包的 README。
+# 条目的六个字段、三个 kind 与凭据引用名的写法见 README.zh.md；通道那一行的字段见子包的 README。
 - insert:
     - id: dsh-system-one
       name: '@dsh-clipclop/dsh-system-one'

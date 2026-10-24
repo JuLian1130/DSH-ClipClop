@@ -2,7 +2,7 @@
 
 决策模型的接入层：把带类型的题面（是非／单选／量表）交给一个条目，拿回带概率、可审计的答案。本包同时是 bundle 与接入层——它提供 `ctx.systemOne` 注册表，并把配置里的**条目**在装载时建好、注册进去。
 
-当前状态：契约、注册表、条目配置、两种协议的 provider 与设置页里的条目页都已落地——`systemone`（vllm／SGLang 的 `/v1/systemone`）与 `openai`（OpenAI Decisions API 的 `/v1/decisions`）。`openai` 这一路**还没有对真实端点实测**，只按官方载荷写了夹具：接上真实端点后再核一次。
+当前状态：契约、注册表、条目配置、三种协议的 provider 与设置页里的条目页都已落地——`systemone`（vllm／SGLang 的 `/v1/systemone`）、`openai`（OpenAI Decisions API 的 `/v1/decisions`）与 `deepseek`（DeepSeek 官方 `POST /chat/completions`）。`openai` 这一路**还没有对真实端点实测**，只按官方载荷写了夹具：接上真实端点后再核一次；`deepseek` 已用 hard 20 + easy 20 的小样本 pilot 跑过真实端点，那只是方向性读数，不是全量测量。
 
 ## 安装
 
@@ -31,7 +31,7 @@ dsh plugin --profile <name> add link:<仓库>/packages/dsh-system-one
 | --- | --- | --- |
 | `id` | 是 | 内部标识，**唯一**。`ask` 的 `target` 用它指名条目。页面新增条目时自动生成（`<名称的 slug>_<序号>`，名称里没有 ASCII 字母数字时用 `entry_<序号>`，名称以数字开头时前面补 `entry_`，保存后固定；字符集只有 `[A-Za-z0-9_]`：密钥的引用名默认就是它，而引用名必须是 POSIX 环境变量名）；手写 patch 时自己给一个唯一值，若打算用默认引用名存密钥，同样只用这套字符。 |
 | `label` | 是 | 显示名称，给人看。**可以不唯一**：两个条目都叫「本地 SGLang」是合法的。 |
-| `kind` | 是 | 协议，二选一：`systemone`（vllm／SGLang／TypeSafe 的 `/v1/systemone`）或 `openai`（OpenAI Decisions API）。 |
+| `kind` | 是 | 协议，三选一：`systemone`（vllm／SGLang／TypeSafe 的 `/v1/systemone`）、`openai`（OpenAI Decisions API）或 `deepseek`（DeepSeek 官方 chat completions）。 |
 | `baseUrl` | 是 | 端点地址。 |
 | `model` | 是 | 模型名。 |
 | `apiKeyEnv` | 否 | 凭据的**引用名**。密钥本身不写进配置文件（它进凭据域），这里只留名字；在页面上存密钥时，引用名默认就用该条目的 `id`（页面不提供改它的控件，要换名请手写 patch）。留空＝不带凭据。 |
@@ -51,9 +51,15 @@ dsh plugin --profile <name> add link:<仓库>/packages/dsh-system-one
         baseUrl: https://api.openai.com
         model: gpt-5
         apiKeyEnv: OPENAI_API_KEY
+      - id: deepseek-chat
+        label: DeepSeek 官方
+        kind: deepseek
+        baseUrl: https://api.deepseek.com
+        model: deepseek-flash
+        apiKeyEnv: DEEPSEEK_API_KEY
 ```
 
-`entries` 默认是空数组：不配条目时注册表为空，`ask` 点名任何条目都会报错并列出已注册的 id。配置非法一律在装载期报错并点出键名（`id` 缺失或重复、`kind` 不在两个取值里、`kind` 没有对应实现）。
+`entries` 默认是空数组：不配条目时注册表为空，`ask` 点名任何条目都会报错并列出已注册的 id。配置非法一律在装载期报错并点出键名（`id` 缺失或重复、`kind` 不在三个取值里、`kind` 没有对应实现）。
 
 条目在装载时注册，之后跟着配置热更新：在设置页改完条目（含地址、模型、凭据引用名）保存即生效，不用重载 profile。
 
@@ -84,3 +90,22 @@ dsh plugin --profile <name> add link:<仓库>/packages/dsh-system-one
 - **三样东西这个端点没有位置**，带了内容就报错并点名字段：请求级 `chatTemplateKwargs`、是非题的 `optionDescriptions`（`predicate` 只有题干）、非字符串的量表档位（线上档位只有一个字符串标签）。前两样的空值等于没传，放行。
 - **拒答**：模型拒绝回答某一题时，该题不在 `answers` 里，`warnings` 里多一条带该题 `questionId` 的说明；整次拒答（没点名哪一题）算这次调用失败。
 - **未对真实端点实测**：以上按官方指南实现，接上真实端点后补一次核对。
+
+## `deepseek` 协议怎么接
+
+- **端点**是 `baseUrl` + `/chat/completions`。`baseUrl` 填 `https://api.deepseek.com`；官方 OpenAI 兼容的 `/v1` 地址没有实测，不要填。
+- **凭据**与另外两路同一套：`apiKeyEnv` 非空时每次调用经凭据服务重新解析，以 `Authorization: Bearer <值>` 带上。
+- **题面由 provider 自己渲染**：`state`、整次请求与每题的 `instructions`、选项/档位都折进同一条 user 消息；`optionDescriptions` 按选项渲染，富 `Level` 落成 JSON 文本；`images` 落成图片内容块。请求级 `chatTemplateKwargs` 没有位置，非空直接报错；空 `instructions`、空 `optionDescriptions` 等于没传。
+- **请求固定、不做配置项**：关闭 thinking、`temperature: 1.0`、`max_tokens: 1`、`logprobs`、`top_logprobs: 20`；每题一次请求、串行。`temperature: 0` 时 API 只返回 argmax，provider 直接判这次调用失败，不会退化成只取第一个 token。
+- **上限**：单选最多 20 个选项、量表最多 10 档（标识符是单个字母／数字 token）；空选项、空档位、超限都在发请求之前报错并点名字段。
+- **读出**：答案取 `top_logprobs` 的 argmax，不取采样出来的 `message.content`；同一标识符的多种写法（大小写、空白、尾随标点、成对引号）先规范化，再在 log 域合并。
+- **`labelMass` 是下界**：只算 top-20 里看得见的标识符质量，不是整词表的质量。标识符有缺失时 `choice`/`score` 不返回 `probabilities`，另报一条 `coverage` 警告——缺席表示没报完整分布，不是 0；`boolean` 的 `probability` 仍返回，但同样带警告。
+- **`confidence`** 是重归一之前的域内最大概率，所以低 `labelMass` 的答案不会因为重归一显得很确定。
+- **错题隔离**：单题 HTTP 失败只让该题缺席并报一条警告；401/403/404 是配置或地址错，整次调用直接失败。
+- **实测状态**：2026-10-24 的小样本 pilot 跑过真实端点——hard 20（boolean 8／choice 8／score 4）判对 14，easy 20（boolean 6／choice 14）判对 20；hard 的 8 条 boolean 上 `argmaxIsLabel` 8/8、`labelMass` 中位数 0.9994。**这是 20 + 20 的方向性读数，不是 231 条全量测量，不能当成本 provider 的准确率**；test-jev 那套题面上的 75.7%／100% 也不是。
+- **已知限制**：
+  - 只测了 `deepseek-flash`；`deepseek-v4-pro` 的单 token 标识符、截断哨兵与覆盖率未复核。
+  - 图片内容块按官方文档发出，`deepseek-flash` 是否真的收图未测；不支持时由后端 4xx 报错。
+  - 规范化会把大写单词并进标识符（`I`→`i`、`A`→`a`、`No`→`no`），与 jev 的 `normalize` 一致；换标识符集时要留意。
+  - 通道的 boolean 阈值目前用 `|p−0.5|×2`：低 `labelMass` 时重归一后的 0.99 会被当成确定。在通道把 `labelMass` 纳入确定度之前，这条阈值在 `deepseek` 上不可靠。
+  - 没有重试与并发；速率限制、429、长 `state` 的前缀缓存未测。
