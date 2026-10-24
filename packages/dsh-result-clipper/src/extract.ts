@@ -367,7 +367,7 @@ const SHADOW_TOOLS = ['read', 'bash', 'web_fetch', 'pwsh'] as const
  * 的 dispose 已经把工具带走了，而模型侧在下一步就要工具表。冷启动时该回调在 boot 完成（`commit`）后才跑，
  * 此时装载已结算，挂载判定与首个 agent 时点一致。
  * @param ctx - 插件 context；`tools` 已就绪。
- * @param enabled - 这套机制当前是否启用；每次 agent 创建时调用一次。
+ * @param enabled - 这套机制当前是否启用；每次 agent 创建与每次 ready 补挂时各读一次。
  * @param report - 收到首个 agent 实际走的路（每个目标工具一名，连平台一起）；调用方据此写诊断记录。真单关的
  * "接管成功"与"原生还在、只是遮蔽"交出的工具一模一样，这一条是会话里唯一的区分依据。
  * @param takeover - 测试接缝：接管工厂表；生产调用不传，用本模块的 {@link TAKEOVER}。
@@ -387,11 +387,12 @@ export function installExtractArg(
    * `taken` 只是"这个工具由我们挂回来"的影子标记：条目没了就把它当没接管过，下一次会重挂。不拿挂载 fiber 的
    * 生命周期代替这一步——fiber 是否随 agent 释放尚未核实（票 28「未核实」），工具表才是可观察的事实。
    *
-   * 全部错误在这里吞掉、只告警：两个调用点（`agent/created` 监听器与 `appReady` 的回调）都不捕异常，挂载失败
-   * 不得把 agent 创建或 boot 的 `commit` 带崩。
+   * 启用判定与全部错误都在这里处理、只告警：两个调用点（`agent/created` 监听器与 `appReady` 的回调）都不捕
+   * 异常，挂载失败不得把 agent 创建或 boot 的 `commit` 带崩，也不能把这个函数变成会 reject 的 promise。
    */
   async function ensureTakeover(): Promise<void> {
     try {
+      if (!enabled()) return
       for (const name of taken) if (ctx.tools.get(name) === undefined) taken.delete(name)
       for (const name of takeoverPlan(process.platform)) {
         // 原生已经不在了 = 部署用 patch 关掉了那个条目，可以自己挂回来并就地改写。
@@ -410,23 +411,17 @@ export function installExtractArg(
         taken.add(name)
       }
     } catch (error: unknown) {
-      // 循环之外的失败（平台判断、工具表读取）同样不能漏给调用方。
+      // 循环之外的失败（启用判定、平台判断、工具表读取）同样不能漏给调用方。
       logger(ctx)?.warn(`dsh-result-clipper: takeover failed: ${String(error)}`)
     }
   }
 
   // 重载路径：应用已 ready 时 `onReady` 在 apply 内同步回调，立即补挂；冷启动时回调在 boot 的 `commit` 里。
-  // 两处调用方都不捕异常，所以这里只做一次启用判定，其余交给 `ensureTakeover` 自己吞。
+  // 两处调用方都不捕异常，所以启用判定与全部错误都交给 `ensureTakeover` 自己吞。
   // disposer 交给 `ctx.effect`：实例在 ready 前被再重载或卸掉时，回调随实例一起撤销。
   ctx.effect(() => {
     const appReady = ctx.get('appReady') as AppReady | undefined
-    return appReady?.onReady(() => {
-      try {
-        if (enabled()) void ensureTakeover()
-      } catch (error: unknown) {
-        logger(ctx)?.warn(`dsh-result-clipper: takeover failed: ${String(error)}`)
-      }
-    }) ?? (() => {})
+    return appReady?.onReady(() => { void ensureTakeover() }) ?? (() => {})
   })
 
   ctx.on('agent/created', async ({ agent }) => {

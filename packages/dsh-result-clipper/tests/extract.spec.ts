@@ -777,12 +777,15 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
     const ctx = await takeoverContext()
     ctx.provide('appReady', ready as never)
     const reports: MountRecord[] = []
-    const first = await scopedInstance(ctx, reports)
+    // 计数启用判据：回调真的被撤销时它一次都不该被读到。只看"没挂上工具"区分不出「disposer 生效」与
+    // 「回调照跑、失败被 ensureTakeover 吞掉」。
+    let polls = 0
+    const first = await scopedInstance(ctx, reports, { enabled: () => { polls += 1; return true } })
     await first.dispose()
 
-    // 悬空回调会在已释放的 context 上挂载；撤销了就不该有任何动作。
     ready.commit()
     await Promise.resolve()
+    expect(polls, '悬空回调不该被调用').toBe(0)
     expect(ctx.tools.get('bash')).toBeUndefined()
     expect(reports).toHaveLength(0)
     await ctx.fiber.dispose()
