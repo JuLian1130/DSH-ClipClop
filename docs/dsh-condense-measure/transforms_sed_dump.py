@@ -267,7 +267,10 @@ def main():
         rules = [sed_rule(**over, cap_line=2000)]
         measure_dispatch("② sed 大窗口（≥101 行）", rules, out_dir=args.out)
     elif args.only == "dump":
-        rules = dump_rules(**over, cap_line=2000, hits=args.hits)
+        dump_kw = dict(over, cap_line=2000)
+        if args.hits is not None:
+            dump_kw["hits"] = args.hits
+        rules = dump_rules(**dump_kw)
         measure_dispatch("③ 原始转储 cat/ls/head/tail/nl", rules, out_dir=args.out)
     else:
         rules = all_rules(**over, hits=args.hits)
