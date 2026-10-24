@@ -24,4 +24,6 @@
       #   enabled: true
       #   target: sglang_local
       #   guidance: tool
-      #   threshold: { enabled: false, value: 0.5 }
+      #   threshold:
+      #     enabled: false
+      #     value: 0.5

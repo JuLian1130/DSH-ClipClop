@@ -14,6 +14,9 @@ import { TARGET, mount, tool } from './support/channel.ts'
 /** schema 的字段表（volatile 标记在 `meta` 上，宿主写回门禁读的就是它）。 */
 const fields = (Config as unknown as { dict: Record<string, { meta?: { volatile?: boolean } }> }).dict
 
+/** 门槛那一层的字段表：示例里它是嵌套的，内层两个键同样不能与 schema 漂移。 */
+const thresholdFields = (fields.threshold as unknown as { dict: Record<string, unknown> }).dict
+
 /** patch 文件的全文。 */
 const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 
@@ -21,11 +24,11 @@ const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf
 const bundlePatch = readFileSync(new URL('../../dsh-system-one/cordis.patch.yml', import.meta.url), 'utf8')
 
 /**
- * 取出某份 patch 里本包那一行的示例配置键。
+ * 取出某份 patch 里本包那一行的示例配置行（去掉注释前缀，保留缩进层级）。
  * @param source - patch 文件的全文。
- * @returns `# config:` 下第一层的键，按出现顺序。
+ * @returns 示例配置的行；块从 `# config:` 下一行起，到第一个空行为止。
  */
-function exampleKeys(source: string): string[] {
+function exampleLines(source: string): string[] {
   const lines = source.split('\n')
   const start = lines.findIndex(line => line.trim() === `- id: ${Channel.name}`)
   expect(start).toBeGreaterThanOrEqual(0)
@@ -33,10 +36,12 @@ function exampleKeys(source: string): string[] {
   expect(config).toBeGreaterThan(start)
   // 示例是连续的一段注释：去掉前缀后第一个空行就是块的结尾（与接入层那份夹具同一个口径）。
   const block = lines.slice(config + 1).map(line => /^\s*# ?(.*)$/.exec(line)?.[1] ?? '')
-  const example = block.slice(0, block.indexOf('')).filter(line => line.trim() !== '')
-  const base = Math.min(...example.map(line => line.search(/\S/)))
-  return example
-    .filter(line => line.search(/\S/) === base)
+  return block.slice(0, block.indexOf('')).filter(line => line.trim() !== '')
+}
+
+/** 一层 YAML 里的键，按出现顺序。 */
+function keysOf(lines: string[]): string[] {
+  return lines
     .map(line => /^\s*([\w-]+):/.exec(line)?.[1])
     .filter((key): key is string => key !== undefined)
 }
@@ -50,11 +55,14 @@ describe('patch 行', () => {
     expect(patch).toContain("name: '@dsh-clipclop/dsh-system-one-channel'")
   })
 
-  it('两处示例的配置键集合与 Config 的字段集合逐一相等', () => {
+  it('两处示例的配置键集合与 Config 的字段集合逐一相等：`config:` 下四个字段，门槛里再两个', () => {
     // bundle 里那份是用户照抄的那一份；子包自己那份留在单装路径上——两处都不能与 schema 漂移。
-    const expected = Object.keys(fields)
-    expect(exampleKeys(bundlePatch)).toEqual(expected)
-    expect(exampleKeys(patch)).toEqual(expected)
+    for (const source of [bundlePatch, patch]) {
+      const lines = exampleLines(source)
+      const base = Math.min(...lines.map(line => line.search(/\S/)))
+      expect(keysOf(lines.filter(line => line.search(/\S/) === base))).toEqual(Object.keys(fields))
+      expect(keysOf(lines.filter(line => line.search(/\S/) > base))).toEqual(Object.keys(thresholdFields))
+    }
   })
 })
 

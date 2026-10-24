@@ -62,8 +62,10 @@ const BIN_NAME = 'dsh-system-one-profile-fixture'
 /** 产物验收与装载断言的前置：构建在门禁里，不在夹具里。 */
 const builtEntries = [join(packageDir, 'lib/index.js'), join(channelDir, 'lib/index.js')]
 
-/** `FiberState` 是 const enum，不能运行时具名导入；只镜像本文件断言的那一种状态。 */
+/** `FiberState` 是 const enum，不能运行时具名导入；只镜像本文件断言的这两种状态。 */
 const ACTIVE = 2 as FiberState.ACTIVE
+/** 通道行等不到服务时停在这一态——不是 active，也不是失败。 */
+const PENDING = 0 as FiberState.PENDING
 
 /** 一行 patch 里本文件用到的字段（`mountRootInclude` 收的 `PatchOptions` 的那个形状）。 */
 interface RowPatch {
@@ -219,7 +221,7 @@ beforeAll(() => {
  * 任何位置取，于是从工作副本装载同样是 ACTIVE（假绿）。基点显式给 profile 的 `node_modules`，
  * 那两行的模块只能从安装副本里来。
  * @param overrides - 追加在最后（= `--patch` 那样的启动器层）的 patch：按 id 覆盖或禁用某一行。
- * @returns 已结算的根 context、审计 warning、这次用的完整 patch 列表与该 profile 的组合结果。
+ * @returns 已结算的根 context、审计 warning 与该 profile 的组合结果。
  */
 async function mountProfile(overrides: RowPatch[] = []) {
   const profile = loadProfileDirectory(BIN_NAME, profileDir, join(profileDir, 'package.json'))
@@ -241,7 +243,7 @@ async function mountProfile(overrides: RowPatch[] = []) {
   )
   await ctx.get('loader')?.await()
   await auditStartupEntries(ctx, BIN_NAME, line => warnings.push(line))
-  return { ctx, warnings, profile, patches }
+  return { ctx, warnings, profile }
 }
 
 /** 装载树里某一行的 entry：被禁用时 entry 还在，但没有 fiber。 */
@@ -264,6 +266,8 @@ async function askThroughTool(ctx: Context): Promise<ProviderRequest[]> {
       // 工具体只读 `signal`；其余字段（callId、agent、token…）是执行器的账，夹具不需要编。
       { signal: new AbortController().signal } as unknown as ToolRunContext,
     )
+    // 题面真的被工具转成契约的映射送进了接入层：provider 收到的题里有那一题。
+    expect(provider.calls[0]?.questions[TOOL_QUESTION.id]).toMatchObject({ type: 'boolean' })
     expect(value).toMatchObject({ answers: ANSWERS })
   } finally {
     dispose()
@@ -361,7 +365,7 @@ describe('真实 profile 装载', () => {
       const channel = row(disabled.ctx, CHANNEL_ROW_ID)
       // 没有被禁用，只是依赖的服务不在：不是 active，也没有留下半注册的工具。
       expect(channel?.disabled).toBe(false)
-      expect(channel?.fiber?.state).not.toBe(ACTIVE)
+      expect(channel?.fiber?.state).toBe(PENDING)
       expect(disabled.ctx.tools.get(TOOL_NAME)).toBeUndefined()
       // 不静默：启动审计点名这一行在等接入层的服务。
       expect(disabled.warnings.join('\n')).toContain(CHANNEL_ROW_ID)
