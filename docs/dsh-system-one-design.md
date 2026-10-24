@@ -164,7 +164,7 @@
 ### 总开关怎样即时生效
 
 - **触发**：`apply` 监听 `ctx.on('loader/volatile-update')`，只在路径里有 `enabled` 或 `target` 时重算。`target` 也算，因为「开着却没选条目」要在运行时收起来、补上后再打开。事件由 loader 把 volatile 新值提交进运行中的 fiber **之后**派发（`vendor/loader/src/config/entry.ts` 的 `_commitVolatile`）；监听器抛错只被宿主记日志，写入不回滚。
-- **换注册**：一批注册放进数组——`ctx.tools.register`、`ctx.systemPrompt.section`、`ctx.inject(['skills'], …)` 各是／返回一个 disposer；换开关时先整批 dispose 再按新状态建，`apply` 本身不重跑。已经开着时换 `target` 不重建这一批（工具体每次调用现读 `target`）。
+- **换注册**：一批注册放进数组——`ctx.tools.register` 与 `ctx.systemPrompt.section` 各返回一个 disposer，`ctx.inject(['skills'], …)` 返回一条纤维，包一层它的 `dispose` 一起放进去；换开关时先整批 dispose 再按新状态建，`apply` 本身不重跑。已经开着时换 `target` 不重建这一批（工具体每次调用现读 `target`）。
 - **技能纤维**：技能注册表是可选依赖，注册放在独立的 `ctx.inject(['skills'], …)` 纤维里；这条纤维属于那一批注册，关掉时随之 dispose、技能从注册表消失，再打开时重建。重复创建会撞技能名（注册表 warn 并忽略），所以必须真的释放旧纤维。
 - **运行时「开着却没选条目」**：装载期这条组合按规格抛错；运行时它只可能来自手改配置（页面不允许从关翻到开），值已经提交进 fiber、抛不回去，所以插件保持关闭并记一条日志，等下一次改动。`target` 指向已删条目不算这一类：配置保留，调用期点名 id 报错。
 - **验证状态**：`channel.spec.ts` 的「总开关热切换」用 `{ get }` 替身加手发事件，覆盖开→关、关→开、连开关后各恰好一份、技能子系统缺席、运行时空条目、已删条目仍能关。真实 loader 的 volatile 提交语义由宿主 `scripts/loader-volatile-update.spec.ts` 覆盖，本仓接入层的 `tests/system-one.spec.ts`、`tests/volatile-update.spec.ts` 是同一条通路的先例。真实 profile 里的外观与同会话生效按人工核对（`.scratch/dsh-system-one/manual-check-09.md`）。
