@@ -6,5 +6,8 @@
     // 工具执行上下文里出现 AbortSignal，构建配置需要显式带上 node 的类型。
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // 浏览器半由 esbuild 打成一个闭包工厂产物（`scripts/build-client.mjs`），不走 tsc 直出 `lib/`；它的类型由
+  // `tsconfig.typecheck.json` 覆盖。
+  "exclude": ["src/client/**"]
 }

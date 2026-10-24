@@ -1,6 +1,6 @@
 # dsh-system-one 设计
 
-状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置、两个 provider（`systemone`、`openai`）、接入层的条目页与决策通道子插件的宿主半（工具、技能、两档引导、开关、阈值）都已落地，通道的页面与 bundle 多行复验仍未开工（范围见「当前范围与非目标」，机制见「决策通道」）。远程面不做。
+状态：第一步（服务名、声明合并、请求/结果类型、注册表）已实装；第二步的条目配置、两个 provider（`systemone`、`openai`）、接入层的条目页与决策通道子插件（宿主半与它自己的页面）都已落地，只剩 bundle 的多行装载复验（范围见「当前范围与非目标」，机制见「决策通道」）。远程面不做。
 
 一句话：把**带类型的题面**交给某个决策模型，拿回**带概率的答案**。这一层不产出内容，也不决定答案怎么用。术语见 `CONTEXT.md` 的「决策模型接入」。
 
@@ -146,6 +146,12 @@
 
 **通道的页面**（客户端半）管三件事：选当前条目（选项跨命名空间读条目页那份 `entries`）、切引导档位、开/设阈值。跨命名空间只读不写——写没有先例。
 
+落地时的三条口径（都进了 `packages/dsh-system-one-channel/tests/client.spec.tsx` 的判据）：
+
+- **只写改过的字段**：三项都是 volatile，一次 `mutate` 只提交本次改动过的那几个。与当前配置逐项比对、不碰没动过的项，是因为最要紧的一种局面：条目被删掉之后下拉里没有能匹配当前值的选项，此时照草稿整份回写会把一项使用者没碰过的设置清空。当前值不在选项里时，页面把它原样补成一项显示出来，不补造空值。
+- **门槛的数值在草稿里留原始文本**：`<input type="number">` 按 `Number()` 收值，敲下 `0.` 那一瞬会被打回 `0`、小数点再也打不进去；合法性与 0–1 范围在保存时一次判定，越界报一句话、一条都不写。
+- **下拉的值是条目 `id`、显示文本可以重复**：重名的显示文本追加 `id` 后四位（「本地 SGLang（3f9c）」）；一条条目都没有时给出「先到条目页登记」的那句话，而不是一个空白下拉。总开关 `enabled` 不在页面上：宿主只接受 volatile 路径的写入，它也不是按次现读的字段。
+
 ## 已裁决的取舍
 
 - **远程面不做**（理由见上）：设置页改从配置命名空间读，注册表不需要远程面，`@Remote` 标记、typert 的生成产物与带生成器的流水线因此都不进来。
@@ -177,7 +183,7 @@
 
 1. **provider 实现**（接入层内）：`entries` 在装载时建条目并注册，两个 provider 都已落地。`systemone` 按「字段与后端对照」与「provider 怎么区分两家的行为」做映射与拒绝规则——`instructions` 非空抛错、富 `levels` 按 `legend` 回显核对、`labelMass` 按响应字段读并在缺席时归一到 1.0、`legend` 长度校验、后端错误码与限额连原文包成 provider 级失败；`openai` 按「`openai` provider（OpenAI Decisions API）」那节接官方载荷。两者共用同一层 HTTP 与凭据：凭据按 `apiKeyEnv` 经 `ctx.credentials` 解析（`ctx.get` 取可选服务，没装凭据子系统时用到才报错），以 `Authorization: Bearer` 放进请求。
 2. **接入层的条目页**（客户端半，已落地）：设置页里的「决策模型」页签，增删改条目，密钥写凭据域；口径见「条目配置与设置页」末四条。
-3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值（宿主半已落地，在独立包里），以及它自己的页面（未开工）。
+3. **决策通道子插件**（bundle 的新行）：工具、技能、两档引导、默认关闭的开关、可选阈值，以及它自己的页面（宿主半与页面都已落地，在独立包里）。
 
 不在第二步：远程面（不做）、mock、通用 HTTP、MCP 面、策略插件。其余非目标见上面「做什么、不做什么」。
 
@@ -192,4 +198,5 @@
 - 决策通道（宿主半在 `packages/dsh-system-one-channel/tests/`）：工具面（一个 `ask`、`target` 不进参数、题面与答案原样透传）、开关（关掉即工具不存在且 guidance 段消失）、两档引导（第二档比第一档只多那一句）、阈值语义（两种确定性公式、算不出时按 `abstain`）、配置非法在装载期点名键名各有可跑用例；技能注册表的缺席由「不装它也能挂起来」那一条覆盖。
 - 条目页（客户端半）：`tests/client.spec.tsx` 与 `tests/client-packaging.spec.ts` 把它纳入门禁——页签注册在 `settings.plugins.tab`、`whileServed` 与写回用的都是 patch 行 id `dsh-system-one`、保存是一次 `{ op: 'set', path: ['entries'] }` 的原子写入（一轮增删改结束后每条写入都落在 `entries` 上）、密钥进凭据域且配置里只有引用名（负向断言：写回值里不出现密钥）、生成的 `id` 落在凭据引用名的字符集里、协议下拉的两个取值等于 `Kind` 枚举、宿主拒绝／传输层失败／凭据拒绝各报一句话；产物是装载器认的闭包工厂（`dsh.client`、`exports['./client']`、`locale/*.json` 都在）。**真实 profile 里的视觉核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-04.md`）。
 - 真实 profile 装载：`tests/profile-load.spec.ts` 把装载路径纳入门禁——`pnpm pack` 进临时 profile、按 `dsh.profile.bundles` 组合出这一行、用真实 Loader 启动并跑启动审计，断言该行 ACTIVE 且 `ctx.systemOne` 注册假 provider 后 `ask` 成功；profile 里装不上本包时该 bundle 被跳过、原因点名本包（复核记录见 `.scratch/dsh-system-one/profile-load.md`）。bundle 加上通道行后**仍需**复验多行 patch。
+- 通道页（客户端半，在 `packages/dsh-system-one-channel/tests/`）：`client.spec.tsx` 与 `client-packaging.spec.ts` 把它纳入门禁——写回命名空间等于本行 patch 的 id `dsh-system-one-channel`（与宿主半的 `name` 同一个字符串）、只读命名空间等于接入层那一行的 id、页签注册在 `settings.plugins.tab` 且 `whileServed` 只跟自己的命名空间走、下拉的值是条目 `id`（重名追加后四位、空列表给出去哪登记的提示）、三件事各写回自己的命名空间且整个装配里没有一笔写到另一个命名空间（负向断言）、门槛关闭时数值控件禁用而越界一条都不写、宿主拒绝与传输层失败各报一句话、页面文案不出现参数名与机制名；产物是装载器认的闭包工厂。**真实 profile 里的视觉与文案核对待用户执行**（核对记录见 `.scratch/dsh-system-one/manual-check-06.md`）。
 - 端到端（真实 vllm/SGLang 端点）列为「有端点才做」，不进验收门禁。
