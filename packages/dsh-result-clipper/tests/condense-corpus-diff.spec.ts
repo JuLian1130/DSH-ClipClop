@@ -27,9 +27,8 @@
  */
 
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { createInterface } from 'node:readline'
 import { describe, expect, it } from 'vitest'
 import {
   CONDENSE_DEFAULTS,
@@ -41,6 +40,7 @@ import { builtinRules, compileRules, condenseRuleOf, dispatchFacts, selectFamily
 import { ENTRY_RESERVE } from '../src/entry.ts'
 import { GIT_DIFF_DEFAULTS } from '../src/gitdiff.ts'
 import { RAW_DUMP_DEFAULTS, SED_WINDOW_DEFAULTS } from '../src/glance.ts'
+import { readCorpusLines } from './helpers/corpus-lines.ts'
 
 /** `extract_calls.py` 的 `--out` 默认值；语料在本机就该跑，不在本机就跳过。 */
 const DEFAULT_CORPUS = '/tmp/dsh-condense'
@@ -133,9 +133,7 @@ function trueCountsPerFile(text: string): Array<[number, number]> {
  * @returns 读完后 resolve。
  */
 async function eachRow(file: string, onRow: (row: CorpusRow) => void): Promise<void> {
-  const input = createReadStream(file, { encoding: 'utf8' })
-  const lines = createInterface({ input, crlfDelay: Infinity })
-  for await (const line of lines) {
+  for await (const line of readCorpusLines(file)) {
     if (line === '') continue
     onRow(JSON.parse(line) as CorpusRow)
   }

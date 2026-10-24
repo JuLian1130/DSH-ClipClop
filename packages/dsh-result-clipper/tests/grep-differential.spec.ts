@@ -18,7 +18,6 @@
 import { execFileSync } from 'node:child_process'
 import {
   chmodSync,
-  createReadStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -29,10 +28,10 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { trimGrepLongLines } from '../src/grepline.ts'
+import { readCorpusLines } from './helpers/corpus-lines.ts'
 import { replayArgsOf } from './helpers/grep-replay.ts'
 
 /** 语料根：环境变量优先，其次本机默认路径（与 `tests/condense-corpus.spec.ts` 同一口径）。 */
@@ -187,7 +186,7 @@ async function* corpusRows(root: string): AsyncGenerator<CorpusRow> {
   if (!existsSync(sessions)) return
   for (const file of readdirSync(sessions)) {
     if (!file.endsWith('.jsonl')) continue
-    const lines = createInterface({ input: createReadStream(join(sessions, file)), crlfDelay: Infinity })
+    const lines = readCorpusLines(join(sessions, file))
     for await (const line of lines) {
       if (line === '') continue
       let parsed: unknown
