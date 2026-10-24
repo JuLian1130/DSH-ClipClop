@@ -10,8 +10,9 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import type { Fiber } from '@deepseek-ai/cordis'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
@@ -470,21 +471,88 @@ describe('声明了目标就跳过 memo', () => {
 })
 
 /**
- * 「真单关」最小宿主：原生 `bash` / `web_fetch` 都不在表里，工具以外的服务用桩（工具本身不执行，桩有形即可）。
- * @param options - 测试接缝：接管工厂表（缺省走生产实现）与启用判据。
- * @returns context 与安装时收到的挂载记录。
+ * 假的 `appReady`：语义照 `apps/cli/src/profile-boot.ts` 的 `createAppReady`——已 ready 时 `onReady` 在调用内
+ * 同步回调、返回空 disposer；未 ready 时先登记，`commit()` 时按登记顺序各回调一次。
  */
-async function takeoverHost(options: {
-  takeover?: Record<string, (ctx: Context) => unknown>
-  enabled?: () => boolean
-} = {}): Promise<{ ctx: Context, reports: MountRecord[] }> {
+class FakeAppReady {
+  #ready = false
+  readonly #listeners = new Set<() => void>()
+
+  /**
+   * @param listener - boot 成功后要跑的一次性回调。
+   * @returns 撤销登记（已 ready 时没有可撤销的东西）。
+   */
+  onReady(listener: () => void): () => void {
+    if (this.#ready) {
+      listener()
+      return () => {}
+    }
+    this.#listeners.add(listener)
+    return () => { this.#listeners.delete(listener) }
+  }
+
+  /** 模拟 boot 成功：登记的监听器各跑一次，之后再登记的立即跑。 */
+  commit(): void {
+    if (this.#ready) return
+    this.#ready = true
+    for (const listener of [...this.#listeners]) listener()
+    this.#listeners.clear()
+  }
+}
+
+/**
+ * 「真单关」最小宿主：原生 `bash` / `web_fetch` 都不在表里，工具以外的服务用桩（工具本身不执行，桩有形即可）。
+ * @returns 只差被测插件的 context。
+ */
+async function takeoverContext(): Promise<Context> {
   const ctx = new Context()
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(TokenMeter)
   ctx.provide('web', {} as never)
   ctx.provide('shell', { sandboxMode: undefined } as never)
   ctx.provide('shellEnv', {} as never)
+  return ctx
+}
+
+/**
+ * 装一个**可单独释放**的插件实例：重载测试要模拟「旧实例连同它挂的工具一起 dispose，新实例重装」。
+ * @param ctx - 宿主 context。
+ * @param reports - 接收挂载记录。
+ * @param options - 测试接缝：启用判据与接管工厂表。
+ * @returns 实例的 fiber；`dispose()` 即卸载。
+ */
+async function scopedInstance(
+  ctx: Context,
+  reports: MountRecord[],
+  options: { enabled?: () => boolean, takeover?: Record<string, (ctx: Context) => unknown> } = {},
+): Promise<Fiber> {
+  const fiber = ctx.plugin({
+    // 与被测插件同样的 inject：`ctx.tools` 不加声明在子 fiber 上取不到。
+    inject: ['tools'],
+    apply: (inner: Context) => {
+      installExtractArg(inner as never, options.enabled ?? (() => true), (record) => { reports.push(record) }, options.takeover)
+    },
+  })
+  await fiber
+  return fiber
+}
+
+/**
+ * 装好宿主并装上被测插件。
+ * @param options - 测试接缝：接管工厂表（缺省走生产实现）、启用判据、假 `appReady`，以及装插件**之前**的钩子。
+ * @returns context 与安装时收到的挂载记录。
+ */
+async function takeoverHost(options: {
+  takeover?: Record<string, (ctx: Context) => unknown>
+  enabled?: () => boolean
+  appReady?: FakeAppReady
+  before?: (ctx: Context) => void
+} = {}): Promise<{ ctx: Context, reports: MountRecord[] }> {
+  const ctx = await takeoverContext()
+  // 与真实部署同序：`appReady` 在树装载前由 launcher 提供，插件 apply 时才去取。
+  if (options.appReady) ctx.provide('appReady', options.appReady as never)
   const reports: MountRecord[] = []
+  options.before?.(ctx)
   installExtractArg(ctx as never, options.enabled ?? (() => true), (record) => { reports.push(record) }, options.takeover)
   return { ctx, reports }
 }
@@ -621,6 +689,136 @@ describe('装载：agent 创建时按 agent 作用域遮蔽', () => {
 
     expect(ctx.tools.get('bash')).toBeUndefined()
     expect(Object.keys(ctx.tools.get('read', agent)!.parameters?.properties ?? {})).not.toContain('extract')
+    expect(reports).toHaveLength(0)
+    await ctx.fiber.dispose()
+  })
+
+  it('插件重载后应用已 ready：立即补挂，活会话不建新 agent 也重新看得到 bash / web_fetch', async () => {
+    const ctx = await takeoverContext()
+    const ready = new FakeAppReady()
+    ctx.provide('appReady', ready as never)
+    const reports: MountRecord[] = []
+    const first = await scopedInstance(ctx, reports)
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const agent = await harness.create(SessionId('reload-1'), { provider: 'mock', model: 'mock' })
+    expect(ctx.tools.get('bash')).toBeDefined()
+
+    // 重载：旧实例连同它挂的工具一起释放；应用没有重启，`appReady` 仍是 ready。
+    await first.dispose()
+    ready.commit()
+    expect(ctx.tools.get('bash')).toBeUndefined()
+
+    await scopedInstance(ctx, reports)
+    // 补挂是异步的（`ctx.plugin` 交回的 fiber），等它落地即可——这个等待里没有 agent 创建。
+    await vi.waitFor(() => {
+      for (const name of ['bash', 'web_fetch']) {
+        const mounted = ctx.tools.get(name)
+        expect(mounted, `${name} 应当在重载后立即挂回来`).toBeDefined()
+        expect(Object.keys(mounted!.parameters?.properties ?? {})).toContain('extract')
+      }
+    })
+    // 不建新 agent，既有 agent 的工具视角也重新含 bash（会话侧验收）。
+    expect(ctx.tools.get('bash', agent)).toBeDefined()
+    // 没有第二条挂载记录：记录仍是首个 agent 时点的那条。
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.tools).toMatchObject({ bash: 'takeover', web_fetch: 'takeover' })
+    await ctx.fiber.dispose()
+  })
+
+  it('冷启动：appReady 未 ready 时装载期不抢挂，commit 后补挂且挂载记录仍取首个 agent 时点', async () => {
+    const ready = new FakeAppReady()
+    const { ctx, reports } = await takeoverHost({ appReady: ready })
+    expect(ctx.tools.get('bash'), '装载未完成时不该挂').toBeUndefined()
+    expect(reports).toHaveLength(0)
+
+    ready.commit()
+    await vi.waitFor(() => { expect(ctx.tools.get('bash')).toBeDefined() })
+    expect(Object.keys(ctx.tools.get('web_fetch')!.parameters?.properties ?? {})).toContain('extract')
+
+    const harness = await mountAgentLoopTestHarness(ctx)
+    await harness.create(SessionId('cold-ready'), { provider: 'mock', model: 'mock' })
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.tools).toMatchObject({ bash: 'takeover', web_fetch: 'takeover' })
+    await ctx.fiber.dispose()
+  })
+
+  it('ready 回调里的挂载抛错被吞掉：commit 调用方不收到异常，下一个 agent 仍会重试', async () => {
+    const ready = new FakeAppReady()
+    const planned = takeoverPlan(process.platform)
+    let attempts = 0
+    const takeover: Record<string, (ctx: Context) => unknown> = {}
+    for (const name of planned) takeover[name] = () => { attempts += 1; throw new Error('ready mount exploded') }
+    const { ctx, reports } = await takeoverHost({ appReady: ready, takeover })
+    const warned: string[] = []
+    ctx.logger.exporter({
+      levels: { default: 99 },
+      export: (message) => {
+        if (message.type === 'warn' && String(message.args[0]).includes('mounting')) warned.push(String(message.args[0]))
+      },
+    })
+
+    expect(() => ready.commit()).not.toThrow()
+    // 失败只告警、不挂工具；commit 已经返回（异常没有从监听器漏出去）。
+    await vi.waitFor(() => { expect(warned).toHaveLength(planned.length) })
+    expect(attempts).toBe(planned.length)
+    expect(ctx.tools.get('bash')).toBeUndefined()
+
+    // 票 28 的重试语义不变：下一个 agent 创建时还会再试，且创建本身不失败。
+    const harness = await mountAgentLoopTestHarness(ctx)
+    await harness.create(SessionId('ready-throw'), { provider: 'mock', model: 'mock' })
+    expect(attempts).toBe(planned.length * 2)
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.tools).toMatchObject({ bash: 'absent' })
+    await ctx.fiber.dispose()
+  })
+
+  it('插件在 ready 之前被卸掉时，onReady 的挂载回调随实例撤销', async () => {
+    const ready = new FakeAppReady()
+    const ctx = await takeoverContext()
+    ctx.provide('appReady', ready as never)
+    const reports: MountRecord[] = []
+    const first = await scopedInstance(ctx, reports)
+    await first.dispose()
+
+    // 悬空回调会在已释放的 context 上挂载；撤销了就不该有任何动作。
+    ready.commit()
+    await Promise.resolve()
+    expect(ctx.tools.get('bash')).toBeUndefined()
+    expect(reports).toHaveLength(0)
+    await ctx.fiber.dispose()
+  })
+
+  it('原生工具还在的部署：重载路径立即判断也只看到"原生在"，不接管、不就地改写原生定义', async () => {
+    const ready = new FakeAppReady()
+    ready.commit()
+    const { ctx, reports } = await takeoverHost({
+      appReady: ready,
+      before: (ctx) => {
+        ctx.tools.register(textTool('bash', LONG_BODY))
+        ctx.tools.register(textTool('web_fetch', LONG_BODY))
+      },
+    })
+    for (const name of ['bash', 'web_fetch']) {
+      expect(Object.keys(ctx.tools.get(name)!.parameters?.properties ?? {}), `${name} 不该被接管改写`).not.toContain('extract')
+    }
+
+    const harness = await mountAgentLoopTestHarness(ctx)
+    const agent = await harness.create(SessionId('reload-native'), { provider: 'mock', model: 'mock' })
+    expect(Object.keys(ctx.tools.get('bash', agent)!.parameters?.properties ?? {})).toContain('extract')
+    expect(reports[0]!.tools).toMatchObject({ bash: 'shadow', web_fetch: 'shadow' })
+    await ctx.fiber.dispose()
+  })
+
+  it('摘要关着时，已 ready 的重载路径同样不挂载、不写挂载记录', async () => {
+    const ready = new FakeAppReady()
+    ready.commit()
+    const { ctx, reports } = await takeoverHost({ appReady: ready, enabled: () => false })
+    await Promise.resolve()
+    expect(ctx.tools.get('bash')).toBeUndefined()
+    expect(ctx.tools.get('web_fetch')).toBeUndefined()
+
+    const harness = await mountAgentLoopTestHarness(ctx)
+    await harness.create(SessionId('reload-off'), { provider: 'mock', model: 'mock' })
     expect(reports).toHaveLength(0)
     await ctx.fiber.dispose()
   })
