@@ -2,7 +2,7 @@
  * 票 32：语料行只按 `\n` 切。
  *
  * 护栏不依赖 `/tmp` 语料是否在场：临时文件里放一行含 `U+2028` 的合法 JSON，`readline` 会把它切成两截，
- * 本读取器必须整行返回且能 `JSON.parse`；无结尾换行的末行也要返回。
+ * 本读取器必须整行返回且能 `JSON.parse`；超过读块的长行要跨块拼接；无结尾换行的末行也要返回。
  *
  * @module
  */
@@ -41,6 +41,14 @@ describe('readCorpusLines', () => {
     const lines = await collect(corpusFile(`${row}\n`))
     expect(lines).toEqual([row])
     expect(JSON.parse(lines[0] as string)).toEqual({ callId: 'x', text: '前\u2028后' })
+  })
+
+  it('超过一个读块的长行整行返回（跨块残段拼接）', async () => {
+    // 读块 64 KiB；语料最长行 139,420 字节，跨块拼接是真实路径，不能只测块内的小行。
+    const row = JSON.stringify({ callId: 'long', text: 'x'.repeat(200_000) })
+    const lines = await collect(corpusFile(`${row}\n`))
+    expect(lines).toEqual([row])
+    expect(JSON.parse(lines[0] as string)).toEqual({ callId: 'long', text: 'x'.repeat(200_000) })
   })
 
   it('没有结尾换行的末行照常返回', async () => {
