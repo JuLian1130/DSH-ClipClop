@@ -51,23 +51,23 @@
 题面里的可选输入：
 
 - `instructions`（整次请求）：放在所有题之前的一段共享上下文；vllm 的 `/v1/systemone` 与 `deepseek` 支持它（后者由 provider 渲染进题面），SGLang 没有（固定 prompt 的模型会 400）。发给 SGLang 的 provider 收到非空值必须抛错——SGLang 会静默忽略未知顶层字段，不能让它悄悄丢掉。`systemone` provider 的落法见下面「provider 怎么区分两家的行为」：响应里没有它的回显，所以非空即抛错。
-- `optionDescriptions`（是非题与单选）：把两侧/各选项的含义单列出来；缺席表示含义写在 `instructions` 里。两边都支持，且都按字符串忠实渲染。是非题的 key 用 `true`/`false`，与答案的 `probability` 对齐，不用后端的 `yes`/`no`。
-- `levels`（量表）：每档是 `Level`（字符串或 JSON 对象/数组）。字符串是两边的公共集；富值只有 SGLang 原样保留，vllm 会 `str()` 化。`systemone` provider 不预判后端是哪一家：富档位照发，靠响应回显的 `legend` 逐档核对，对不上就抛错点 `levels`。
-- `images`（整次请求）：图片 URL 或 data URL；两边都收字符串。模型不支持图片时由后端报错。
-- `chatTemplateKwargs`（整次请求）：传给 chat template 的参数。两边都收，但都会按自己的模板规则校验或拒绝；vllm 的固定 prompt 模型可能忽略它，所以它是 **best-effort**，契约不据此保证效果。
+- `optionDescriptions`（是非题与单选）：把两侧/各选项的含义单列出来；缺席表示含义写在 `instructions` 里。三家都支持（`deepseek` 由 provider 渲染进题面），且都按字符串忠实渲染。是非题的 key 用 `true`/`false`，与答案的 `probability` 对齐，不用后端的 `yes`/`no`。
+- `levels`（量表）：每档是 `Level`（字符串或 JSON 对象/数组）。字符串是三家共有的最小集；富值只有 SGLang 原样保留，vllm 会 `str()` 化，`deepseek` 落成 JSON 文本并原样回显。`systemone` provider 不预判后端是哪一家：富档位照发，靠响应回显的 `legend` 逐档核对，对不上就抛错点 `levels`。
+- `images`（整次请求）：图片 URL 或 data URL；三家都收字符串（`deepseek` 落成图片内容块）。模型不支持图片时由后端报错。
+- `chatTemplateKwargs`（整次请求）：传给 chat template 的参数。`systemone` 的两家都收，但都会按自己的模板规则校验或拒绝；vllm 的固定 prompt 模型可能忽略它，所以它是 **best-effort**，契约不据此保证效果。`deepseek` 没有位置，非空抛错。
 
 答案的可信度信号：
 
-- `confidence`：provider 自报的集中程度，**不是答案正确的概率**。定义随 provider 而变（vllm 是选中标签在全词表上的概率；SGLang 是 TypeSafe adapter 的归一化公式，忽略标签外的质量），**不可跨 provider 比较**；是非题在 SGLang 上缺席。
+- `confidence`：provider 自报的集中程度，**不是答案正确的概率**。定义随 provider 而变（vllm 是选中标签在全词表上的概率；SGLang 是 TypeSafe adapter 的归一化公式，忽略标签外的质量），**不可跨 provider 比较**；是非题在 SGLang 上缺席。`deepseek` 是重归一前的域内最大概率。
 - `labelMass`：答案标签在整个词表上的概率质量，0–1。vllm 放在每题的 `diagnostics.label_mass`，SGLang 放在答案的 `x_label_mass`；SGLang 在只对允许项打分的 checkpoint（Clef/joint schema、decision checkpoint）上省略，`systemone` provider 遇到省略时按 1.0 归一化。契约里它是可选项，缺席表示 provider 没报。`deepseek` 报的是 top-20 里可见标识符的质量，因此是**整词表质量的下界**（见「`deepseek` provider」）。
-- `argmaxIsLabel`：读位置的最高概率 token 是否属于答案标签；只有 vllm 测得到，SGLang 缺席。缺席不是 `true`/`false`，消费者不能把它当默认值。
-- `legend`：量表答案回显“第 i 档的值”，与请求的 `levels` 同序；vllm 与 SGLang 都回，只是 SGLang 能回 JSON 原值、vllm 只回字符串。provider 把它转成数组，长度必须等于 `levels`。
+- `argmaxIsLabel`：读位置的最高概率 token 是否属于答案标签；vllm 与 `deepseek` 测得到，SGLang 缺席。缺席不是 `true`/`false`，消费者不能把它当默认值。
+- `legend`：量表答案回显“第 i 档的值”，与请求的 `levels` 同序；三家都回：`deepseek` 原样回显请求的 `levels`，SGLang 能回 JSON 原值，vllm 只回字符串。provider 把它转成数组，长度必须等于 `levels`。
 
 失败语义：**provider 级失败抛错**（端点不可达、凭据不对、后端 400/422/501）；**单题级的答失败或漏答都不算整次失败**——该题在 `answers` 里缺席，**这是唯一的保证**。provider 若无法隔离单题失败（vllm/SGLang 的整请求校验就是如此），只能整次抛错；缺席的保证只在 provider 能隔离时成立。`warnings` 是 provider 的自报项（`Warning.questionId` 可选，因为警告也可能针对整次调用，例如输入被截断），服务只透传、**不为漏答补写**：漏答若要有解释，由 provider 自己给。消费者必须处理缺席。
 
 **不支持的可选字段必须抛错，不得静默忽略**：请求字段（`instructions`、富 `levels` 等）在某个 provider 上无法如实表达时，provider 要报错并点名字段；响应字段（`labelMass`、`argmaxIsLabel`、`legend`）是 optional，缺席有明确含义，不是某个默认值。
 
-`state` 是**必填**字段，但不是每个后端都能表达任意 JSON：SGLang 只收字符串/对象/数组。provider 遇到 `null` 或标量时同样抛错并点名字段——不字符串化、不包成对象。把它悄悄改写成另一种形状等于换掉判断依据，比报错更糟。`systemone` provider 对 `state` **原样透传**：拒绝由后端发出（SGLang 回 422，`loc` 里点着该字段），provider 连原文包成 provider 级失败——客户端不预先猜后端是哪一家。
+`state` 是**必填**字段，但不是每个后端都能表达任意 JSON：SGLang 只收字符串/对象/数组。`systemone` provider 遇到 `null` 或标量时抛错并点名字段——不字符串化、不包成对象（把它悄悄改写成另一种形状等于换掉判断依据，比报错更糟）；它对 `state` **原样透传**，拒绝由后端发出（SGLang 回 422，`loc` 里点着该字段），provider 连原文包成 provider 级失败——客户端不预先猜后端是哪一家。`deepseek` 没有这个限制：任意 JSON 都序列化进题面。
 
 ### 字段与后端对照
 
@@ -81,6 +81,8 @@
 | 富 `levels` | 会 `str()` 化 | 原样保留 | `legend` 回显不符时抛错点 `levels`（回显缺席则无从核对） |
 | `chatTemplateKwargs` | `chat_template_kwargs`；固定 prompt 模型可能忽略 | `chat_template_kwargs`；Clef 拒绝非空 | 后端 400；标注 best-effort |
 | `legend` | score 答案的 `legend`（字符串） | score 答案的 `legend`（可为 JSON） | 长度不符时 provider 抛错 |
+
+（`deepseek` 不在本表：它不走 `/v1/systemone`，字段落法见下面的「`deepseek` provider」一节。）
 
 后端限额与边界由**后端**校验（provider 不抄一份到客户端：那是两家的分叉点，抄一份就必然过时或误判），provider 把 4xx/5xx 连后端原文包成 provider 级失败，契约不承诺统一：题数（vllm 64；SGLang 无文档上限）、choice 选项（vllm 26，d3 255；SGLang 1–255，>26 需 tokenizer 支持双字母 label）、score 档位（vllm 2–10；SGLang 1–10）、`state`（vllm 任意 JSON；SGLang 只收字符串/对象/数组，`null`/标量 422）、question id（vllm 非空；SGLang 允许空）、`model`（vllm 可选；SGLang 必填）。
 
