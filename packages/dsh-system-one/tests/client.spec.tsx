@@ -82,9 +82,13 @@ function field(label: string): HTMLElement {
   return screen.getAllByLabelText(new RegExp(`^${label}`)).at(-1)!
 }
 
-/** 页面上只读的 id 输入框。 */
-function idInputs(container: HTMLElement): readonly HTMLInputElement[] {
-  return [...container.querySelectorAll<HTMLInputElement>('input[readonly]')]
+/** 卡片头上那行 id 的值：`条目 id: <值>`。 */
+function idTexts(container: HTMLElement): readonly string[] {
+  const prefix = `${zh.id}: `
+  return [...container.querySelectorAll('span')]
+    .map(span => span.textContent ?? '')
+    .filter(text => text.startsWith(prefix))
+    .map(text => text.slice(prefix.length))
 }
 
 /** 页面上的协议下拉。 */
@@ -135,20 +139,18 @@ describe('条目页：注册面', () => {
 
     expect(screen.getByText(zh.empty)).toBeTruthy()
     expect(screen.getByText(zh.add)).toBeTruthy()
-    expect(idInputs(document.body)).toHaveLength(0)
+    expect(idTexts(document.body)).toHaveLength(0)
   })
 })
 
 describe('条目页：增删改', () => {
-  it('新增：id 立刻生成且只读，保存把整份数组一次写回', async () => {
+  it('新增：id 立刻生成并显示，保存把整份数组一次写回', async () => {
     const fixture = await mounted()
     const { container } = renderPage(fixture)
 
     fireEvent.click(screen.getByText(zh.add))
-    const [idInput] = idInputs(container)
-    expect(idInput?.readOnly).toBe(true)
-    expect(idInput).toBe(screen.getByLabelText(zh.id))
-    expect(idInput?.value).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/)
+    const [idText] = idTexts(container)
+    expect(idText).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/)
     fillRow({ label: '本地小模型', model: 'qwen3-4b', baseUrl: 'http://127.0.0.1:8000' })
     fireEvent.click(screen.getByText(zh.save))
 
@@ -158,7 +160,7 @@ describe('条目页：增删改', () => {
     expect(ops[0]!.op).toBe('set')
     expect(ops[0]!.path).toEqual(['entries'])
     expect(savedEntries(fixture)).toEqual([{
-      id: idInput!.value,
+      id: idText,
       label: '本地小模型',
       kind: 'systemone',
       baseUrl: 'http://127.0.0.1:8000',
@@ -173,17 +175,19 @@ describe('条目页：增删改', () => {
 
     fireEvent.click(screen.getByText(zh.add))
     fireEvent.click(screen.getByText(zh.add))
-    const [first, second] = idInputs(container)
-    expect(first!.value).not.toBe(second!.value)
+    const initial = idTexts(container)
+    expect(initial).toHaveLength(2)
+    expect(initial[0]).not.toBe(initial[1])
     for (const input of screen.getAllByLabelText(new RegExp(`^${zh.label}`))) {
       fireEvent.change(input, { target: { value: '本地 SGLang' } })
     }
+    const [first, second] = idTexts(container)
     fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
     const saved = savedEntries(fixture)
     expect(saved.map(entry => entry.label)).toEqual(['本地 SGLang', '本地 SGLang'])
-    expect(saved.map(entry => entry.id)).toEqual([first!.value, second!.value])
+    expect(saved.map(entry => entry.id)).toEqual([first, second])
     // id 撞车的唯一时机是「两行改成同一个名称之后」，避让靠 `edit` 把其它行已用的 id 传进 `newEntryId`；
     // 上面那两行只比「显示 == 写回」，两行拿到同一个 id 也成立，所以这里单独钉一次。
     expect(saved[0]!.id).not.toBe(saved[1]!.id)
@@ -195,7 +199,7 @@ describe('条目页：增删改', () => {
 
     fireEvent.click(screen.getByText(zh.add))
     fillRow({ label: 'Local SGLang' })
-    expect(idInputs(container)[0]!.value).toMatch(/^local_sglang_[0-9]+$/)
+    expect(idTexts(container)[0]).toMatch(/^local_sglang_[0-9]+$/)
     fillRow({ model: 'm', baseUrl: 'http://127.0.0.1:1' })
     fireEvent.click(screen.getByText(zh.save))
     await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
@@ -205,6 +209,7 @@ describe('条目页：增删改', () => {
     fireEvent.click(screen.getByText(zh.save))
     await waitFor(() => { expect(fixture.form.mutations).toHaveLength(2) })
     expect(savedEntries(fixture)[0]!.id).toBe(savedId)
+    expect(idTexts(container)).toEqual([savedId])
   })
 
   it('删除与修改：保存写回的是剩下的条目与改过的字段', async () => {
@@ -215,7 +220,7 @@ describe('条目页：增删改', () => {
     ]
     const { container } = renderPage(fixture, initial)
 
-    expect(idInputs(container).map(input => input.value)).toEqual(['keep', 'drop'])
+    expect(idTexts(container)).toEqual(['keep', 'drop'])
     fireEvent.change(screen.getByDisplayValue('留着的'), { target: { value: '改过的' } })
     fireEvent.click(screen.getAllByText(zh.delete)[1]!)
     fireEvent.click(screen.getByText(zh.save))
@@ -267,14 +272,14 @@ describe('条目页：密钥与失败态', () => {
     const { container } = renderPage(fixture)
 
     fireEvent.click(screen.getByText(zh.add))
-    const [idInput] = idInputs(container)
+    const [idText] = idTexts(container)
     fillRow({ label: '带密钥的', model: 'qwen3-4b', baseUrl: 'http://127.0.0.1:8000', key: 'sk-secret-1' })
     fireEvent.click(screen.getByText(zh.save))
 
     await waitFor(() => { expect(fixture.form.mutations).toHaveLength(1) })
-    expect(fixture.credentials.writes).toEqual([{ ref: idInput!.value, value: 'sk-secret-1' }])
+    expect(fixture.credentials.writes).toEqual([{ ref: idText, value: 'sk-secret-1' }])
     const saved = savedEntries(fixture)
-    expect(saved[0]?.apiKeyEnv).toBe(idInput!.value)
+    expect(saved[0]?.apiKeyEnv).toBe(idText)
     // 负向断言：写回的配置里不出现密钥本身，只有引用名。
     expect(JSON.stringify(saved)).not.toContain('sk-secret-1')
     // 保存成功后密钥输入框清空：值只存在凭据域里，页面上读不回来。
@@ -326,7 +331,7 @@ describe('条目页：密钥与失败态', () => {
     // 一行里六处手能碰到的地方：名称/地址/模型/密钥四个输入框、协议下拉、删除按钮。漏挂一处，
     // 那处敲进去的字照样会被写回返回时的旧快照覆盖。
     const rowControls = (): readonly HTMLInputElement[] =>
-      [...container.querySelectorAll<HTMLInputElement>('section input:not([readonly]), section select, section button')]
+      [...container.querySelectorAll<HTMLInputElement>('section input, section select, section button')]
     expect(rowControls()).toHaveLength(6)
 
     fireEvent.click(screen.getByText(zh.save))
@@ -343,7 +348,7 @@ describe('条目页：密钥与失败态', () => {
     expect(screen.getByText(zh.empty)).toBeTruthy()
 
     fireEvent.click(screen.getByText(zh.add))
-    expect(idInputs(container)).toHaveLength(1)
+    expect(idTexts(container)).toHaveLength(1)
   })
 
   it('写回的传输层失败（mutate reject）同样报错，不静默', async () => {

@@ -1,7 +1,8 @@
 /**
  * 设置页里的「决策模型」页签：管理 `entries` 的增、删、改。
  *
- * 用户填五项（名称、模型、API 地址、协议、API 密钥）；`id` 由页面生成、只读显示，供复制到要用它的地方。
+ * 用户填五项（名称、模型、API 地址、协议、API 密钥）；`id` 由页面生成，卡片头上一行次要文本显示（可选中
+ * 复制），不提供编辑。
  * 密钥不落配置：保存时先写进凭据域，配置里只写引用名 `apiKeyEnv`（默认等于该条目的 `id`）——所以页面上
  * 的密钥输入框是一份「这次要写的值」，保存成功即清空，读不回来也不显示。
  *
@@ -35,7 +36,7 @@ const NO_ENTRIES: readonly Entry[] = []
 
 /** 页面上的一行：配置里的五个字段，加两份不落盘的草稿（密钥与「还没保存过的行」）。 */
 export interface EntryDraft {
-  /** 内部标识：新增时由 {@link newEntryId} 生成，保存后只读。 */
+  /** 内部标识：新增时由 {@link newEntryId} 生成，保存后不再变；页面只显示、不提供编辑。 */
   readonly id: string
   readonly label: string
   readonly kind: Kind
@@ -163,11 +164,8 @@ const SELECT_STYLE = {
   cursor: 'pointer',
 } as const
 
-/** 只读的 id：灰字表示「不用改，复制走就行」。 */
-const READONLY_STYLE = { color: 'var(--dsw-alias-label-secondary)' } as const
-
 /** 卡片头：id 在左、删除在右。 */
-const HEADER_STYLE = { display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 } as const
+const HEADER_STYLE = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } as const
 
 /** 底部按钮行。 */
 const ACTIONS_STYLE = { display: 'flex', gap: 8, padding: '16px 0 0' } as const
@@ -269,11 +267,7 @@ export function EntriesPage({ t, useEntries, saveRows }: EntriesPageProps) {
         // 按位置而不是按 id 作 key：新行的 id 会随名称改写，按 id 作 key 会在改名时重建整块表单、丢掉焦点。
         <section key={index} style={CARD_STYLE}>
           <div style={HEADER_STYLE}>
-            <div style={{ ...FIELD_STYLE, flex: 1 }}>
-              <span style={LABEL_STYLE}>{t('id')}</span>
-              <input readOnly aria-label={t('id')} value={row.id} style={{ ...INPUT_STYLE, ...READONLY_STYLE }} />
-              <span style={HINT_STYLE}>{t('idHint')}</span>
-            </div>
+            <span style={HINT_STYLE}>{t('id')}: {row.id}</span>
             <Button variant="outline" size="sm" disabled={busy} onClick={() => { remove(index) }}>{t('delete')}</Button>
           </div>
           <div style={PAIR_STYLE}>

@@ -31,7 +31,6 @@ export type SystemOneLocaleKey =
   | 'keyHint'
   | 'keyPlaceholder'
   | 'id'
-  | 'idHint'
   | 'delete'
 
 /** 中文文案。 */
@@ -57,7 +56,6 @@ export const zh: Record<SystemOneLocaleKey, string> = {
   keyHint: '只存在本机，不写进配置文件，保存后也读不回来。留空＝不改动密钥：本来没有密钥的条目就不使用密钥，已经存过的会保留原值。',
   keyPlaceholder: '留空＝不改',
   id: '条目 id',
-  idHint: '保存后固定，复制给要用它的地方指名叫这个条目。',
   delete: '删除',
 }
 
@@ -84,6 +82,5 @@ export const en: Record<SystemOneLocaleKey, string> = {
   keyHint: 'Stored on this machine only, never in the configuration, and it cannot be read back. Leave blank to keep the key unchanged: an entry with no key stays without one.',
   keyPlaceholder: 'Blank = unchanged',
   id: 'Entry id',
-  idHint: 'Fixed after saving; copy it wherever that entry is named.',
   delete: 'Delete',
 }
